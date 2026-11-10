@@ -939,6 +939,7 @@ static void test_setup_window(void)
     char req[96];
     snprintf(req, sizeof req, "req_set_clu_ip:%08lx:192.168.1.77:192.168.1.1", (unsigned long)g_clu.sn);
 
+    s_setup_latched = false; // earlier tests answered discoveries
     s_now_us = (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000 - 1;
     xQueueReset(s_discovery_q);
     size_t n = discovery_req(pkt, prj, rnd, iv);
@@ -947,6 +948,23 @@ static void test_setup_window(void)
     run_task(udp_task);
     check("setup window: discovery accepted just before it closes", s_discovery_q->n == 1);
     xQueueReset(s_discovery_q);
+
+    // The discovery holds the window open past its time limit, until req_reset
+    s_now_us = 1000LL * 24 * 3600 * 1000000;
+    setup_tick(-1);
+    rx_reset();
+    rx_add(broadcast_key(), pkt, n, "192.168.1.50");
+    run_task(udp_task);
+    check("discovery latch: window still open long after the time limit, discovery answered",
+          setup_window_open() && s_discovery_q->n == 1);
+    xQueueReset(s_discovery_q);
+    int reloads = s_reloads;
+    sent_reset();
+    rx_reset();
+    rx_add_str(prj, "req_reset:192.168.1.20", "192.168.1.50");
+    run_task(udp_task);
+    check("discovery latch: req_reset (soft) closes the window", s_reloads == reloads + 1 &&
+                                                                     !setup_window_open());
 
     s_now_us = (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000;
     clu_cipher_t pk = pin_key(); // has_temp still set from the discovery above
@@ -1024,6 +1042,10 @@ static void test_setup_window(void)
     run_task(udp_task);
     check("setup button: new press -> discovery answered", s_discovery_q->n == 1);
     xQueueReset(s_discovery_q);
+    s_now_us += (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000;
+    setup_tick(1);
+    check("setup button: discovery inside the reopened window latches it", setup_window_open());
+    s_setup_latched = false; // as after a reset
 
     // Emergency mode: open with no time limit, closes when the CLU leaves it
     s_now_us += 100LL * 24 * 3600 * 1000000;
@@ -1038,6 +1060,9 @@ static void test_setup_window(void)
     run_task(udp_task);
     check("emergency: window open indefinitely, discovery answered", setup_window_open() && s_discovery_q->n == 1);
     xQueueReset(s_discovery_q);
+    rx_reset();
+    rx_add_str(prj, "req_reset:192.168.1.20", "192.168.1.50");
+    run_task(udp_task); // the soft reset that runs the fixed script also ends the discovery latch
     s_lua_state = CLU_LUA_OK;
     setup_tick(1);
     check("emergency over (soft reset with a fixed script): window closed again", !setup_window_open());

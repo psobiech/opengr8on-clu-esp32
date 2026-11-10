@@ -52,6 +52,8 @@ extern const tfbus_driver_t tfbus_drv_roller_sh_din3;
 extern const tfbus_driver_t tfbus_drv_touch_panel_fm4;
 extern const tfbus_driver_t tfbus_drv_relay_din4;
 extern const tfbus_driver_t tfbus_drv_roller_sh_din;
+extern const tfbus_driver_t tfbus_drv_dimmer_mosfet_din;
+extern const tfbus_driver_t tfbus_drv_led_rgbw_din;
 /** @} */
 
 #ifdef __cplusplus

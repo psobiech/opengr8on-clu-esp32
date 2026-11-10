@@ -277,6 +277,18 @@ do
   check("erase all", next(stored().vars) == nil and stored().es.EVE0001 ~= nil and io.open(storage_tmp) == nil)
   os.time = real_time
 
+  -- Statistics / StatisticsPulse (CLU interface 0x203)
+  local ST = OBJECT:new(47, "STA0001")
+  on(ST, 0)
+  check("statistics defaults", ST:get(0) == 0 and ST:get(4) == -1 and ST:get(6) == 0)
+  ST:set(0, 12.5); ST:set(0, 12.5)
+  check("statistics SetValue: OnValueChange once", ST:get(0) == 12.5 and took() == "STA0001:0")
+  local SP = OBJECT:new(48, "STP0001")
+  on(SP, 1)
+  SP:execute(0); SP:execute(0)
+  check("statistics pulse: TriggerPulse counts + OnPulseTriggered",
+        SP:get(10) == 2 and took() == "STP0001:1 STP0001:1")
+
   -- PresenceSensor
   local PS = OBJECT:new(40, "PRE0001")
   on(PS, 2, 3)

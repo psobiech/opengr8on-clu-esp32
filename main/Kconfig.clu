@@ -51,13 +51,16 @@ menu "OpenGr8on ESP32 CLU"
 
     config CLU_FW_API_VER
         hex "Firmware API version (selects clu_ZWAVE_2_ft00000003_fv<ver> interface in OM)"
-        default 0x201
+        default 0x203
         help
-            Real CLU_ZWAVE_2 reports hwType 0x13, hwVer 1, fwType 3, fwApiVer 0x201 (513).
+            Real CLU_ZWAVE_2 reports hwType 0x13, hwVer 1, fwType 3 and fwApiVer 0x203 (515) on
+            firmware 5.15.x, 0x201 (513) on 5.13.x.
+            0x203 adds features 34 MeasurementKey / 35 LastMeasurementSendTime and the Statistics /
+            StatisticsPulse objects.
 
     config CLU_FW_VERSION
         string "Firmware version string"
-        default "5.13.8-2442"
+        default "5.15.24-2635"
 
     config CLU_RS485_UART
         int "RS485 UART number"
@@ -103,6 +106,8 @@ menu "OpenGr8on ESP32 CLU"
             service (Lua, TFTP, UDP server) is started, so a slow WiFi connect does not use it up. Afterwards the CLU does not answer discovery and refuses the others; normal
             operation under the project key (req:, req_reset, req_refresh_modules) is unaffected.
             A TFTP session opened inside the window runs until req_tftp_stop or its idle timeout.
+            A discovery answered inside the window keeps it open (no time limit) until the next
+            reset: req_reset (soft or hard) or a reboot.
             A soft reset (CLU_SOFT_RESET) does not reopen the window; the setup button does.
             In emergency mode (MAIN.LUA failed, EMERGNCY.LUA running) the window stays open with
             no time limit, until the CLU leaves it.

@@ -64,7 +64,7 @@ Partycje (`partitions.csv`): NVS (klucze, PIN, sieć, czas), dwie partycje aplik
 
 ## Zgodność z CLU_ZWAVE_2
 
-Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.13.x i Object Manager 1.12.x. Legenda: ✅ gotowe,
+Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApiVer 0x203) i Object Manager 1.13.x. Legenda: ✅ gotowe,
 🟡 gotowe, ale niezweryfikowane na prawdziwym sprzęcie / semantyka odgadnięta, ❌ brak.
 
 ### Protokół UDP i usługi CLU
@@ -101,7 +101,9 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.13.x i Object Manager 1.12.x. Legend
 | ROLLER_SH_DIN_3 (0x2a), ROLLER_SH_DIN (0x17) | 🟡 | maska bitowa ruch/stop niezweryfikowana |
 | TOUCH_PANEL_FM_4 (0x1c) | 🟡 | przyciski, temperatura, światło, buzzer; LED niezweryfikowane |
 | SMART_PANEL_FM_4 (0x03) | 🟡 | przyciski, czujniki, LED, PrintText/Draw/Beep; brak konfiguracji stron/gestów |
-| Pozostałe moduły TF-Bus (ściemniacze, LED, analogowe, zasilacz itd.) | ❌ | brak sterowników |
+| DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM: SetValue/Switch*/HoldValue, rampa, Min/Max, LastValue; ramki zgodne z przechwytem, semantyka zdarzeń/Hold niezweryfikowana |
+| LED_RGBW_DIN (0x18) | 🟡 | LEDRGB: model HSV/RGB + W w CLU, korekcja bieli, Switch*/Hold*; PowerSupplyVoltage; ramki zgodne z przechwytem, LED_CHANNEL/LED_CCT brak |
+| Pozostałe moduły TF-Bus (ściemniacze FM, LED FM, analogowe itd.) | ❌ | brak sterowników |
 
 ### Czego brakuje względem CLU_ZWAVE_2
 
@@ -213,7 +215,8 @@ Adres IP: DHCP; statyczny ustawia OM przez `req_set_clu_ip` (zapisywany w NVS).
 | `CLU_SERIAL` | losowy | numer seryjny (dziesiętnie), zapisywany w NVS przy pierwszym starcie |
 | `CLU_PRIVATE_KEY` | losowy | PIN / klucz prywatny (8 znaków A–Z0–9) |
 | `CLU_IV` | losowy | fabryczny IV projektu (32 znaki hex) |
-| `CLU_FW_VERSION` | `5.13.8-2442` | wersja raportowana do OM |
+| `CLU_FW_API_VER` | `0x203` | wersja interfejsu CLU w OM (0x201 = firmware 5.13.x) |
+| `CLU_FW_VERSION` | `5.15.24-2635` | wersja raportowana do OM |
 
 Wartości z NVS mają pierwszeństwo — zmiana w menuconfig nie nadpisze już zapisanych (wyczyść NVS:
 `idf.py erase-flash`).
@@ -417,7 +420,9 @@ wymaga tylko `gcc`/`gcov`, `python3` i `luac$(LUA)`.
   broadcastowy `req_set_clu_ip` są ignorowane bez odpowiedzi, pozostałe dostają `resp:ERROR`,
   a pakiety pod kluczem PIN nie są odszyfrowywane. Zwykła praca pod kluczem projektu (`req:`,
   `req_reset`, `req_refresh_modules`, `req_tftp_stop`) działa bez zmian. Sesja TFTP otwarta w
-  oknie trwa do `req_tftp_stop` lub limitu bezczynności. Miękki reset (`req_reset` przy
+  oknie trwa do `req_tftp_stop` lub limitu bezczynności. Discovery odebrane w oknie zatrzymuje je
+  otwarte (bez limitu czasu) aż do najbliższego `req_reset` (miękkiego lub twardego) albo restartu
+  układu. Miękki reset (`req_reset` przy
   `CLU_SOFT_RESET`) **nie** otwiera okna ponownie — pakiet da się odtworzyć (stały IV). **Wpływ na
   OM:** przed wyszukiwaniem CLU, ustawieniem klucza projektu lub wgrywaniem projektu wciśnij
   przycisk BOOT (lub zresetuj płytkę) i zrób to w ciągu tego czasu. Otwarcie i zamknięcie okna jest logowane.
@@ -463,6 +468,14 @@ przez component manager (`espressif/mqtt`) i ESP-IDF mają własne licencje.
 Opisy protokołów, na których opiera się firmware, pochodzą z
 [opengr8on-node](https://github.com/psobiech/opengr8on-node) (dokumentacja: CC BY-SA 4.0).
 
+### Object Manager
+
+Repozytorium nie zawiera ani nie rozpowszechnia Object Manager'a, firmware CLU ani innych plików
+firmy Grenton. Object Manager jest objęty
+[licencją użytkownika końcowego Grentona](https://grenton.pl/om_eula_v1/), która wiąże licencję OM
+z zakupionymi urządzeniami Grenton. Użycie OM z CLU działającą na tym firmware może wykraczać poza zakres tej licencji — oceń to samodzielnie przed użyciem. Projekt ten nie reklamuje ani nie zachęca do
+używania OM z tym oprogramowaniem.
+
 ## Zastrzeżenie prawne
 
 Projekt nie jest popierany przez, bezpośrednio powiązany z, utrzymywany, autoryzowany ani
@@ -504,6 +517,15 @@ component manager (`espressif/mqtt`) and ESP-IDF carry their own licenses.
 
 Protocol descriptions the firmware is based on come from
 [opengr8on-node](https://github.com/psobiech/opengr8on-node) (documentation: CC BY-SA 4.0).
+
+#### Object Manager
+
+This repository does not contain or distribute Object Manager, CLU firmware or any other Grenton
+files. Object Manager is covered by
+[Grenton's end-user license agreement](https://grenton.pl/om_eula_v1/), which ties the OM license
+to purchased Grenton devices. Using OM with a CLU running this firmware may fall outside the scope
+of that license — evaluate this yourself before use. Tested OM version: 1.13.x. This project does
+not advertise or encourage using OM with this software.
 
 ### Disclaimer
 

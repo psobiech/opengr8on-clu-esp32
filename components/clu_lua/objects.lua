@@ -564,6 +564,42 @@ function PS.tick(o, now)
 end
 
 -- ---------------------------------------------------------------------------------------------
+-- Statistics v1 (class 47) / StatisticsPulse v1 (class 48): CLU interface 0x203 (firmware 5.15).
+-- Values are kept locally only: sending measurements to the Grenton cloud is not supported
+-- (LastMeasurementSendTime stays ""). StatisticsPulse Value counting pulses is a guess.
+-- Statistics: features 0 Value, 1 StatisticState, 2 Load, 4-9 statistic types; event 0 OnValueChange.
+-- StatisticsPulse: features 10 Value, 1 StatisticState, 2 Load, 3 StatisticTypePulse;
+--   execute 0 TriggerPulse; event 1 OnPulseTriggered.
+-- ---------------------------------------------------------------------------------------------
+local Stat = vclass(47, {})
+
+function Stat.init(o)
+  o._f[0], o._f[1], o._f[2], o._f[6] = 0, 0, 0, 0
+  for _, i in ipairs({ 4, 5, 7, 8, 9 }) do o._f[i] = -1 end
+end
+
+Stat.S[0] = function(o, v)
+  v = tonumber(v) or 0
+  if v ~= o._f[0] then
+    o._f[0] = v
+    o:_fire(0)
+  end
+end
+
+local Pulse = vclass(48, {})
+
+function Pulse.init(o)
+  o._f[10], o._f[1], o._f[2], o._f[3] = 0, 0, 0, -1
+end
+
+Pulse.S[10] = function(o, v) o._f[10] = tonumber(v) or 0 end
+
+Pulse.X[0] = function(o) -- TriggerPulse
+  o._f[10] = o._f[10] + 1
+  o:_fire(1)
+end
+
+-- ---------------------------------------------------------------------------------------------
 -- Storage (class 44): persistent user variables (globals). Same model as the Java/Node vCLU:
 --   STO:execute(4, "name")  Store: track global "name" and save it now; no name = save all tracked
 --   STO:execute(3)          EraseAll: forget all variables and wipe them from flash

@@ -369,6 +369,7 @@ static void test_unit(void)
     check("call before start -> invalid state", clu_lua_call("1", "", out, sizeof out, 10) == ESP_ERR_INVALID_STATE);
     clu_lua_post_event("X", 1);
     clu_lua_post_number("X", 1, 2);
+    clu_lua_post_string("X", 1, "s");
     clu_lua_post_remote(1, "r");
     check("reload / halt before start -> false", !clu_lua_reload(10) && !clu_lua_halt(10));
     s_halt = false;
@@ -627,6 +628,9 @@ static void test_unit(void)
     s_cfg.cloud_connected = cb_cloud;
     check("CLU get: unknown feature not handled", !clu0_get(L, clu, 99));
     lua_settop(L, clu);
+    check("CLU get: LastMeasurementSendTime (fwApiVer 0x203) empty, MeasurementKey stored generically",
+          clu0_get(L, clu, 35) && !strcmp(lua_tostring(L, -1), "") && !clu0_get(L, clu, 34));
+    lua_settop(L, clu);
 
     lua_pushstring(L, "hello");
     check("CLU AddToLog(msg)", clu0_execute(L, clu, 0, clu + 1, 1) == 0);
@@ -682,7 +686,7 @@ static bool wait_state(clu_lua_state_t st)
 static const char *MAIN1 =
     "evs = {}\n"
     "function __fire(n, i) if n == 'ERR' then error('bad') end evs[#evs + 1] = n .. '!' .. i end\n"
-    "function __update(n, i, v) evs[#evs + 1] = n .. '[' .. i .. ']=' .. tostring(v) .. ':' .. math.type(v) end\n"
+    "function __update(n, i, v) evs[#evs + 1] = n .. '[' .. i .. ']=' .. tostring(v) .. ':' .. (math.type(v) or type(v)) end\n"
     "function __remote_done(id, r) if id == 99 then error('x') end evs[#evs + 1] = 'R' .. id .. '=' .. tostring(r) end\n"
     "function takeev() local s = table.concat(evs, ' ') evs = {} return s end\n"
     "function busy(s) local t = os.clock() while os.clock() - t < s do end return 'done' end\n"
@@ -707,13 +711,15 @@ static void test_task(void)
     clu_lua_post_event("A", 3);
     clu_lua_post_number("B", 1, 2.5);
     clu_lua_post_number("C", 0, 7);
+    clu_lua_post_string("D", 6, "#FF8000");
     clu_lua_post_event("ERR", 1);
     clu_lua_post_remote(5, "ok");
     clu_lua_post_remote(6, NULL);
     clu_lua_post_remote(99, "x");
     sleep_ms(100);
-    check_str("task: driver events, value updates (int / float) and remote replies delivered",
-              call("takeev()", 3000, NULL), "A!3 B[1]=2.5:float C[0]=7:integer R5=ok R6=nil");
+    check_str("task: driver events, value updates (int / float / string) and remote replies delivered",
+              call("takeev()", 3000, NULL),
+              "A!3 B[1]=2.5:float C[0]=7:integer D[6]=#FF8000:string R5=ok R6=nil");
 
     esp_err_t e;
     check("task: caller timeout while the script is busy -> ESP_ERR_TIMEOUT",

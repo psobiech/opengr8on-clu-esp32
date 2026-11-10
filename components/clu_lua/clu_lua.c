@@ -88,6 +88,7 @@ typedef struct {
     int idx;
     bool is_value;
     double value;
+    char str[16]; // string value (is_value, str[0] != 0): e.g. LEDRGB "#RRGGBB"
 } event_t;
 
 /** @brief Result of a remote CLU call. */
@@ -185,6 +186,17 @@ void clu_lua_post_number(const char *obj_name, int feature_idx, double value)
     }
     event_t e = {.idx = feature_idx, .is_value = true, .value = value};
     strlcpy(e.name, obj_name, sizeof e.name);
+    xQueueSend(s_events, &e, 0);
+}
+
+void clu_lua_post_string(const char *obj_name, int feature_idx, const char *value)
+{
+    if (!s_events) {
+        return;
+    }
+    event_t e = {.idx = feature_idx, .is_value = true};
+    strlcpy(e.name, obj_name, sizeof e.name);
+    strlcpy(e.str, value, sizeof e.str);
     xQueueSend(s_events, &e, 0);
 }
 
@@ -428,7 +440,9 @@ static void drain_events(lua_State *L)
         lua_pushinteger(L, e.idx);
         int n = 2;
         if (e.is_value) {
-            if (e.value == (double)(lua_Integer)e.value) {
+            if (e.str[0]) {
+                lua_pushstring(L, e.str);
+            } else if (e.value == (double)(lua_Integer)e.value) {
                 lua_pushinteger(L, (lua_Integer)e.value);
             } else {
                 lua_pushnumber(L, e.value);
@@ -573,10 +587,11 @@ static bool load_embedded(lua_State *L, const char *start, const char *end, cons
 }
 
 // ---------------------------------------------------------------------------
-// Class 0: local CLU (clu_ZWAVE_2_ft00000003_fv201 interface)
+// Class 0: local CLU (clu_ZWAVE_2_ft00000003_fv203 interface)
 // ---------------------------------------------------------------------------
 /**
- * @brief Class 0 get: computed features (Uptime, State, date/time, FwVersion, UseCloud, CloudConnection).
+ * @brief Class 0 get: computed features (Uptime, State, date/time, FwVersion, UseCloud, CloudConnection,
+ *        LastMeasurementSendTime).
  */
 static bool clu0_get(lua_State *L, int obj, int idx)
 {
@@ -617,6 +632,7 @@ static bool clu0_get(lua_State *L, int obj, int idx)
     case 19: // CloudConnection: MQTT broker connected
         lua_pushinteger(L, s_cfg.cloud_connected && s_cfg.cloud_connected() ? 1 : 0);
         return true;
+    case 35: lua_pushstring(L, ""); return true; // LastMeasurementSendTime: no measurements sent
     default: return false;
     }
 }

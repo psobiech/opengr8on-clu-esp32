@@ -69,12 +69,16 @@ static QueueHandle_t s_discovery_q;
 // End of the setup window [esp_timer us]. Open (not counting) until udp_server_start() arms it;
 // written by udp_server_start() and the setup task, read by the UDP task.
 static _Atomic int64_t s_setup_until_us = INT64_MAX;
+// Set by a discovery answered inside the window: keeps it open until a soft reset (req_reset)
+// or a reboot, so a setup started from OM is not cut off halfway. Written / read by the UDP task.
+static _Atomic bool s_setup_latched;
 
 /**
  * @brief True during the setup window: the first CONFIG_CLU_SETUP_WINDOW_S seconds after the CLU
  * is up (udp_server_start(): WiFi has an IP, every service started), or after a press of the
  * setup button, and for as long as the Lua runtime is in emergency mode (MAIN.LUA failed, so the
- * project must be re-uploaded) (0 = always).
+ * project must be re-uploaded) (0 = always). A discovery answered inside the window keeps it open
+ * until the next soft reset (req_reset) or reboot.
  *
  * Discovery, re-keying (set_key, PIN / temp key), set_clu_ip and opening TFTP are only accepted
  * inside it. Armed once per chip boot, so a soft reset (req_reset, which needs only
@@ -83,7 +87,8 @@ static _Atomic int64_t s_setup_until_us = INT64_MAX;
 static bool setup_window_open(void)
 {
 #if CONFIG_CLU_SETUP_WINDOW_S > 0
-    return clu_lua_state() == CLU_LUA_EMERGENCY || esp_timer_get_time() < atomic_load(&s_setup_until_us);
+    return atomic_load(&s_setup_latched) || clu_lua_state() == CLU_LUA_EMERGENCY ||
+           esp_timer_get_time() < atomic_load(&s_setup_until_us);
 #else
     return true;
 #endif
@@ -469,6 +474,10 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
             log_locked("discovery", from); // no answer: the CLU stays invisible
             return;
         }
+        if (!atomic_exchange(&s_setup_latched, true)) {
+            ESP_LOGW(TAG, "discovery from %s: setup window held open until a reset",
+                     inet_ntoa(from->sin_addr));
+        }
         on_discovery(buf, from);
         return;
     }
@@ -503,6 +512,8 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
         snprintf(r, sizeof r, "resp_reset:%s", s_ip);
         send_str(&g_clu.project, r, from);
         ESP_LOGW(TAG, "reset requested");
+        // Ends a setup window held open by discovery; the timed window is not re-armed.
+        atomic_store(&s_setup_latched, false);
 #if CONFIG_CLU_SOFT_RESET
         // Blocks this task until the old VM is gone (bus stop included); requests meanwhile wait
         // in the socket, as they would during a reboot.

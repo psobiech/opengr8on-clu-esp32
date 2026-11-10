@@ -138,6 +138,8 @@ esp_err_t clu_lua_call(const char *expr, const char *from_ip, char *out, size_t 
 void clu_lua_post_event(const char *obj_name, int event_idx);
 /** @brief Set feature @p feature_idx of object @p obj_name to @p value. */
 void clu_lua_post_number(const char *obj_name, int feature_idx, double value);
+/** @brief Set feature @p feature_idx of object @p obj_name to the string @p value (max 15 chars). */
+void clu_lua_post_string(const char *obj_name, int feature_idx, const char *value);
 /**
  * @brief Result of a remote CLU call, delivered to the Lua thread waiting for it.
  * @param id     Call id from clu_lua_cfg_t::remote.

@@ -12,7 +12,8 @@
  * @name Identity reported to OM
  *
  * Real CLU_ZWAVE_2 (diagnostic pack of a production CLU: hwType 19, hwVer 1, fwType 3,
- * fwApiVer 513, fwVer "5.13.8-2442"). OM selects
+ * fwApiVer 513, fwVer "5.13.8-2442"). Reported by default: latest firmware 5.15.24 (build 2635),
+ * fwApiVer 0x203 (515), fwVer "5.15.24-2635". OM selects
  * `docs/device-interfaces/clu_ZWAVE_2_ft00000003_fv<fwApiVer>_ht00000013_hv00000001.xml`
  * and generates OM.LUA with `-- FwVersion <fwApiVer>`.
  * @{

@@ -43,4 +43,6 @@ void tfbus_drivers_register_all(void)
     tfbus_driver_register(&tfbus_drv_relay_din4);
     tfbus_driver_register(&tfbus_drv_roller_sh_din);
     tfbus_driver_register(&tfbus_drv_smart_panel_fm4);
+    tfbus_driver_register(&tfbus_drv_dimmer_mosfet_din);
+    tfbus_driver_register(&tfbus_drv_led_rgbw_din);
 }

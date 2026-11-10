@@ -232,7 +232,7 @@ Wartości z NVS mają pierwszeństwo — zmiana w menuconfig nie nadpisze już z
 | Opcja | Domyślnie | Opis |
 |---|---|---|
 | `CLU_SOFT_RESET` | y | `req_reset` przeładowuje Lua zamiast restartu układu |
-| `CLU_SETUP_WINDOW_S` | 60 | okno konfiguracji po starcie układu [s]: discovery, zmiana klucza/IP, TFTP (`0` = zawsze) |
+| `CLU_SETUP_WINDOW_S` | 60 | okno konfiguracji po uruchomieniu CLU [s]: discovery, zmiana klucza/IP, TFTP (`0` = zawsze) |
 | `CLU_SETUP_BUTTON_GPIO` | 0 (BOOT) | przycisk otwierający okno konfiguracji w trakcie pracy, `-1` = brak |
 | `CLU_LUA_5_3` / `CLU_LUA_5_5` | 5.3 | wersja Lua (5.3 jak w CLU, 5.5 eksperymentalnie) |
 | `CLU_LUA_MEM_LIMIT_KB` | 4096 | limit sterty Lua (KB) |
@@ -407,9 +407,11 @@ wymaga tylko `gcc`/`gcov`, `python3` i `luac$(LUA)`.
 - **Brak wyroczni paddingu CBC:** pakiety, które dają się odszyfrować, ale nie są poleceniem
   `req…`, nie dostają odpowiedzi.
 - **Okno konfiguracji po starcie** (`CLU_SETUP_WINDOW_S`, domyślnie 60 s, `0` wyłącza): tylko przez
-  tyle sekund od uruchomienia układu (zasilanie, przycisk reset, restart) albo od wciśnięcia
-  przycisku konfiguracji (`CLU_SETUP_BUTTON_GPIO`, domyślnie BOOT/GPIO0, przytrzymanie ≥100 ms
-  w trakcie pracy — przytrzymany podczas resetu włącza tryb wgrywania) CLU odpowiada na
+  tyle sekund od pełnego uruchomienia CLU po starcie układu (zasilanie, przycisk reset, restart;
+  odliczanie rusza, gdy WiFi ma IP i wszystkie usługi — Lua, TFTP, serwer UDP — działają) albo od
+  wciśnięcia przycisku konfiguracji (`CLU_SETUP_BUTTON_GPIO`, domyślnie BOOT/GPIO0, przytrzymanie ≥100 ms
+  w trakcie pracy — przytrzymany podczas resetu włącza tryb wgrywania), a w trybie awaryjnym
+  (MAIN.LUA zawiódł, działa EMERGNCY.LUA) bez limitu czasu, aż CLU z niego wyjdzie — CLU odpowiada na
   discovery (`req_discovery_clu`), przyjmuje `req_set_key`, `req_set_clu_ip`, `req_start_ftp` i
   `req_diagnostic_refresh` oraz w ogóle próbuje klucza PIN/tymczasowego. Później discovery i
   broadcastowy `req_set_clu_ip` są ignorowane bez odpowiedzi, pozostałe dostają `resp:ERROR`,
@@ -418,13 +420,14 @@ wymaga tylko `gcc`/`gcov`, `python3` i `luac$(LUA)`.
   oknie trwa do `req_tftp_stop` lub limitu bezczynności. Miękki reset (`req_reset` przy
   `CLU_SOFT_RESET`) **nie** otwiera okna ponownie — pakiet da się odtworzyć (stały IV). **Wpływ na
   OM:** przed wyszukiwaniem CLU, ustawieniem klucza projektu lub wgrywaniem projektu wciśnij
-  przycisk BOOT (lub zresetuj płytkę) i zrób to w ciągu tego czasu.
+  przycisk BOOT (lub zresetuj płytkę) i zrób to w ciągu tego czasu. Otwarcie i zamknięcie okna jest logowane.
 - **TFTP:** obsługuje tylko hosta, który wysłał `req_start_ftp`, wyłącza się po 5 min
   bezczynności, wysyłane pliki do 2 MB.
 - **PIN-y:** nowe losowe PIN-y z alfabetu A–Z0–9 (~41 bitów).
 - **Telnet bez uwierzytelniania:** ogranicz przez `CLU_TELNET_ALLOW` (IP lub CIDR; błędna wartość
   odrzuca wszystkich) albo wyłącz `CLU_TELNET`. Linia z PIN-em jest logowana przed instalacją
-  hooka, więc zostaje tylko na UART; hasło WiFi nie jest logowane. Skrypty Lua nadal mogą wypisać
+  hooka, a przy każdym discovery PIN trafia na `stderr` z pominięciem `ESP_LOG`, więc zostaje
+  tylko na UART; hasło WiFi nie jest logowane. Skrypty Lua nadal mogą wypisać
   cokolwiek przez `print`.
 - **MQTT nigdy nie wykonuje Lua:** każdy temat odpowiada stałemu wywołaniu obiektu, a JSON surowego
   API jest dekodowany, nigdy nie przechodzi przez `load`. Mimo to przy włączonym

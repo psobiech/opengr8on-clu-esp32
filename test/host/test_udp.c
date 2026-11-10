@@ -245,6 +245,8 @@ static bool s_reload_ok = true;
 static int s_reloads, s_halts, s_restarts;
 bool clu_lua_reload(int timeout_ms) { (void)timeout_ms; s_reloads++; return s_reload_ok; }
 bool clu_lua_halt(int timeout_ms) { (void)timeout_ms; s_halts++; return true; }
+static clu_lua_state_t s_lua_state = CLU_LUA_OK;
+clu_lua_state_t clu_lua_state(void) { return s_lua_state; }
 void esp_restart(void) { s_restarts++; }
 
 static char s_posted[32][64];
@@ -488,6 +490,9 @@ static void test_before_start(void)
     send_str(&g_clu.project, "resp:OK", &(struct sockaddr_in){0}); // no tx lock yet
     check("nothing sent before udp_server_start()", s_nsent == 0);
     check("remote exec before start -> 0", udp_server_remote_exec(0x0a000001, "x") == 0);
+    s_now_us = 3600LL * 1000000; // e.g. a long wait for WiFi
+    check("setup window: open (not counting) before udp_server_start()", setup_window_open());
+    s_now_us = 0;
 }
 
 static void test_start_and_socket_errors(void)
@@ -495,7 +500,7 @@ static void test_start_and_socket_errors(void)
     udp_server_start();
     check("start: discovery, udp and remote tasks created",
           s_ntasks == 4 && strcmp(s_tasks[0], "clu_disc") == 0 && strcmp(s_tasks[1], "clu_udp") == 0 &&
-              strcmp(s_tasks[2], "clu_remote") == 0 && strcmp(s_tasks[3], "clu_btn") == 0);
+              strcmp(s_tasks[2], "clu_remote") == 0 && strcmp(s_tasks[3], "clu_setup") == 0);
     check("setup button: GPIO0 configured as input with pull-up", s_gpio_mask == 1);
 
     s_sock_fail = true;
@@ -985,36 +990,57 @@ static void test_setup_window(void)
     check("window closed: req_tftp_stop and req: still served", s_tftp_on == 0 && s_lua_calls == 1 &&
                                                                  s_nsent == 2 && strcmp(sent_str(0, prj), "resp:OK") == 0);
 
+    // No button (-1): ticks only watch the window
+    setup_tick(-1);
+    check("setup tick without a button: window stays closed", !setup_window_open());
+
     // Setup button: a glitch (2 low samples) does nothing, a 100 ms hold reopens the window
     s_now_us = 1000LL * 1000000;
-    setup_button_sample(0);
-    setup_button_sample(0);
-    setup_button_sample(1);
-    setup_button_sample(0);
+    setup_tick(0);
+    setup_tick(0);
+    setup_tick(1);
+    setup_tick(0);
     check("setup button: short glitch ignored", !setup_window_open());
-    setup_button_sample(0);
-    setup_button_sample(0);
+    setup_tick(0);
+    setup_tick(0);
     check("setup button: held 3 samples -> window open", setup_window_open());
     s_now_us += (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000 - 1;
-    setup_button_sample(0); // still held: no extension
+    setup_tick(0); // still held: no extension
     check("setup button: open for CLU_SETUP_WINDOW_S, holding does not extend it", setup_window_open());
     s_now_us += 1;
-    setup_button_sample(0);
+    setup_tick(0);
     check("setup button: window closes again", !setup_window_open());
-    setup_button_sample(1);
+    setup_tick(1);
     xQueueReset(s_discovery_q);
     rx_reset();
     rx_add(broadcast_key(), pkt, n, "192.168.1.50");
     run_task(udp_task);
     check("setup button: closed window still refuses discovery", s_discovery_q->n == 0);
-    setup_button_sample(0);
-    setup_button_sample(0);
-    setup_button_sample(0);
+    setup_tick(0);
+    setup_tick(0);
+    setup_tick(0);
     rx_reset();
     rx_add(broadcast_key(), pkt, n, "192.168.1.50");
     run_task(udp_task);
     check("setup button: new press -> discovery answered", s_discovery_q->n == 1);
     xQueueReset(s_discovery_q);
+
+    // Emergency mode: open with no time limit, closes when the CLU leaves it
+    s_now_us += 100LL * 24 * 3600 * 1000000;
+    setup_tick(1);
+    check("emergency: window closed before", !setup_window_open());
+    s_lua_state = CLU_LUA_EMERGENCY;
+    setup_tick(1);
+    s_now_us += 30LL * 24 * 3600 * 1000000;
+    setup_tick(1);
+    rx_reset();
+    rx_add(broadcast_key(), pkt, n, "192.168.1.50");
+    run_task(udp_task);
+    check("emergency: window open indefinitely, discovery answered", setup_window_open() && s_discovery_q->n == 1);
+    xQueueReset(s_discovery_q);
+    s_lua_state = CLU_LUA_OK;
+    setup_tick(1);
+    check("emergency over (soft reset with a fixed script): window closed again", !setup_window_open());
     s_now_us = 0;
     s_tftp_on = -1;
 }

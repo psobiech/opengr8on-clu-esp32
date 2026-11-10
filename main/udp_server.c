@@ -66,69 +66,85 @@ static QueueHandle_t s_discovery_q;
 #define SETUP_BUTTON_POLL_MS 50
 #define SETUP_BUTTON_HOLD_POLLS 3 // held low for >= 100 ms (3 samples) counts as a press
 
-// End of the setup window [esp_timer us]. Written by the button task, read by the UDP task.
-static _Atomic int64_t s_setup_until_us = (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000;
+// End of the setup window [esp_timer us]. Open (not counting) until udp_server_start() arms it;
+// written by udp_server_start() and the setup task, read by the UDP task.
+static _Atomic int64_t s_setup_until_us = INT64_MAX;
 
 /**
- * @brief True during the setup window: the first CONFIG_CLU_SETUP_WINDOW_S seconds after boot,
- * or after a press of the setup button (0 = always).
+ * @brief True during the setup window: the first CONFIG_CLU_SETUP_WINDOW_S seconds after the CLU
+ * is up (udp_server_start(): WiFi has an IP, every service started), or after a press of the
+ * setup button, and for as long as the Lua runtime is in emergency mode (MAIN.LUA failed, so the
+ * project must be re-uploaded) (0 = always).
  *
  * Discovery, re-keying (set_key, PIN / temp key), set_clu_ip and opening TFTP are only accepted
- * inside it. Measured from the chip boot (esp_timer), so a soft reset (req_reset, which needs only
+ * inside it. Armed once per chip boot, so a soft reset (req_reset, which needs only
  * a replayable project-key packet) does not reopen it; a reboot, power cycle or the button does.
  */
 static bool setup_window_open(void)
 {
 #if CONFIG_CLU_SETUP_WINDOW_S > 0
-    return esp_timer_get_time() < atomic_load(&s_setup_until_us);
+    return clu_lua_state() == CLU_LUA_EMERGENCY || esp_timer_get_time() < atomic_load(&s_setup_until_us);
 #else
     return true;
 #endif
 }
 
 /**
- * @brief Feed one button sample (level 0 = pressed); a press held for SETUP_BUTTON_HOLD_POLLS
- * samples reopens the setup window, once per press.
+ * @brief One setup-task tick: feed a button sample (0 = pressed, -1 = no button), log entering
+ * emergency mode (window open with no time limit) and the window closing.
+ *
+ * A press held for SETUP_BUTTON_HOLD_POLLS samples reopens the window, once per press.
  */
-static void setup_button_sample(int level)
+static void setup_tick(int level)
 {
     static int low;
+    static bool was_open = true, was_emergency;
+    bool emergency = clu_lua_state() == CLU_LUA_EMERGENCY;
+    if (emergency && !was_emergency) {
+        ESP_LOGW(TAG, "emergency mode: discovery / keys / TFTP open until the CLU leaves it");
+    }
+    was_emergency = emergency;
     if (level != 0) {
         low = 0;
-        return;
-    }
-    if (++low == SETUP_BUTTON_HOLD_POLLS) {
+    } else if (++low == SETUP_BUTTON_HOLD_POLLS) {
         atomic_store(&s_setup_until_us,
                      esp_timer_get_time() + (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000);
         ESP_LOGW(TAG, "setup button: discovery / keys / TFTP open for %d s", CONFIG_CLU_SETUP_WINDOW_S);
     }
+    bool open = setup_window_open();
+    if (was_open && !open) {
+        ESP_LOGW(TAG, "setup window closed: discovery / keys / TFTP refused until the setup button "
+                      "or a reset");
+    }
+    was_open = open;
 }
 
-/** @brief Task: poll the setup button (active low, internal pull-up). */
-static void setup_button_task(void *arg)
+/** @brief Task: poll the setup button (active low, internal pull-up) and watch the window. */
+static void setup_task(void *arg)
 {
     (void)arg;
     for (;;) {
-        setup_button_sample(gpio_get_level(CONFIG_CLU_SETUP_BUTTON_GPIO));
+        setup_tick(CONFIG_CLU_SETUP_BUTTON_GPIO >= 0 ? gpio_get_level(CONFIG_CLU_SETUP_BUTTON_GPIO) : -1);
         vTaskDelay(pdMS_TO_TICKS(SETUP_BUTTON_POLL_MS));
     }
 }
 
-/** @brief Configure the setup button GPIO and start its polling task (if enabled). */
-static void setup_button_start(void)
+/** @brief Configure the setup button GPIO (if any) and start the setup task (if the window is on). */
+static void setup_start(void)
 {
 #if CONFIG_CLU_SETUP_WINDOW_S > 0
-    if (CONFIG_CLU_SETUP_BUTTON_GPIO < 0) {
-        return;
+    // Count from here, not from the chip boot: waiting for WiFi must not use up the window.
+    atomic_store(&s_setup_until_us, esp_timer_get_time() + (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000);
+    ESP_LOGW(TAG, "setup window: discovery / keys / TFTP open for %d s", CONFIG_CLU_SETUP_WINDOW_S);
+    if (CONFIG_CLU_SETUP_BUTTON_GPIO >= 0) {
+        gpio_config_t c = {.pin_bit_mask = 1ULL << CONFIG_CLU_SETUP_BUTTON_GPIO,
+                           .mode = GPIO_MODE_INPUT,
+                           .pull_up_en = GPIO_PULLUP_ENABLE};
+        if (gpio_config(&c) != ESP_OK) {
+            ESP_LOGE(TAG, "setup button GPIO %d: config failed", CONFIG_CLU_SETUP_BUTTON_GPIO);
+        }
     }
-    gpio_config_t c = {.pin_bit_mask = 1ULL << CONFIG_CLU_SETUP_BUTTON_GPIO,
-                       .mode = GPIO_MODE_INPUT,
-                       .pull_up_en = GPIO_PULLUP_ENABLE};
-    if (gpio_config(&c) != ESP_OK) {
-        ESP_LOGE(TAG, "setup button GPIO %d: config failed", CONFIG_CLU_SETUP_BUTTON_GPIO);
-        return;
-    }
-    xTaskCreatePinnedToCore(setup_button_task, "clu_btn", 2048, NULL, 2, NULL, 0);
+    xTaskCreatePinnedToCore(setup_task, "clu_setup", 2048, NULL, 2, NULL, 0);
 #endif
 }
 
@@ -445,6 +461,10 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
     const bool setup = setup_window_open();
 
     if (keyed_cmd(buf, len, "req_discovery_clu", &tail, &tail_len)) {
+        // The PIN goes to the UART console only: written to stderr directly, not through ESP_LOG,
+        // so the telnet log hook (esp_log_set_vprintf) never sees it.
+        fprintf(stderr, "I (%lu) %s: discovery from %s: PIN %s (UART only)\n",
+                (unsigned long)esp_log_timestamp(), TAG, inet_ntoa(from->sin_addr), g_clu.pin);
         if (!setup) {
             log_locked("discovery", from); // no answer: the CLU stays invisible
             return;
@@ -764,5 +784,5 @@ void udp_server_start(void)
     xTaskCreatePinnedToCore(discovery_task, "clu_disc", 4096, NULL, 4, NULL, 0);
     xTaskCreatePinnedToCore(udp_task, "clu_udp", 8192, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(remote_task, "clu_remote", 6144, NULL, 4, NULL, 0);
-    setup_button_start();
+    setup_start();
 }

@@ -1,0 +1,76 @@
+# Host tests + coverage (test/host): C via gcov, Lua via test/host/lua_cov.lua.
+# The host tests compile firmware sources directly, with ESP-IDF replaced by stubs.
+name: Tests
+
+on:
+  push:
+    branches: [ "develop", "main" ]
+  pull_request:
+    branches: [ "develop", "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Minimum total line coverage (C + Lua), in %. The run fails below it.
+  COVERAGE_MIN: 95
+  # mbedtls 3.6 (PSA API) for test_crypto; not packaged by Ubuntu, so built once and cached.
+  MBEDTLS_VERSION: 3.6.2
+
+jobs:
+  coverage:
+    name: Host tests and coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc libc6-dev make python3 lua5.3
+
+      # ASan's shadow memory does not fit with the runners' default 32-bit mmap randomisation.
+      - name: Allow AddressSanitizer
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Cache mbedtls
+        id: mbedtls-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/mbedtls3
+          key: mbedtls-${{ env.MBEDTLS_VERSION }}-${{ runner.os }}
+
+      - name: Build mbedtls
+        if: steps.mbedtls-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o /tmp/mbedtls.tar.bz2 \
+            "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-${MBEDTLS_VERSION}/mbedtls-${MBEDTLS_VERSION}.tar.bz2"
+          tar -xjf /tmp/mbedtls.tar.bz2 -C /tmp
+          make -C "/tmp/mbedtls-${MBEDTLS_VERSION}" -j"$(nproc)" lib
+          mkdir -p ~/mbedtls3/lib
+          cp -r "/tmp/mbedtls-${MBEDTLS_VERSION}/include" ~/mbedtls3/include
+          cp "/tmp/mbedtls-${MBEDTLS_VERSION}"/library/*.a ~/mbedtls3/lib/
+
+      - name: Tests with coverage
+        run: |
+          make -C test/host coverage \
+            MBEDTLS3_INC="$HOME/mbedtls3/include" MBEDTLS3_LIB="$HOME/mbedtls3/lib" \
+            FAIL_UNDER="$COVERAGE_MIN"
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f test/host/coverage/summary.md ]; then
+            { echo "## Host test coverage"; echo; cat test/host/coverage/summary.md; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            test/host/coverage/summary.md
+            test/host/coverage/coverage.json
+          if-no-files-found: ignore

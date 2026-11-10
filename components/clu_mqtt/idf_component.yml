@@ -1,0 +1,3 @@
+# esp-mqtt left ESP-IDF in v6.0 (components/mqtt only holds tests): fetched by the component manager.
+dependencies:
+  espressif/mqtt: "^1.0.0"

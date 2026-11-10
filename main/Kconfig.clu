@@ -1,0 +1,254 @@
+menu "OpenGr8on ESP32 CLU"
+
+    config CLU_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+
+    config CLU_WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+
+    config CLU_WIFI_BSSID
+        string "WiFi BSSID (aa:bb:cc:dd:ee:ff, empty = any AP with the SSID)"
+        default ""
+        help
+            Connect only to this access point MAC. Useful with several APs sharing the SSID.
+
+    config CLU_WIFI_WPA3_ONLY
+        bool "Require WPA3 (refuse WPA2 access points)"
+        default n
+        help
+            Off: joins WPA2-PSK, WPA2/WPA3 and WPA3-SAE networks (never open or WEP/WPA).
+            On: joins only WPA3-SAE networks, which also rules out downgrade to WPA2.
+
+    config CLU_WIFI_MAX_TX_POWER
+        int "WiFi max TX power (0.25 dBm units, 0 = driver default)"
+        range 0 84
+        default 0
+        help
+            Lower it (e.g. 34 = 8.5 dBm) when the board sees the AP but authentication
+            always times out (reason 2): some boards' antennas misbehave at full power.
+
+    config CLU_SERIAL
+        string "CLU serial number (decimal, empty = random, stored in NVS)"
+        default ""
+        help
+            Set to the serial of the CLU being emulated (e.g. 221010155) so Object Manager
+            treats this device as that CLU. Overrides the NVS value when non-empty.
+
+    config CLU_PRIVATE_KEY
+        string "CLU private key / PIN (8 chars, empty = random, stored in NVS)"
+        default ""
+        help
+            Private key from the emulated CLU's sticker. Factory UDP key is derived from it.
+
+    config CLU_IV
+        string "Factory project IV (32 hex chars, empty = random, stored in NVS)"
+        default ""
+        help
+            IV of the factory project cipher (used until OM sends req_set_key).
+            Empty: random per device. Changing it resets the keys to factory default.
+
+    config CLU_FW_API_VER
+        hex "Firmware API version (selects clu_ZWAVE_2_ft00000003_fv<ver> interface in OM)"
+        default 0x201
+        help
+            Real CLU_ZWAVE_2 reports hwType 0x13, hwVer 1, fwType 3, fwApiVer 0x201 (513).
+
+    config CLU_FW_VERSION
+        string "Firmware version string"
+        default "5.13.8-2442"
+
+    config CLU_RS485_UART
+        int "RS485 UART number"
+        range 1 2
+        default 1
+
+    config CLU_RS485_TX_GPIO
+        int "RS485 TX (DI) GPIO"
+        default 17
+
+    config CLU_RS485_RX_GPIO
+        int "RS485 RX (RO) GPIO"
+        default 18
+
+    config CLU_RS485_DE_GPIO
+        int "RS485 DE/RE GPIO (-1 = auto-direction transceiver)"
+        default 21
+        help
+            Waveshare ESP32-S3-RS485-CAN: TX=17, RX=18, DE=21 (driven as UART RTS).
+
+    config CLU_RS485_BAUD
+        int "TFBUS baud rate"
+        default 115200
+
+    config CLU_SOFT_RESET
+        bool "req_reset reloads Lua instead of rebooting"
+        default y
+        help
+            On req_reset (OM after a script upload, "reset" in the CLI) close the Lua VM, forget
+            the TFBUS modules and boot MAIN.LUA again in a fresh VM, with WiFi, MQTT and the
+            UDP/TFTP servers left running. Falls back to a reboot if the script does not reach
+            SYSTEM.Loop in time or the bus does not stop. __clu.sys_restart() always reboots.
+
+    config CLU_SETUP_WINDOW_S
+        int "Setup window after boot [s] (0 = always open)"
+        range 0 86400
+        default 60
+        help
+            Discovery (req_discovery_clu), re-keying (req_set_key, anything under the PIN / temp
+            key), req_set_clu_ip and opening TFTP (req_start_ftp, req_diagnostic_refresh) are
+            only accepted during this many seconds after the chip boots (power-on, reset button,
+            reboot). Afterwards the CLU does not answer discovery and refuses the others; normal
+            operation under the project key (req:, req_reset, req_refresh_modules) is unaffected.
+            A TFTP session opened inside the window runs until req_tftp_stop or its idle timeout.
+            A soft reset (CLU_SOFT_RESET) does not reopen the window; the setup button does.
+            0 disables the restriction.
+
+    config CLU_SETUP_BUTTON_GPIO
+        int "Setup button GPIO (-1 = none)"
+        range -1 48
+        default 0
+        depends on CLU_SETUP_WINDOW_S != 0
+        help
+            Active-low button (internal pull-up). Holding it for 100 ms reopens the setup window
+            for CLU_SETUP_WINDOW_S seconds. Default GPIO0 = the BOOT button of most ESP32-S3
+            boards: press it while the CLU runs (held during reset it enters download mode).
+
+    menu "Telnet log console"
+
+        config CLU_TELNET
+            bool "Stream logs over telnet"
+            default y
+            help
+                Read-only TCP console: `telnet <clu-ip>` or `nc <clu-ip> 23` shows the ESP_LOG
+                output (also Lua print / DebugLog) live, preceded by the buffered history.
+                Ctrl-C / Ctrl-D closes the session. No authentication: restrict with
+                CLU_TELNET_ALLOW. Lines logged before the CLU identity is loaded (the boot line
+                with the PIN) are never captured.
+
+        config CLU_TELNET_PORT
+            int "TCP port"
+            range 1 65535
+            default 23
+            depends on CLU_TELNET
+
+        config CLU_TELNET_MAX_CLIENTS
+            int "Concurrent clients"
+            range 1 4
+            default 2
+            depends on CLU_TELNET
+
+        config CLU_TELNET_HISTORY
+            int "History buffer [bytes, internal RAM]"
+            range 1024 65536
+            default 8192
+            depends on CLU_TELNET
+
+        config CLU_TELNET_ALLOW
+            string "Allowed peers (empty = any, a.b.c.d or a.b.c.d/nn)"
+            default ""
+            depends on CLU_TELNET
+            help
+                Connections from other addresses are closed immediately. An invalid value
+                refuses everyone.
+
+    endmenu
+
+    menu "OpenGr8on MQTT / Home Assistant"
+
+        config CLU_MQTT_BROKER_URI
+            string "Broker URI (empty = MQTT off)"
+            default ""
+            help
+                mqtt://host:1883, mqtts://host:8883, ws://host/mqtt or wss://...
+                The connection is only made while the local CLU feature UseCloud (18) is 1
+                (interface default; OM.LUA sets it at boot, CLUxxx:set(18, 0) disconnects).
+                CloudConnection (19) reports whether the broker is connected.
+                mqtts/wss: the CA is read from a:\MQTT_CA.PEM (upload it with TFTP) when present,
+                otherwise the built-in certificate bundle (public CAs) is used.
+
+        config CLU_MQTT_USERNAME
+            string "Username (empty = anonymous)"
+            default ""
+
+        config CLU_MQTT_PASSWORD
+            string "Password"
+            default ""
+
+        config CLU_MQTT_CLIENT_ID
+            string "Client ID (empty = opengr8on-CLU<serial>)"
+            default ""
+
+        config CLU_MQTT_TOPIC_BASE
+            string "Topic base"
+            default "grenton"
+            help
+                Topics live under <base>/CLU<serial>/: status (online/offline, retained LWT),
+                <object>/state, <object>/set, <object>/position, <object>/position/set, <object>/event.
+
+        config CLU_MQTT_KEEPALIVE
+            int "Keepalive [s]"
+            range 5 600
+            default 30
+
+        config CLU_MQTT_SCAN_MS
+            int "State scan interval [ms]"
+            range 20 5000
+            default 100
+            help
+                How often object values are compared with the last published state. Changes are
+                published retained; unchanged values are never resent.
+
+        config CLU_MQTT_HA_DISCOVERY
+            bool "Home Assistant MQTT discovery"
+            default y
+            help
+                Publishes retained discovery configs for the objects declared in OM.LUA (outputs,
+                inputs, buttons, roller shutters, panel sensors) on connect and whenever Home
+                Assistant announces "online" on <prefix>/status. Entities removed from OM.LUA get
+                their config cleared. USER.LUA can override: MQTT.expose(obj, kind | opts),
+                MQTT.hide(obj).
+
+        config CLU_MQTT_HA_PREFIX
+            string "Home Assistant discovery prefix"
+            default "homeassistant"
+            depends on CLU_MQTT_HA_DISCOVERY
+
+        config CLU_MQTT_DIAGNOSTICS
+            bool "Publish CLU / ESP32 internals (diagnostic entities)"
+            default y
+            help
+                Local CLU object: boot time, CLU state, firmware, OnTimeChange events.
+                Firmware: free heap / minimum free heap / free PSRAM, Lua memory, WiFi RSSI, IP,
+                reset reason, TFBUS modules online / total / missed polls, a "Restart" button
+                (<root>/system_restart/set, payload PRESS) and a connectivity sensor per TFBUS
+                module. In Home Assistant they show under "Diagnostic".
+
+        config CLU_MQTT_DIAG_INTERVAL
+            int "Internals sample interval [s]"
+            range 5 3600
+            default 30
+            depends on CLU_MQTT_DIAGNOSTICS
+            help
+                Heap, RSSI etc. change all the time: they are sampled (and published when changed)
+                at this interval instead of every state scan.
+
+        config CLU_MQTT_OBJECT_API
+            bool "Raw object API (get/set any feature, call any method)"
+            default n
+            help
+                Generic access to every object declared in OM.LUA (including the local CLU),
+                payloads are JSON values:
+                  <root>/<OBJ>/feature/<idx>/get  (any payload) -> <root>/<OBJ>/feature/<idx>
+                  <root>/<OBJ>/feature/<idx>/set  42 | "text" | true | plain text
+                                                  -> <root>/<OBJ>/feature/<idx> (read back)
+                  <root>/<OBJ>/execute/<idx>      [] | [arg, ...] | single value
+                                                  -> <root>/<OBJ>/execute/<idx>/result
+                Results: {"ok":true,"value":...} or {"ok":false,"error":"..."}.
+                Nothing is ever evaluated as Lua and remote-CLU proxies are refused, but anyone
+                who can publish to the broker controls every object: use broker ACLs/credentials.
+
+    endmenu
+
+endmenu

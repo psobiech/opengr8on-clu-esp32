@@ -1,0 +1,29 @@
+# Doxygen config for the project's own C sources (vendored Lua, managed components and host tests
+# excluded). Run `doxygen` in the repo root; HTML goes to doxygen/html/index.html.
+PROJECT_NAME           = "opengr8on-clu-esp32"
+PROJECT_BRIEF          = "Grenton-compatible CLU firmware for ESP32-S3"
+OUTPUT_DIRECTORY       = doxygen
+INPUT                  = main components README.md
+RECURSIVE              = YES
+FILE_PATTERNS          = *.c *.h
+EXCLUDE                = components/lua
+EXCLUDE_PATTERNS       = */managed_components/* */build/*
+USE_MDFILE_AS_MAINPAGE = README.md
+OPTIMIZE_OUTPUT_FOR_C  = YES
+EXTRACT_ALL            = NO
+EXTRACT_STATIC         = YES
+EXTRACT_PRIVATE        = YES
+JAVADOC_AUTOBRIEF      = YES
+MARKDOWN_SUPPORT       = YES
+TYPEDEF_HIDES_STRUCT   = YES
+SOURCE_BROWSER         = YES
+STRIP_FROM_PATH        = .
+FULL_PATH_NAMES        = YES
+PREDEFINED             = __cplusplus=0
+ENABLE_PREPROCESSING   = YES
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HAVE_DOT               = NO
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_NO_PARAMDOC       = NO

@@ -1,0 +1,34 @@
+menu "Lua runtime"
+
+    choice CLU_LUA_VERSION
+        prompt "Lua version"
+        default CLU_LUA_5_3
+        help
+            Real CLU firmware embeds Lua 5.3, and OM.LUA / user scripts are written for it.
+            Lua 5.5 is faster and leaner, but rejects scripts that use `global` as a name or
+            assign to a for-loop variable, and has no bit32 library.
+
+        config CLU_LUA_5_3
+            bool "Lua 5.3.6 (same as real CLU)"
+        config CLU_LUA_5_5
+            bool "Lua 5.5.1 (experimental)"
+    endchoice
+
+    config CLU_LUA_MEM_LIMIT_KB
+        int "Lua heap limit (KB)"
+        default 4096
+        range 256 7680
+        help
+            Total memory one Lua state may hold (PSRAM + internal RAM). Allocations above it
+            fail with a Lua "not enough memory" error after an emergency GC, instead of starving
+            WiFi / lwIP of RAM.
+
+    config CLU_LUA_INTERNAL_RESERVE_KB
+        int "Internal RAM kept free for the system (KB)"
+        default 64
+        range 16 256
+        help
+            When PSRAM is full, Lua falls back to internal RAM only while at least this much
+            internal RAM stays free.
+
+endmenu

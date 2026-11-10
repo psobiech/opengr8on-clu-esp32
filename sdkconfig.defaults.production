@@ -1,0 +1,20 @@
+# Production profile — NOT applied by default.
+#
+#   idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.production" \
+#          -B build-prod reconfigure build
+#
+# Flash and NVS encryption are DISABLED: no eFuses are burned and the board stays reflashable over
+# plain UART. Consequence: project key, PIN and WiFi password in NVS / the app image can be dumped
+# with esptool by someone with physical (USB) access.
+
+# CONFIG_SECURE_FLASH_ENC_ENABLED is not set
+# CONFIG_NVS_ENCRYPTION is not set
+
+# To re-enable (PERMANENT: burns eFuses on the first boot; read the ESP-IDF "Flash Encryption" and
+# "Security Features Enablement Workflows" guides first):
+#   CONFIG_SECURE_FLASH_ENC_ENABLED=y
+#   CONFIG_SECURE_FLASH_ENCRYPTION_MODE_RELEASE=y     (release mode: UART download disabled)
+#   CONFIG_NVS_ENCRYPTION=y                           (partitions.csv needs an "nvs_keys" partition:
+#                                                      type data, subtype nvs_keys, 4K, encrypted)
+#   CONFIG_SECURE_ENABLE_SECURE_ROM_DL_MODE=y         (ROM download mode: secure commands only;
+#                                                      only valid with flash encryption / secure boot)

@@ -249,6 +249,11 @@ Wartości z NVS mają pierwszeństwo — zmiana w menuconfig nie nadpisze już z
 Projekt wgrywa się normalnie z Object Managera (OM.LUA, USER.LUA przez TFTP). Moduły TF-Bus
 wykrywa się w OM przyciskiem odświeżania modułów; lista trafia do `a:\CONFIG.JSON`.
 
+Zamiast Object Managera można użyć rozszerzenia VS Code
+[opengr8on-vscode](https://github.com/psobiech/opengr8on-vscode): projekt jako pliki YAML + Lua
+w gicie, z których generuje te same OM.LUA / USER.LUA co Object Manager i wysyła je przez TFTP;
+wykrywa CLU, pokazuje moduły, wartości na żywo i logi (telnet).
+
 ## MQTT / Home Assistant
 
 ### Włączenie

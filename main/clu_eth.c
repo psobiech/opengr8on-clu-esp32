@@ -1,6 +1,9 @@
 /**
  * @file clu_eth.c
- * @brief Ethernet interface: ESP32 internal EMAC + LAN8720A RMII PHY (Grenton GATE hardware).
+ * @brief Ethernet interface: ESP32 internal EMAC + RMII PHY (Grenton GATE hardware: LAN8720A).
+ *
+ * PHY driver from CLU_ETH_PHY: LAN87xx, or the IDF generic IEEE 802.3 driver for PHYs without
+ * their own (e.g. JL1101).
  *
  * Runs alongside the WiFi STA when both are enabled. Its own IP config (DHCP / static from OM) lives
  * in clu_net (CLU_NET_ETH). Ethernet gets a higher route priority than WiFi, so the default route
@@ -14,7 +17,9 @@
 
 #include "clu_net.h"
 #include "esp_eth.h"
+#if CONFIG_CLU_ETH_PHY_LAN87XX
 #include "esp_eth_phy_lan87xx.h"
+#endif
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -24,6 +29,14 @@ static const char *TAG = "clu_eth";
 
 // Above WIFI_STA (100): wired traffic wins the default route.
 #define ETH_ROUTE_PRIO 128
+
+#if CONFIG_CLU_ETH_PHY_LAN87XX
+#define ETH_PHY_NAME          "LAN8720A"
+#define ETH_PHY_NEW(cfg)      esp_eth_phy_new_lan87xx(cfg)
+#else
+#define ETH_PHY_NAME          "generic 802.3 PHY"
+#define ETH_PHY_NEW(cfg)      esp_eth_phy_new_generic(cfg)
+#endif
 
 #if CONFIG_CLU_ETH_CLK_EXT_IN_GPIO0
 #define ETH_CLK_MODE EMAC_CLK_EXT_IN
@@ -77,13 +90,13 @@ void clu_eth_start(void)
     phy_cfg.reset_gpio_num = CONFIG_CLU_ETH_PHY_RST_GPIO;
 
     esp_eth_mac_t *mac = esp_eth_mac_new_esp32(&emac_cfg, &mac_cfg);
-    esp_eth_phy_t *phy = mac ? esp_eth_phy_new_lan87xx(&phy_cfg) : NULL;
+    esp_eth_phy_t *phy = mac ? ETH_PHY_NEW(&phy_cfg) : NULL;
     esp_eth_config_t cfg = ETH_DEFAULT_CONFIG(mac, phy);
     esp_eth_handle_t eth = NULL;
     esp_err_t err = phy ? esp_eth_driver_install(&cfg, &eth) : ESP_ERR_NO_MEM;
     if (err != ESP_OK) {
         // No PHY answering (wrong address / clock) ends up here: run on without Ethernet.
-        ESP_LOGE(TAG, "driver install failed: %s (PHY addr %d, MDC %d, MDIO %d, clock GPIO%d %s)",
+        ESP_LOGE(TAG, "driver install failed: %s (" ETH_PHY_NAME " addr %d, MDC %d, MDIO %d, clock GPIO%d %s)",
                  esp_err_to_name(err), CONFIG_CLU_ETH_PHY_ADDR, CONFIG_CLU_ETH_MDC_GPIO, CONFIG_CLU_ETH_MDIO_GPIO,
                  ETH_CLK_GPIO, ETH_CLK_MODE == EMAC_CLK_EXT_IN ? "in" : "out");
         if (phy) {
@@ -100,7 +113,7 @@ void clu_eth_start(void)
     clu_net_init(CLU_NET_ETH, netif); // after attach: DHCP / static needs the started netif driver
     uint8_t m[6];
     esp_eth_ioctl(eth, ETH_CMD_G_MAC_ADDR, m);
-    ESP_LOGI(TAG, "EMAC + LAN8720A up, MAC " MACSTR, MAC2STR(m));
+    ESP_LOGI(TAG, "EMAC + " ETH_PHY_NAME " up, MAC " MACSTR, MAC2STR(m));
     ESP_ERROR_CHECK(esp_eth_start(eth));
 }
 

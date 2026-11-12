@@ -109,7 +109,8 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 ### Czego brakuje względem CLU_ZWAVE_2
 
 - **Z-Wave** — brak radia; węzły Z-Wave z OM.LUA są pomijane.
-- **Ethernet** — tylko na targecie `esp32` (LAN8720A, sprzęt Grenton GATE); ESP32-S3 nie ma EMAC,
+- **Ethernet** — tylko na targecie `esp32` (LAN8720A na sprzęcie Grenton GATE, inne PHY RMII przez
+  sterownik generyczny, np. JL1101); ESP32-S3 nie ma EMAC,
   więc tam wyłącznie WiFi.
 - **Pomiar napięcia magistrali** (cechy 27–30, zdarzenia OnBusVoltage*) — brak ADC na płytce.
 - **Chmura Grentona** (aplikacja mobilna, Push) — świadomie wyłączona; zamiast niej MQTT + Home Assistant.
@@ -256,7 +257,8 @@ Wszystko w `idf.py menuconfig` → **OpenGr8on ESP32 CLU** (na górze menu).
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|
-| `CLU_ETH` | y (tylko `esp32`) | Ethernet EMAC + LAN8720A, zob. "Sprzęt Grenton GATE" |
+| `CLU_ETH` | y (tylko `esp32`) | Ethernet EMAC + PHY RMII, zob. "Sprzęt Grenton GATE" |
+| `CLU_ETH_PHY` | LAN87xx | sterownik PHY: LAN8720A albo generyczny IEEE 802.3 (np. JL1101) |
 | `CLU_WIFI` | y bez Ethernetu, n z nim | WiFi STA; z Ethernetem opcjonalne (oba równolegle) |
 | `CLU_WIFI_SSID` / `CLU_WIFI_PASSWORD` | — | sieć WiFi |
 | `CLU_WIFI_BSSID` | puste | przypięcie do konkretnego AP (`aa:bb:cc:dd:ee:ff`) |

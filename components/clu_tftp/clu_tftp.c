@@ -185,7 +185,7 @@ static void serve_rrq(const struct sockaddr_in *peer, const char *path, bool net
         send_err(sock, peer, TFTP_E_UNDEFINED, "stat failed");
         goto out;
     }
-    // Whole file in PSRAM: CLU files are small and netascii needs lookahead-free conversion.
+    // Whole file in PSRAM (internal RAM without it): CLU files are small and netascii needs lookahead-free conversion.
     size_t raw_len = (size_t)st.st_size;
     uint8_t *raw = heap_caps_malloc(raw_len ? raw_len : 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!raw) {
@@ -200,6 +200,9 @@ static void serve_rrq(const struct sockaddr_in *peer, const char *path, bool net
     fclose(f);
     if (netascii) {
         file = heap_caps_malloc(raw_len * 2 + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!file) {
+            file = malloc(raw_len * 2 + 1);
+        }
         if (!file) {
             free(raw);
             send_err(sock, peer, TFTP_E_UNDEFINED, "out of memory");

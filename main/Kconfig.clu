@@ -1,32 +1,83 @@
 menu "OpenGr8on ESP32 CLU"
 
-    config CLU_ETH
-        bool "Ethernet (internal EMAC + LAN8720A RMII PHY)"
-        depends on IDF_TARGET_ESP32
-        default y
-        help
-            Wired network through the ESP32 EMAC and a LAN8720A PHY (Grenton GATE hardware,
-            ESP32-WROVER-B). Only the classic ESP32 has the EMAC: the option is hidden on ESP32-S3.
-            With Ethernet on, WiFi becomes optional (both can run in parallel); with Ethernet off,
-            WiFi is always on. Ethernet has the default route when both have an address.
+    config CLU_WIFI_REQUIRED
+        bool
+        default y if !CLU_ETH
+        select CLU_WIFI
 
-    config CLU_WIFI
-        bool "WiFi station" if CLU_ETH
+    menuconfig CLU_WIFI
+        bool "WiFi station"
         default n if CLU_ETH
         default y
         help
-            At least one interface is always enabled: this prompt only appears when Ethernet is
-            on (without Ethernet, WiFi is forced on).
+            At least one interface is always enabled: without Ethernet, WiFi is forced on
+            (shown as -*-). With Ethernet on, WiFi is optional.
 
-    menu "Ethernet (LAN8720A)"
-        depends on CLU_ETH
+    if CLU_WIFI
+
+        config CLU_WIFI_SSID
+            string "WiFi SSID"
+            default ""
+
+        config CLU_WIFI_PASSWORD
+            string "WiFi password"
+            default ""
+
+        config CLU_WIFI_BSSID
+            string "WiFi BSSID (aa:bb:cc:dd:ee:ff, empty = any AP with the SSID)"
+            default ""
+            help
+                Connect only to this access point MAC. Useful with several APs sharing the SSID.
+
+        config CLU_WIFI_WPA3_ONLY
+            bool "Require WPA3 (refuse WPA2 access points)"
+            default n
+            help
+                Off: joins WPA2-PSK, WPA2/WPA3 and WPA3-SAE networks (never open or WEP/WPA).
+                On: joins only WPA3-SAE networks, which also rules out downgrade to WPA2.
+
+        config CLU_WIFI_MAX_TX_POWER
+            int "WiFi max TX power (0.25 dBm units, 0 = driver default)"
+            range 0 84
+            default 0
+            help
+                Lower it (e.g. 34 = 8.5 dBm) when the board sees the AP but authentication
+                always times out (reason 2): some boards' antennas misbehave at full power.
+
+    endif
+
+    menuconfig CLU_ETH
+        bool "Ethernet (internal EMAC + RMII PHY)"
+        depends on IDF_TARGET_ESP32
+        default y
+        help
+            Wired network through the ESP32 EMAC and an RMII PHY (Grenton GATE hardware:
+            ESP32-WROVER-B + LAN8720A). Only the classic ESP32 has the EMAC: the option is hidden
+            on ESP32-S3. With Ethernet on, WiFi becomes optional (both can run in parallel); with
+            Ethernet off, WiFi is always on. Ethernet has the default route when both have an address.
+
+    if CLU_ETH
+
+        choice CLU_ETH_PHY
+            prompt "PHY chip"
+            default CLU_ETH_PHY_LAN87XX
+            help
+                Generic uses only the standard IEEE 802.3 registers (reset, autonegotiation,
+                link / speed / duplex). It fits any compliant 10/100 PHY without its own driver,
+                e.g. JL1101; no chip ID check, so a wrong PHY address shows up as no link.
+
+            config CLU_ETH_PHY_LAN87XX
+                bool "LAN8720A / LAN87xx (Grenton GATE)"
+            config CLU_ETH_PHY_GENERIC
+                bool "Generic IEEE 802.3 (JL1101 and other PHYs)"
+        endchoice
 
         config CLU_ETH_PHY_ADDR
             int "PHY address (-1 = auto-detect)"
             range -1 31
             default 0
             help
-                Strap address of the LAN8720A on the MDIO bus. Grenton GATE: 0.
+                Strap address of the PHY on the MDIO bus. Grenton GATE: 0.
 
         config CLU_ETH_MDC_GPIO
             int "SMI MDC GPIO"
@@ -63,41 +114,7 @@ menu "OpenGr8on ESP32 CLU"
                 bool "ESP32 outputs the clock on GPIO17 (not with WROVER PSRAM)"
         endchoice
 
-    endmenu
-
-    config CLU_WIFI_SSID
-        string "WiFi SSID"
-        default ""
-        depends on CLU_WIFI
-
-    config CLU_WIFI_PASSWORD
-        string "WiFi password"
-        default ""
-        depends on CLU_WIFI
-
-    config CLU_WIFI_BSSID
-        string "WiFi BSSID (aa:bb:cc:dd:ee:ff, empty = any AP with the SSID)"
-        default ""
-        depends on CLU_WIFI
-        help
-            Connect only to this access point MAC. Useful with several APs sharing the SSID.
-
-    config CLU_WIFI_WPA3_ONLY
-        bool "Require WPA3 (refuse WPA2 access points)"
-        default n
-        depends on CLU_WIFI
-        help
-            Off: joins WPA2-PSK, WPA2/WPA3 and WPA3-SAE networks (never open or WEP/WPA).
-            On: joins only WPA3-SAE networks, which also rules out downgrade to WPA2.
-
-    config CLU_WIFI_MAX_TX_POWER
-        int "WiFi max TX power (0.25 dBm units, 0 = driver default)"
-        range 0 84
-        default 0
-        depends on CLU_WIFI
-        help
-            Lower it (e.g. 34 = 8.5 dBm) when the board sees the AP but authentication
-            always times out (reason 2): some boards' antennas misbehave at full power.
+    endif
 
     config CLU_SERIAL
         string "CLU serial number (decimal, empty = random, stored in NVS)"

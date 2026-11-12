@@ -180,13 +180,28 @@ void clu_state_save_keys(void) { s_saved_keys++; }
 static bool s_net_ok = true;
 static char s_net_ip[16], s_net_gw[16];
 static int s_net_applied;
-bool clu_net_set_static(const char *ip, const char *gw)
+static clu_net_if_t s_net_if, s_net_if_applied = CLU_NET_IF_COUNT;
+static uint32_t s_net_peer;
+// Two interfaces: Ethernet 192.168.1.20/24, WiFi 10.0.0.20/24 (peers elsewhere: Ethernet).
+clu_net_if_t clu_net_if_for(uint32_t peer_be)
 {
+    s_net_peer = peer_be;
+    return (ntohl(peer_be) >> 8) == 0x0a0000 ? CLU_NET_WIFI : CLU_NET_ETH;
+}
+uint32_t clu_net_ip(clu_net_if_t i) { return inet_addr(i == CLU_NET_WIFI ? "10.0.0.20" : "192.168.1.20"); }
+uint32_t clu_net_local_ip(uint32_t peer_be) { return clu_net_ip(clu_net_if_for(peer_be)); }
+bool clu_net_set_static(clu_net_if_t i, const char *ip, const char *gw)
+{
+    s_net_if = i;
     strcpy(s_net_ip, ip);
     strcpy(s_net_gw, gw);
     return s_net_ok;
 }
-void clu_net_apply(void) { s_net_applied++; }
+void clu_net_apply(clu_net_if_t i)
+{
+    s_net_if_applied = i;
+    s_net_applied++;
+}
 
 // Time since boot (setup window): 0 = just booted, window open.
 static int64_t s_now_us;
@@ -661,6 +676,26 @@ static void test_set_ip(void)
     check_str("set_ip: new IP confirmed", sent_str(0, &pk), want);
     check("set_ip: static IP + gateway stored and applied after the reply",
           strcmp(s_net_ip, "192.168.1.77") == 0 && strcmp(s_net_gw, "192.168.1.1") == 0 && s_net_applied == 1);
+    check("set_ip: from an Ethernet peer -> Ethernet config", s_net_if == CLU_NET_ETH && s_net_if_applied == CLU_NET_ETH);
+
+    // peer on the WiFi subnet: the WiFi config changes, the current IP compared is the WiFi one
+    char wreq[96];
+    snprintf(wreq, sizeof wreq, "req_set_clu_ip:%08lx:10.0.0.20:10.0.0.1", (unsigned long)g_clu.sn);
+    sent_reset();
+    rx_reset();
+    rx_add_str(&pk, wreq, "10.0.0.50");
+    run_task(udp_task);
+    snprintf(want, sizeof want, "resp_set_clu_ip:%08lx:10.0.0.20", (unsigned long)g_clu.sn);
+    check_str("set_ip over WiFi to the current WiFi IP: confirmed", sent_str(0, &pk), want);
+    check("set_ip over WiFi to the current WiFi IP: not applied", s_net_applied == 1);
+    snprintf(wreq, sizeof wreq, "req_set_clu_ip:%08lx:10.0.0.77:10.0.0.1", (unsigned long)g_clu.sn);
+    sent_reset();
+    rx_reset();
+    rx_add_str(&pk, wreq, "10.0.0.50");
+    run_task(udp_task);
+    check("set_ip from a WiFi peer -> WiFi config stored and applied",
+          s_net_if == CLU_NET_WIFI && s_net_if_applied == CLU_NET_WIFI && strcmp(s_net_ip, "10.0.0.77") == 0 &&
+              s_net_applied == 2);
 
     // storing fails
     s_net_ok = false;
@@ -669,7 +704,7 @@ static void test_set_ip(void)
     rx_add_str(&pk, req, "192.168.1.50");
     run_task(udp_task);
     check_str("set_ip: store failure -> resp:ERROR", sent_str(0, &pk), "resp:ERROR");
-    check("set_ip: store failure -> not applied", s_net_applied == 1);
+    check("set_ip: store failure -> not applied", s_net_applied == 2);
     s_net_ok = true;
 }
 
@@ -711,6 +746,11 @@ static void test_lua_requests(void)
     check("req: script (CR/LF stripped) evaluated with the caller's IP",
           strcmp(s_lua_script, "SYSTEM:get(1)") == 0 && strcmp(s_lua_from, "192.168.1.50") == 0);
     check_str("req: resp:<our ip>:<session>:<value>", sent_str(0, prj), "resp:192.168.1.20:00abcdef:42");
+    sent_reset();
+    rx_reset();
+    rx_add_str(prj, "req:10.0.0.20:00abcdf0:SYSTEM:get(1)", "10.0.0.50");
+    run_task(udp_task);
+    check_str("req over WiFi: resp carries our WiFi address", sent_str(0, prj), "resp:10.0.0.20:00abcdf0:42");
 
     s_lua_rc = ESP_ERR_TIMEOUT;
     sent_reset();
@@ -1099,8 +1139,10 @@ int main(void)
     test_before_start();
     test_start_and_socket_errors();
     test_net_up();
-    udp_server_set_local_ip(inet_addr("192.168.1.20"));
-    check("local IP stored as text", strcmp(s_ip, "192.168.1.20") == 0);
+    char me[16];
+    check("local IP towards a peer: that of its interface, as text",
+          strcmp(local_ip(inet_addr("192.168.1.50"), me), "192.168.1.20") == 0 && s_net_peer == inet_addr("192.168.1.50") &&
+              strcmp(local_ip(inet_addr("10.0.0.50"), me), "10.0.0.20") == 0);
     test_discovery();
     test_set_ip();
     test_set_key();

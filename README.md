@@ -47,7 +47,7 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 
 | Komponent | Rola |
 |---|---|
-| `main/` | start, WiFi/IP (`clu_net`), czas/SNTP/RTC (`clu_time`), serwer UDP/1234 (`udp_server`), diagnostyka OM (`clu_diag`), stan CLU (`clu_state`) |
+| `main/` | start, WiFi/Ethernet/IP (`clu_net`, `clu_eth`), czas/SNTP/RTC (`clu_time`), serwer UDP/1234 (`udp_server`), diagnostyka OM (`clu_diag`), stan CLU (`clu_state`) |
 | `components/clu_crypto` | AES-128-CBC/PKCS#7 (PSA crypto, mbedtls 4) |
 | `components/clu_proto` | wyprowadzanie kluczy, ramkowanie TF-Bus, protokół TFTP (czysty C, testowany na hoście) |
 | `components/clu_lua` | środowisko Lua: prelude (model obiektów OM), obiekty wirtualne (`objects.lua`) |
@@ -109,7 +109,8 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 ### Czego brakuje względem CLU_ZWAVE_2
 
 - **Z-Wave** — brak radia; węzły Z-Wave z OM.LUA są pomijane.
-- **Ethernet** — tylko WiFi na ten moment.
+- **Ethernet** — tylko na targecie `esp32` (LAN8720A, sprzęt Grenton GATE); ESP32-S3 nie ma EMAC,
+  więc tam wyłącznie WiFi.
 - **Pomiar napięcia magistrali** (cechy 27–30, zdarzenia OnBusVoltage*) — brak ADC na płytce.
 - **Chmura Grentona** (aplikacja mobilna, Push) — świadomie wyłączona; zamiast niej MQTT + Home Assistant.
 - **Aktualizacja firmware z OM** — firmware wgrywa się przez `idf.py flash`.
@@ -176,13 +177,50 @@ magistrali przez przetwornicę.
   funkcji fail-safe.
 - **Nigdy nie podłączaj dwóch masterów (prawdziwej CLU i tej) do tej samej magistrali.**
 
+### Sprzęt Grenton GATE (ESP32-WROVER-B, Ethernet)
+
+Target `esp32` (`sdkconfig.defaults.esp32`, `partitions_4mb.csv`): ESP32-WROVER-B (4 MB flash,
+PSRAM), Ethernet przez wewnętrzny EMAC + PHY LAN8720A. Domyślne piny:
+
+| Funkcja | GPIO | Opcja |
+|---|---|---|
+| LAN8720A: MDC / MDIO, adres PHY | 23 / 18, 0 | `CLU_ETH_MDC_GPIO`, `CLU_ETH_MDIO_GPIO`, `CLU_ETH_PHY_ADDR` |
+| LAN8720A: reset | 2 | `CLU_ETH_PHY_RST_GPIO` |
+| RMII 50 MHz | wejście z oscylatora na GPIO0 | `CLU_ETH_CLK` |
+| RMII dane (stałe w ESP32) | TXEN 21, TXD0 19, TXD1 22, CRS_DV 27, RXD0 25, RXD1 26 | — |
+| RS485 (UART1) TX / RX / DE | 4 / 3 / 5 | `CLU_RS485_*` |
+| Przycisk reset (aktywny niski) | 34 | `CLU_SETUP_BUTTON_GPIO` |
+
+- WiFi i Ethernet mogą działać równolegle (`CLU_WIFI` + `CLU_ETH`); bez Ethernetu WiFi jest
+  zawsze włączone. Domyślnie na `esp32`: tylko Ethernet.
+- RTC (`CLU_RTC`) domyślnie wyłączony na `esp32` (GPIO38/39 to na ESP32 tylko wejścia).
+- RX RS485 na GPIO3 to pin U0RXD: konsola UART nie przyjmuje wejścia (log wychodzi dalej na TX).
+- Partycje: 2 × 1,5 MB OTA, 896 KB FAT.
+
+#### Wgrywanie na GATE z włączonym szyfrowaniem flash
+
+Wyłącz szyfrowanie, dopalając
+kolejny bit `FLASH_CRYPT_CNT` (parzysta liczba ustawionych bitów = szyfrowanie wyłączone), potem
+wgraj całość od zera:
+
+```bash
+espefuse.py -p /dev/ttyUSB0 summary                    # FLASH_CRYPT_CNT: nieparzysta = włączone
+espefuse.py -p /dev/ttyUSB0 burn_efuse FLASH_CRYPT_CNT # +1 bit -> wyłączone
+idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig -p /dev/ttyUSB0 erase-flash flash monitor
+```
+
+> **eFuse są nieodwracalne.** `FLASH_CRYPT_CNT` ma 7 bitów, więc szyfrowanie można przełączać
+> tylko kilka razy. Po dopaleniu eFuse fabryczny firmware przestaje się uruchamiać i niejest możliwe jego przywrócenie!
+
 ## Budowanie i wgrywanie
 
 ### Wymagania
 
-- **ESP-IDF 6.0** (projekt budowany na 6.0.2, zob. `dependencies.lock`), target `esp32s3`.
+- **ESP-IDF 6.0** (projekt budowany na 6.0.2, zob. `dependencies.lock`), target `esp32s3` albo
+  `esp32` (Grenton GATE).
 - Sieć przy pierwszym budowaniu: component manager pobiera `espressif/mqtt`
-  (`components/clu_mqtt/idf_component.yml`), bo esp-mqtt nie jest już częścią ESP-IDF 6.
+  (`components/clu_mqtt/idf_component.yml`) i na `esp32` `espressif/lan87xx`
+  (`main/idf_component.yml`), bo esp-mqtt i sterowniki PHY nie są już częścią ESP-IDF 6.
 - Lua jest dołączona w repozytorium (`components/lua`), nic więcej nie trzeba instalować.
 
 ### Budowanie
@@ -192,6 +230,16 @@ magistrali przez przetwornicę.
 idf.py set-target esp32s3
 idf.py menuconfig               # zob. "Konfiguracja"
 idf.py build flash monitor
+```
+
+ESP32 (Grenton GATE) w osobnym katalogu, z własnym `sdkconfig`:
+
+```bash
+. /opt/esp-idf/export.sh        # ścieżka do Twojej instalacji ESP-IDF
+export SDKCONFIG=build-esp32/sdkconfig
+idf.py -B build-esp32 set-target esp32
+idf.py -B build-esp32 menuconfig
+idf.py -B build-esp32 build
 ```
 
 ### Pierwsze uruchomienie
@@ -208,12 +256,18 @@ Wszystko w `idf.py menuconfig` → **OpenGr8on ESP32 CLU** (na górze menu).
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|
+| `CLU_ETH` | y (tylko `esp32`) | Ethernet EMAC + LAN8720A, zob. "Sprzęt Grenton GATE" |
+| `CLU_WIFI` | y bez Ethernetu, n z nim | WiFi STA; z Ethernetem opcjonalne (oba równolegle) |
 | `CLU_WIFI_SSID` / `CLU_WIFI_PASSWORD` | — | sieć WiFi |
 | `CLU_WIFI_BSSID` | puste | przypięcie do konkretnego AP (`aa:bb:cc:dd:ee:ff`) |
 | `CLU_WIFI_WPA3_ONLY` | n | odrzucaj AP z WPA2 |
 | `CLU_WIFI_MAX_TX_POWER` | 0 | moc nadawania w 0,25 dBm, 0 = domyślna sterownika |
 
-Adres IP: DHCP; statyczny ustawia OM przez `req_set_clu_ip` (zapisywany w NVS).
+Adres IP: DHCP; statyczny ustawia OM przez `req_set_clu_ip` (zapisywany w NVS), osobno dla
+każdego interfejsu: zmienia się konfiguracja tego, przez który przyszło żądanie (podsieć nadawcy;
+spoza obu podsieci: Ethernet). WiFi: przestrzeń NVS `clu_net` (jak dotąd), Ethernet: `clu_net_eth`;
+serwery DNS (cechy 25/26) są wspólne. W odpowiedziach (`resp:<ip>:…`) CLU podaje adres
+interfejsu, przez który widzi rozmówcę. Przy obu interfejsach trasa domyślna idzie przez Ethernet.
 
 ### Tożsamość CLU
 

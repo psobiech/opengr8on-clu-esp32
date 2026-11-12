@@ -124,20 +124,21 @@ esp_err_t esp_read_mac(uint8_t *mac, esp_mac_type_t type)
 
 // netif
 static esp_netif_t *const NETIF = (esp_netif_t *)0x1234;
+static esp_netif_t *const ETH_NETIF = (esp_netif_t *)0x5678;
 static int s_dhcp_start, s_dhcp_stop;
-static esp_netif_ip_info_t s_ipinfo;
+static esp_netif_ip_info_t s_ipinfo, s_ipinfo_eth;
 static uint32_t s_dns_main, s_dns_backup;
 static bool s_netif_present = true;
 esp_err_t esp_netif_dhcpc_start(esp_netif_t *n) { s_dhcp_start++; return ESP_OK; }
 esp_err_t esp_netif_dhcpc_stop(esp_netif_t *n) { s_dhcp_stop++; return ESP_OK; }
 esp_err_t esp_netif_set_ip_info(esp_netif_t *n, const esp_netif_ip_info_t *ii)
 {
-    s_ipinfo = *ii;
+    *(n == ETH_NETIF ? &s_ipinfo_eth : &s_ipinfo) = *ii;
     return ESP_OK;
 }
 esp_err_t esp_netif_get_ip_info(esp_netif_t *n, esp_netif_ip_info_t *ii)
 {
-    *ii = s_ipinfo;
+    *ii = n == ETH_NETIF ? s_ipinfo_eth : s_ipinfo;
     return ESP_OK;
 }
 esp_err_t esp_netif_set_dns_info(esp_netif_t *n, esp_netif_dns_type_t t, esp_netif_dns_info_t *d)
@@ -263,28 +264,28 @@ static uint32_t nvs_u32(const char *ns, const char *k)
 static void test_net(void)
 {
     nvs_reset();
-    clu_net_apply();
+    clu_net_apply(CLU_NET_WIFI);
     check("net: apply before init does nothing", s_dhcp_start == 0 && s_dhcp_stop == 0);
     nvs_fail_open = 1;
-    clu_net_init(NETIF);
+    clu_net_init(CLU_NET_WIFI, NETIF);
     nvs_fail_open = 0;
     check("net: init without stored config -> DHCP", s_dhcp_start == 1 && s_dhcp_stop == 0);
 
-    check("net: invalid IP rejected", !clu_net_set_static("not-an-ip", "192.168.1.1"));
-    check("net: invalid gateway rejected", !clu_net_set_static("192.168.1.77", "gw?"));
-    check("net: static IP accepted", clu_net_set_static("192.168.1.77", "192.168.1.1"));
+    check("net: invalid IP rejected", !clu_net_set_static(CLU_NET_WIFI, "not-an-ip", "192.168.1.1"));
+    check("net: invalid gateway rejected", !clu_net_set_static(CLU_NET_WIFI, "192.168.1.77", "gw?"));
+    check("net: static IP accepted", clu_net_set_static(CLU_NET_WIFI, "192.168.1.77", "192.168.1.1"));
     check("net: static IP, gateway and /24 mask stored",
           nvs_u32("clu_net", "ip") == inet_addr("192.168.1.77") && nvs_u32("clu_net", "gw") == inet_addr("192.168.1.1") &&
               nvs_u32("clu_net", "mask") == inet_addr("255.255.255.0") && nvs_commits == 1);
-    clu_net_apply();
+    clu_net_apply(CLU_NET_WIFI);
     check("net: static apply stops DHCP, sets address / gateway / mask, gateway as DNS",
           s_dhcp_stop == 1 && s_ipinfo.ip.addr == inet_addr("192.168.1.77") &&
               s_ipinfo.gw.addr == inet_addr("192.168.1.1") && s_ipinfo.netmask.addr == inet_addr("255.255.255.0") &&
               s_dns_main == inet_addr("192.168.1.1") && s_dns_backup == 0);
 
-    clu_net_set_static("10.0.0.5", "10.0.1.1");
+    clu_net_set_static(CLU_NET_WIFI, "10.0.0.5", "10.0.1.1");
     check("net: gateway outside the /24 -> no netmask (all on-link)", nvs_u32("clu_net", "mask") == 0);
-    clu_net_set_static("10.0.0.6", "");
+    clu_net_set_static(CLU_NET_WIFI, "10.0.0.6", "");
     check("net: empty gateway allowed", nvs_u32("clu_net", "ip") == inet_addr("10.0.0.6") && nvs_u32("clu_net", "gw") == 0);
 
     int commits = nvs_commits;
@@ -300,23 +301,49 @@ static void test_net(void)
     check("net: DNS applied at once with a static IP",
           s_dns_main == inet_addr("8.8.8.8") && s_dns_backup == inet_addr("1.1.1.1"));
 
-    check("net: 0.0.0.0 -> back to DHCP", clu_net_set_static("0.0.0.0", NULL) && nvs_u32("clu_net", "ip") == 0);
+    check("net: 0.0.0.0 -> back to DHCP", clu_net_set_static(CLU_NET_WIFI, "0.0.0.0", NULL) && nvs_u32("clu_net", "ip") == 0);
     s_dns_main = 0;
     clu_net_set_dns(0, "8.8.4.4");
     check("net: DNS under DHCP stored, not applied", nvs_u32("clu_net", "dns1") == inet_addr("8.8.4.4") && s_dns_main == 0);
     int starts = s_dhcp_start;
-    clu_net_apply();
+    clu_net_apply(CLU_NET_WIFI);
     check("net: apply under DHCP restarts the DHCP client", s_dhcp_start == starts + 1);
 
     // boot with a stored static config
-    clu_net_set_static("192.168.5.9", "192.168.5.1");
-    clu_net_init(NETIF);
+    clu_net_set_static(CLU_NET_WIFI, "192.168.5.9", "192.168.5.1");
+    clu_net_init(CLU_NET_WIFI, NETIF);
     check("net: stored static config applied at boot, stored DNS used",
           s_ipinfo.ip.addr == inet_addr("192.168.5.9") && s_dns_main == inet_addr("8.8.4.4") &&
               s_dns_backup == inet_addr("1.1.1.1"));
     nvs_fail_open = 1;
-    check("net: NVS unavailable: change still accepted in RAM", clu_net_set_static("192.168.5.10", NULL));
+    check("net: NVS unavailable: change still accepted in RAM", clu_net_set_static(CLU_NET_WIFI, "192.168.5.10", NULL));
     nvs_fail_open = 0;
+
+    // Ethernet: own config in "clu_net_eth", DNS shared
+    nvs_reset();
+    memset(&s_ipinfo_eth, 0, sizeof s_ipinfo_eth);
+    clu_net_set_dns(0, "9.9.9.9");
+    check("net eth: static IP accepted", clu_net_set_static(CLU_NET_ETH, "192.168.7.5", "192.168.7.1"));
+    check("net eth: stored under its own namespace, WiFi config untouched",
+          nvs_u32("clu_net_eth", "ip") == inet_addr("192.168.7.5") && nvs_u32("clu_net_eth", "gw") == inet_addr("192.168.7.1") &&
+              !nvs_peek("clu_net", "ip"));
+    clu_net_init(CLU_NET_ETH, ETH_NETIF);
+    check("net eth: init applies it to the Ethernet netif with the shared DNS",
+          s_ipinfo_eth.ip.addr == inet_addr("192.168.7.5") && s_dns_main == inet_addr("9.9.9.9"));
+
+    // interface selection: WiFi 10.1.0.9/24, Ethernet 192.168.7.5/24
+    s_ipinfo = (esp_netif_ip_info_t){.ip.addr = inet_addr("10.1.0.9"), .netmask.addr = inet_addr("255.255.255.0")};
+    check("net: peer on the WiFi subnet -> WiFi", clu_net_if_for(inet_addr("10.1.0.50")) == CLU_NET_WIFI &&
+                                                     clu_net_local_ip(inet_addr("10.1.0.50")) == inet_addr("10.1.0.9"));
+    check("net: peer on the Ethernet subnet -> Ethernet", clu_net_if_for(inet_addr("192.168.7.50")) == CLU_NET_ETH);
+    check("net: peer elsewhere / no peer -> Ethernet first",
+          clu_net_if_for(inet_addr("172.16.0.1")) == CLU_NET_ETH && clu_net_if_for(0) == CLU_NET_ETH);
+    s_ipinfo_eth.ip.addr = 0;
+    check("net: Ethernet without address -> WiFi", clu_net_if_for(inet_addr("172.16.0.1")) == CLU_NET_WIFI);
+    s_ipinfo.ip.addr = 0;
+    check("net: no address at all -> Ethernet (started), our IP 0",
+          clu_net_if_for(inet_addr("172.16.0.1")) == CLU_NET_ETH && clu_net_local_ip(0) == 0);
+    memset(&s_ipinfo, 0, sizeof s_ipinfo);
 }
 
 // ---------------------------------------------------------------- clu_time

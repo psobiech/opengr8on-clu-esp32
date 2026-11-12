@@ -38,7 +38,6 @@
 
 static const char *TAG = "udp";
 static int s_sock = -1;
-static char s_ip[16] = "0.0.0.0";
 
 #define BUF_SZ 1500
 #define DISCOVERY_REPLY_COPIES 3
@@ -141,7 +140,10 @@ static void setup_start(void)
     if (CONFIG_CLU_SETUP_BUTTON_GPIO >= 0) {
         gpio_config_t c = {.pin_bit_mask = 1ULL << CONFIG_CLU_SETUP_BUTTON_GPIO,
                            .mode = GPIO_MODE_INPUT,
-                           .pull_up_en = GPIO_PULLUP_ENABLE};
+                           // ESP32 GPIO34..39 are input-only with no pull-up: the board must have one
+                           .pull_up_en = GPIO_IS_VALID_OUTPUT_GPIO(CONFIG_CLU_SETUP_BUTTON_GPIO)
+                                             ? GPIO_PULLUP_ENABLE
+                                             : GPIO_PULLUP_DISABLE};
         if (gpio_config(&c) != ESP_OK) {
             ESP_LOGE(TAG, "setup button GPIO %d: config failed", CONFIG_CLU_SETUP_BUTTON_GPIO);
         }
@@ -179,10 +181,15 @@ static const clu_cipher_t *broadcast_key(void)
     return &k;
 }
 
-void udp_server_set_local_ip(uint32_t ip_be)
+/**
+ * @brief Our IPv4 address towards @p peer_be, dotted: that of the interface (Ethernet / WiFi) the
+ * peer is reached through, "0.0.0.0" without one.
+ */
+static const char *local_ip(uint32_t peer_be, char buf[16])
 {
-    struct in_addr a = {.s_addr = ip_be};
-    inet_ntoa_r(a, s_ip, sizeof s_ip);
+    struct in_addr a = {.s_addr = clu_net_local_ip(peer_be)};
+    inet_ntoa_r(a, buf, 16);
+    return buf;
 }
 
 // send_enc runs in the UDP task and in the Lua task (clientReport via udp_server_send_report):
@@ -372,22 +379,27 @@ static void on_set_ip(const char *s, const clu_cipher_t *used, bool bcast,
         }
         return;
     }
-    char r[64];
-    if (strcmp(ip, s_ip) == 0) {
-        snprintf(r, sizeof r, "resp_set_clu_ip:%08lx:%s", sn, s_ip);
+    // Separate config per interface: the one OM reaches us through.
+    clu_net_if_t nif = clu_net_if_for(from->sin_addr.s_addr);
+    char r[64], cur[16];
+    struct in_addr ca = {.s_addr = clu_net_ip(nif)};
+    inet_ntoa_r(ca, cur, sizeof cur);
+    if (strcmp(ip, cur) == 0) {
+        snprintf(r, sizeof r, "resp_set_clu_ip:%08lx:%s", sn, cur);
         send_str(used, r, from);
         return;
     }
-    if (!clu_net_set_static(ip, gw)) {
+    if (!clu_net_set_static(nif, ip, gw)) {
         send_str(used, "resp:ERROR", from);
         return;
     }
     // Answer from the old address, then switch (udp socket is bound to INADDR_ANY).
     snprintf(r, sizeof r, "resp_set_clu_ip:%08lx:%s", sn, ip);
     send_str(used, r, from);
-    ESP_LOGW(TAG, "IP change %s -> %s (gw %s) requested by %s", s_ip, ip, gw, inet_ntoa(from->sin_addr));
+    ESP_LOGW(TAG, "%s IP change %s -> %s (gw %s) requested by %s", nif == CLU_NET_ETH ? "eth" : "wifi", cur,
+             ip, gw, inet_ntoa(from->sin_addr));
     vTaskDelay(pdMS_TO_TICKS(100));
-    clu_net_apply();
+    clu_net_apply(nif);
 }
 
 #define LUA_CALL_TIMEOUT_MS 3000
@@ -452,7 +464,8 @@ static void on_lua(char *s, const clu_cipher_t *used, bool privileged,
         }
     }
     static char r[BUF_SZ];
-    snprintf(r, sizeof r, "resp:%s:%08lx:%s", s_ip, session, val);
+    char me[16];
+    snprintf(r, sizeof r, "resp:%s:%08lx:%s", local_ip(from->sin_addr.s_addr, me), session, val);
     send_str(used, r, from);
 }
 
@@ -518,8 +531,8 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
         return;
     }
     if (starts(buf, len, "req_reset")) {
-        char r[48];
-        snprintf(r, sizeof r, "resp_reset:%s", s_ip);
+        char r[48], me[16];
+        snprintf(r, sizeof r, "resp_reset:%s", local_ip(from->sin_addr.s_addr, me));
         send_str(&g_clu.project, r, from);
         ESP_LOGW(TAG, "reset requested");
         // Ends a setup window held open by discovery; the timed window is not re-armed.
@@ -556,7 +569,8 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
     if (used_project && starts(buf, len, "req_diagnostic_refresh")) {
         const char *sess = strrchr(s, ':') + 1; // starts() guarantees a ':'
         if (strlen(sess) > 16) return;
-        int err = clu_diag_write(s_ip);
+        char me[16];
+        int err = clu_diag_write(local_ip(from->sin_addr.s_addr, me));
         char r[80], code[12] = "OK";
         if (err) snprintf(code, sizeof code, "ERROR:%d", err);
         snprintf(r, sizeof r, "resp_diagnostic_refresh:%.*s:%s", (int)strcspn(sess, "\r\n"), sess,
@@ -572,8 +586,8 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
         if (!done) {
             ESP_LOGW(TAG, "module refresh timed out");
         }
-        char r[48];
-        snprintf(r, sizeof r, "resp_refresh_modules:%s", s_ip);
+        char r[48], me[16];
+        snprintf(r, sizeof r, "resp_refresh_modules:%s", local_ip(from->sin_addr.s_addr, me));
         send_str(used, r, from);
         return;
     }
@@ -718,7 +732,9 @@ static void remote_call(int sock, const remote_req_t *r)
 
     uint32_t session;
     clu_random((uint8_t *)&session, sizeof session);
-    int ml = snprintf(msg, sizeof msg, "req:%s:%08lx:%s", s_ip, (unsigned long)session, r->script);
+    char me[16];
+    int ml = snprintf(msg, sizeof msg, "req:%s:%08lx:%s", local_ip(htonl(r->ip), me), (unsigned long)session,
+                      r->script);
     if (ml <= 0 || ml >= (int)sizeof msg) {
         ESP_LOGW(TAG, "remote script too long");
         clu_lua_post_remote(r->id, NULL);

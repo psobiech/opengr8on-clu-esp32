@@ -1,21 +1,22 @@
 /**
  * @file main.c
- * @brief Firmware entry point: OpenGr8on ESP32-S3 CLU.
+ * @brief Firmware entry point: OpenGr8on ESP32 / ESP32-S3 CLU.
  *
  * Boot order: NVS, crypto, CLU identity, telnet log hook, time zone + clock from the RTC (CLU_RTC), FAT
  * storage (a:\\, p:\\),
- * config files, RS485 + TFBUS master and drivers (CLU_TFBUS), WiFi, SNTP, telnet server, MQTT, TFTP, the
- * UDP/1234 CLU protocol server and the Lua runtime.
+ * config files, RS485 + TFBUS master and drivers (CLU_TFBUS), network (WiFi and / or Ethernet), SNTP,
+ * telnet server, MQTT, TFTP, the UDP/1234 CLU protocol server and the Lua runtime.
  *
  * Nothing waits for an IP: the bus and the local scripts run without the network. Network
  * services (SNTP, MQTT, telnet, UDP) bind to INADDR_ANY / retry on their own and pick the IP up
- * when WiFi connects.
+ * when an interface connects.
  */
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
 #include "clu_crypto.h"
+#include "clu_eth.h"
 #include "clu_lua.h"
 #include "clu_mqtt.h"
 #include "clu_net.h"
@@ -29,7 +30,9 @@
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_vfs_fat.h"
+#if CONFIG_CLU_WIFI
 #include "esp_wifi.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "esp_sntp.h"
 #include "nvs_flash.h"
@@ -41,8 +44,24 @@
 
 static const char *TAG = "main";
 
+#if !CONFIG_CLU_WIFI && !CONFIG_CLU_ETH
+#error "Enable WiFi (CLU_WIFI) and / or Ethernet (CLU_ETH)"
+#endif
+
 /**
- * @brief WiFi / IP event handler: scan-then-connect, reconnect on disconnect, publish the IP.
+ * @brief IP event handler (WiFi STA / Ethernet got an address): arm the setup window, poll SNTP.
+ */
+static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    const ip_event_got_ip_t *e = data;
+    ESP_LOGI(TAG, "%s IP " IPSTR, id == IP_EVENT_STA_GOT_IP ? "WiFi" : "Ethernet", IP2STR(&e->ip_info.ip));
+    udp_server_net_up();
+    esp_sntp_restart(); // first poll now instead of at the next retry after a failed early one
+}
+
+#if CONFIG_CLU_WIFI
+/**
+ * @brief WiFi event handler: scan-then-connect, reconnect on disconnect.
  */
 static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -74,27 +93,19 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
         // 211=NO_AP_FOUND_IN_AUTHMODE_THRESHOLD 212=NO_AP_FOUND_IN_RSSI_THRESHOLD
         ESP_LOGW(TAG, "WiFi disconnected: reason %d rssi %d", e->reason, e->rssi);
         esp_wifi_connect();
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        const ip_event_got_ip_t *e = data;
-        udp_server_set_local_ip(e->ip_info.ip.addr);
-        ESP_LOGI(TAG, "IP " IPSTR, IP2STR(&e->ip_info.ip));
-        udp_server_net_up();
-        esp_sntp_restart(); // first poll now instead of at the next retry after a failed early one
     }
 }
 
 /**
- * @brief Initialise netif + WiFi STA from menuconfig (WPA2-PSK minimum, optional BSSID lock) and start it.
+ * @brief Initialise the WiFi STA netif + driver from menuconfig (WPA2-PSK minimum, optional BSSID lock)
+ * and start it.
  */
 static void wifi_start(void)
 {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    clu_net_init(esp_netif_create_default_wifi_sta());
+    clu_net_init(CLU_NET_WIFI, esp_netif_create_default_wifi_sta());
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi, NULL));
 
     wifi_config_t wc = {0};
     strlcpy((char *)wc.sta.ssid, CONFIG_CLU_WIFI_SSID, sizeof wc.sta.ssid);
@@ -141,6 +152,24 @@ static void wifi_start(void)
     ESP_LOGW(TAG, "WiFi max TX power %d (x0.25 dBm)", txp);
 #endif
 }
+#endif // CONFIG_CLU_WIFI
+
+/**
+ * @brief Bring up the enabled interfaces (WiFi STA and / or Ethernet), each with its own IP config.
+ */
+static void net_start(void)
+{
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_ip, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, on_ip, NULL));
+#if CONFIG_CLU_ETH
+    clu_eth_start();
+#endif
+#if CONFIG_CLU_WIFI
+    wifi_start();
+#endif
+}
 
 /**
  * @brief Mount the FAT volume holding the CLU drives.
@@ -179,7 +208,7 @@ static void on_clu_feature(int idx, const char *str, double num)
     case 23: // TimeZone (enum index); NaN / out-of-range doubles must not reach the int cast
         clu_time_set_zone(num >= 0 && num < 1000 ? (int)num : -1);
         break;
-    case 25: clu_net_set_dns(0, str); break;            // PrimaryDNS
+    case 25: clu_net_set_dns(0, str); break;            // PrimaryDNS (both interfaces)
     case 26: clu_net_set_dns(1, str); break;            // SecondaryDNS
     case 18: clu_mqtt_set_enabled(num != 0); break;     // UseCloud: MQTT connection on/off
     default: break;
@@ -250,7 +279,7 @@ void app_main(void)
     tfbus_master_on_scan(clu_state_write_config_files); // CONFIG.JSON tfbusDevices
 #endif
 
-    wifi_start(); // does not wait for an IP: see the file comment
+    net_start(); // does not wait for an IP: see the file comment
     clu_time_start_sntp();
 #if CONFIG_CLU_TELNET
     clu_telnet_start();

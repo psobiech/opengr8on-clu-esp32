@@ -26,3 +26,4 @@ test/host/*.gcno
 test/host/coverage/
 .idea/
 TODO.md
+build-*/

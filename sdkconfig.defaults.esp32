@@ -1,0 +1,7 @@
+# ESP32-WROVER-B (Grenton GATE): 4 MB flash, 8 MB quad PSRAM (4 MB mapped), LAN8720A Ethernet.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_40M=y
+# Ethernet on, WiFi off (CLU_WIFI can be enabled in menuconfig to run both)
+CONFIG_CLU_ETH=y

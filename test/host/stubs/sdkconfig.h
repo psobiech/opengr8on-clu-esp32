@@ -37,3 +37,6 @@
 #ifndef CONFIG_CLU_SETUP_BUTTON_GPIO
 #define CONFIG_CLU_SETUP_BUTTON_GPIO 0
 #endif
+#ifndef CONFIG_CLU_WIFI
+#define CONFIG_CLU_WIFI 1
+#endif

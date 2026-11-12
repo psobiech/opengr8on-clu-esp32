@@ -2,7 +2,8 @@
  * @file clu_sysinfo.c
  * @brief Firmware internals for Lua (merged into the private __clu table, used by mqtt.lua).
  *
- * - `__clu.sys_info()`       -> {heap_free, heap_min, psram_free, rssi?, ip?, reset_reason,
+ * - `__clu.sys_info()`       -> {heap_free, heap_min, psram_free, rssi? (WiFi), ip? (Ethernet first,
+ *                                else WiFi), reset_reason,
  *                                tfbus_total, tfbus_online, tfbus_fails}
  * - `__clu.tfbus_module(sn)` -> {online, fails, polls, addr, hw_type} | nil
  * - `__clu.sys_restart()`    -> reboots ~1 s later (lets the MQTT/UDP reply go out first)
@@ -15,8 +16,11 @@
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_timer.h"
-#include "esp_wifi.h"
+#include "sdkconfig.h"
 #include "tfbus_master.h"
+#if CONFIG_CLU_WIFI
+#include "esp_wifi.h"
+#endif
 
 static const char *TAG = "sysinfo";
 
@@ -45,7 +49,7 @@ static void set_int(lua_State *L, const char *k, lua_Integer v)
     lua_setfield(L, -2, k);
 }
 
-/** @brief Lua: `__clu.sys_info()` — heap, WiFi, reset reason and TFBUS totals as a table. */
+/** @brief Lua: `__clu.sys_info()` — heap, network, reset reason and TFBUS totals as a table. */
 static int l_sys_info(lua_State *L)
 {
     lua_newtable(L);
@@ -55,17 +59,23 @@ static int l_sys_info(lua_State *L)
     lua_pushstring(L, reset_reason());
     lua_setfield(L, -2, "reset_reason");
 
+#if CONFIG_CLU_WIFI
     int rssi;
     if (esp_wifi_sta_get_rssi(&rssi) == ESP_OK) {
         set_int(L, "rssi", rssi);
     }
-    esp_netif_ip_info_t ip;
-    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (sta && esp_netif_get_ip_info(sta, &ip) == ESP_OK && ip.ip.addr) {
-        char buf[16];
-        esp_ip4addr_ntoa(&ip.ip, buf, sizeof buf);
-        lua_pushstring(L, buf);
-        lua_setfield(L, -2, "ip");
+#endif
+    static const char *const ifkeys[] = {"ETH_DEF", "WIFI_STA_DEF"}; // wired first
+    for (size_t i = 0; i < sizeof ifkeys / sizeof ifkeys[0]; i++) {
+        esp_netif_ip_info_t ip;
+        esp_netif_t *nif = esp_netif_get_handle_from_ifkey(ifkeys[i]);
+        if (nif && esp_netif_get_ip_info(nif, &ip) == ESP_OK && ip.ip.addr) {
+            char buf[16];
+            esp_ip4addr_ntoa(&ip.ip, buf, sizeof buf);
+            lua_pushstring(L, buf);
+            lua_setfield(L, -2, "ip");
+            break;
+        }
     }
 
     // Registry is fixed after OM.LUA; online/fails are single words written by the bus task.

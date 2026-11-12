@@ -15,19 +15,13 @@
 void udp_server_start(void);
 
 /**
- * @brief The STA interface got its first IP: start the setup-window countdown (once per boot).
+ * @brief An interface (WiFi / Ethernet) got its first IP: start the setup-window countdown (once
+ * per boot).
  *
- * Until then the window stays open, so the time spent waiting for WiFi does not use it up.
+ * Until then the window stays open, so the time spent waiting for the network does not use it up.
  * Safe from the event loop task.
  */
 void udp_server_net_up(void);
-
-/**
- * @brief Set the current STA IPv4 address (called by the WiFi code).
- *
- * @param ip_be IPv4 address in network byte order.
- */
-void udp_server_set_local_ip(uint32_t ip_be);
 
 /**
  * @brief Send an unsolicited clientReport push.

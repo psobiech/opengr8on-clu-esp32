@@ -17,7 +17,6 @@ typedef struct {
 } wifi_ap_record_t;
 typedef struct { uint8_t ssid[32]; uint8_t ssid_len; uint8_t channel; int authmode; } wifi_event_sta_connected_t;
 typedef struct { uint8_t reason; int8_t rssi; } wifi_event_sta_disconnected_t;
-typedef struct { esp_netif_ip_info_t ip_info; } ip_event_got_ip_t;
 typedef struct { int dummy; } wifi_init_config_t;
 #define WIFI_INIT_CONFIG_DEFAULT() {0}
 typedef struct {
@@ -37,8 +36,7 @@ typedef enum { WIFI_MODE_STA = 1 } wifi_mode_t;
 typedef enum { WIFI_IF_STA = 0 } wifi_interface_t;
 typedef enum { WIFI_PS_NONE = 0 } wifi_ps_type_t;
 enum { WIFI_EVENT_SCAN_DONE = 1, WIFI_EVENT_STA_START = 2, WIFI_EVENT_STA_CONNECTED = 4, WIFI_EVENT_STA_DISCONNECTED = 5 };
-enum { IP_EVENT_STA_GOT_IP = 0 };
-extern esp_event_base_t const WIFI_EVENT, IP_EVENT;
+extern esp_event_base_t const WIFI_EVENT;
 esp_err_t esp_wifi_scan_start(const wifi_scan_config_t *c, bool block);
 esp_err_t esp_wifi_scan_get_ap_records(uint16_t *n, wifi_ap_record_t *ap);
 esp_err_t esp_wifi_connect(void);

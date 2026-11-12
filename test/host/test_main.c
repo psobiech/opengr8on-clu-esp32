@@ -107,13 +107,16 @@ bool sntp_restart(void) { L("sntp_restart"); return true; }
 static esp_netif_t *const STA = (esp_netif_t *)0x5a;
 esp_err_t esp_netif_init(void) { L("netif"); return ESP_OK; }
 esp_netif_t *esp_netif_create_default_wifi_sta(void) { return STA; }
-void clu_net_init(esp_netif_t *sta) { L("net_init(%s)", sta == STA ? "sta" : "?"); }
+void clu_net_init(clu_net_if_t i, esp_netif_t *n)
+{
+    L("net_init(%s,%s)", i == CLU_NET_WIFI ? "wifi" : "eth", n == STA ? "sta" : "?");
+}
 void clu_net_set_dns(int i, const char *a) { L("dns%d(%s)", i, a); }
 esp_err_t esp_event_loop_create_default(void) { return ESP_OK; }
-static esp_event_handler_t s_wifi_handler;
+static esp_event_handler_t s_wifi_handler, s_ip_handler;
 esp_err_t esp_event_handler_register(esp_event_base_t base, int32_t id, esp_event_handler_t fn, void *arg)
 {
-    s_wifi_handler = fn;
+    *(base == IP_EVENT ? &s_ip_handler : &s_wifi_handler) = fn;
     L("handler(%s,%d)", base, (int)id);
     return ESP_OK;
 }
@@ -156,8 +159,6 @@ void clu_lua_start(const clu_lua_cfg_t *c) { s_lc = *c; L("lua_start"); }
 void clu_tftp_init(const char *root) { L("tftp(%s)", root); }
 void udp_server_start(void) { L("udp_start"); }
 void udp_server_net_up(void) { L("net_up"); }
-static uint32_t s_local_ip;
-void udp_server_set_local_ip(uint32_t ip) { s_local_ip = ip; L("local_ip"); }
 void udp_server_send_report(const char *a, int p, const char *b) {}
 uint32_t udp_server_remote_exec(uint32_t ip, const char *s) { return 0; }
 
@@ -174,7 +175,7 @@ int main(void)
     check_log("boot order: NVS, crypto, identity (PIN logged) before the telnet hook, then storage, bus, WiFi "
               "(no wait for an IP), services, TFTP, UDP before Lua",
               "nvs_init crypto state_load telnet_init time_init mount(/fs,storage,1) config_files " BUS_BOOT
-              "netif net_init(sta) wifi_init handler(WIFI_EVENT,-1) handler(IP_EVENT,0) "
+              "netif handler(IP_EVENT,0) handler(IP_EVENT,4) net_init(wifi,sta) wifi_init handler(WIFI_EVENT,-1) "
               "wifi_config ps(0) wifi_start txpower(60) sntp telnet_start mqtt_init sysinfo tftp(/fs) udp_start "
               "lua_start ");
     check("storage: a:\\ and p:\\ created", !strcmp(s_mkdirs, "/fs/a /fs/p "));
@@ -221,15 +222,16 @@ int main(void)
     s_wifi_handler(NULL, WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &con);
     ip_event_got_ip_t ip = {.ip_info.ip.addr = 0x1401a8c0};
     s_log[0] = 0;
-    s_wifi_handler(NULL, IP_EVENT, IP_EVENT_STA_GOT_IP, &ip);
-    check("got IP: UDP server learns it", s_local_ip == 0x1401a8c0);
-    check_log("got IP: setup window armed, SNTP polls now", "local_ip net_up sntp_restart ");
+    s_ip_handler(NULL, IP_EVENT, IP_EVENT_STA_GOT_IP, &ip);
+    check_log("WiFi got IP: setup window armed, SNTP polls now", "net_up sntp_restart ");
+    s_ip_handler(NULL, IP_EVENT, IP_EVENT_ETH_GOT_IP, &ip);
+    check_log("Ethernet got IP: the same", "net_up sntp_restart ");
     wifi_event_sta_disconnected_t dis = {.reason = 201, .rssi = -80};
     s_log[0] = 0;
     s_wifi_handler(NULL, WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &dis);
     check_log("disconnected: reconnect", "connect ");
     s_log[0] = 0;
-    s_wifi_handler(NULL, IP_EVENT, 99, NULL);
+    s_wifi_handler(NULL, WIFI_EVENT, 99, NULL);
     check_log("other events ignored", "");
 
     // BSSID lock

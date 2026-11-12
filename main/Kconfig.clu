@@ -62,28 +62,64 @@ menu "OpenGr8on ESP32 CLU"
         string "Firmware version string"
         default "5.15.24-2635"
 
+    config CLU_TFBUS
+        bool "TF-Bus master (RS485 modules)"
+        default y
+        help
+            Drive Grenton TF-Bus modules over RS485: discovery, addressing, polling and the module
+            drivers. Without it the CLU runs only virtual objects, scripts and the network
+            services (OM still sees no modules; discovery / "Clear CLU" report an empty bus).
+
     config CLU_RS485_UART
         int "RS485 UART number"
         range 1 2
         default 1
+        depends on CLU_TFBUS
 
     config CLU_RS485_TX_GPIO
         int "RS485 TX (DI) GPIO"
         default 17
+        depends on CLU_TFBUS
 
     config CLU_RS485_RX_GPIO
         int "RS485 RX (RO) GPIO"
         default 18
+        depends on CLU_TFBUS
 
     config CLU_RS485_DE_GPIO
         int "RS485 DE/RE GPIO (-1 = auto-direction transceiver)"
         default 21
+        depends on CLU_TFBUS
         help
             Waveshare ESP32-S3-RS485-CAN: TX=17, RX=18, DE=21 (driven as UART RTS).
 
     config CLU_RS485_BAUD
         int "TFBUS baud rate"
         default 115200
+        depends on CLU_TFBUS
+
+    config CLU_RTC
+        bool "Battery-backed RTC (PCF85063 on I2C)"
+        default y
+        help
+            Sets the clock at boot, before the scripts run, so they have the right time without
+            the network. Written back on every SNTP sync and SetDateTime. Keeps time through a
+            power cut only with a backup cell on the RTC battery header. A missing chip is
+            logged and ignored.
+
+    config CLU_RTC_SDA_GPIO
+        int "RTC I2C SDA GPIO"
+        range 0 48
+        default 39
+        depends on CLU_RTC
+        help
+            Waveshare ESP32-S3-RS485-CAN: SDA=39, SCL=38.
+
+    config CLU_RTC_SCL_GPIO
+        int "RTC I2C SCL GPIO"
+        range 0 48
+        default 38
+        depends on CLU_RTC
 
     config CLU_SOFT_RESET
         bool "req_reset reloads Lua instead of rebooting"
@@ -102,8 +138,8 @@ menu "OpenGr8on ESP32 CLU"
             Discovery (req_discovery_clu), re-keying (req_set_key, anything under the PIN / temp
             key), req_set_clu_ip and opening TFTP (req_start_ftp, req_diagnostic_refresh) are
             only accepted during this many seconds after the CLU is up following a chip boot
-            (power-on, reset button, reboot): counting starts once WiFi has an IP and every
-            service (Lua, TFTP, UDP server) is started, so a slow WiFi connect does not use it up. Afterwards the CLU does not answer discovery and refuses the others; normal
+            (power-on, reset button, reboot): counting starts once WiFi first has an IP, so a
+            slow WiFi connect does not use it up. Afterwards the CLU does not answer discovery and refuses the others; normal
             operation under the project key (req:, req_reset, req_refresh_modules) is unaffected.
             A TFTP session opened inside the window runs until req_tftp_stop or its idle timeout.
             A discovery answered inside the window keeps it open (no time limit) until the next

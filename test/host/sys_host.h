@@ -14,6 +14,14 @@ int host_stat(const char *path, struct stat *st);
 #define mkdir host_mkdir
 #define stat(p, s) host_stat(p, s)
 
+// The wall clock is the test's: SetDateTime / RTC restore must not touch the host clock.
+#include <sys/time.h>
+#include <time.h>
+int host_settimeofday(const struct timeval *tv, const void *tz);
+time_t host_time(time_t *t);
+#define settimeofday host_settimeofday
+#define time(p) host_time(p)
+
 extern const char *host_cfg_serial, *host_cfg_pin, *host_cfg_iv;
 #define CONFIG_CLU_SERIAL      host_cfg_serial
 #define CONFIG_CLU_PRIVATE_KEY host_cfg_pin

@@ -57,6 +57,8 @@ typedef struct {
     /** clu_lua_reload(): old VM closed, new one not created yet. Forget everything OM.LUA declared
      *  (e.g. TFBUS modules). Return false if that failed (the caller then reboots). Optional. */
     bool (*on_reload)(void);
+    /** Called after SetDateTime set the system clock (e.g. to write it to an RTC). Optional. */
+    void (*on_time_set)(void);
 } clu_lua_cfg_t;
 
 /**

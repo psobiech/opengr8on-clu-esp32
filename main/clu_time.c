@@ -1,6 +1,10 @@
 /**
  * @file clu_time.c
- * @brief Wall clock: SNTP client + CLU TimeZone feature (index 23) mapped to POSIX TZ strings.
+ * @brief Wall clock: SNTP client, battery-backed RTC + CLU TimeZone feature (index 23) mapped to POSIX
+ * TZ strings.
+ *
+ * The system clock is set from the RTC at boot (before Lua), so scripts have the right time without
+ * the network when the RTC has a backup cell. Every SNTP sync and SetDateTime writes the RTC back.
  *
  * NTP server / time zone set from OM.LUA (CLUxxx:set(22, "...") / set(23, n)) are persisted in NVS,
  * so the local time is right already before OnInit on the next boot.
@@ -9,11 +13,14 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 #include <time.h>
 
+#include "clu_rtc.h"
 #include "esp_log.h"
 #include "esp_sntp.h"
 #include "nvs.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "clu_time";
 
@@ -85,10 +92,37 @@ static void apply_zone(int zone)
     tzset();
 }
 
-/** @brief SNTP sync notification (log only). */
+/** @brief SNTP sync notification: keep the RTC in step. Runs in the lwIP task. */
 static void time_synced(struct timeval *tv)
 {
     ESP_LOGI(TAG, "time synced from %s", s_ntp);
+#if CONFIG_CLU_RTC
+    clu_rtc_set(tv ? tv->tv_sec : time(NULL));
+#endif
+}
+
+/**
+ * @brief Set the system clock from the RTC, or seed the RTC from a system clock that survived a
+ * software reset (ESP-IDF keeps it in RTC memory) when the RTC itself lost power.
+ */
+static void rtc_restore(void)
+{
+#if CONFIG_CLU_RTC
+    if (!clu_rtc_init(CONFIG_CLU_RTC_SDA_GPIO, CONFIG_CLU_RTC_SCL_GPIO)) {
+        return;
+    }
+    time_t t;
+    if (clu_rtc_get(&t)) {
+        struct timeval tv = {.tv_sec = t};
+        settimeofday(&tv, NULL);
+        ESP_LOGI(TAG, "clock set from RTC: %lld", (long long)t);
+    } else if ((t = time(NULL)) >= CLU_RTC_MIN_VALID) {
+        clu_rtc_set(t);
+        ESP_LOGW(TAG, "RTC time invalid, seeded from the system clock kept across the reset");
+    } else {
+        ESP_LOGW(TAG, "RTC time invalid (no backup cell?): clock wrong until SNTP or SetDateTime");
+    }
+#endif
 }
 
 /** @brief (Re)start SNTP in poll mode with the current server. */
@@ -117,6 +151,14 @@ void clu_time_init(void)
         nvs_close(h);
     }
     apply_zone(zone);
+    rtc_restore();
+}
+
+void clu_time_store(void)
+{
+#if CONFIG_CLU_RTC
+    clu_rtc_set(time(NULL));
+#endif
 }
 
 void clu_time_start_sntp(void)

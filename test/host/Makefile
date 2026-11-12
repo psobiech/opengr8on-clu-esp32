@@ -59,7 +59,8 @@ test_uart: test_uart.c $(COMP)/tfbus_uart/tfbus_uart.c $(PROTO)/tfbus_frame.c $(
 SYS_SRCS := $(MAIN)/clu_net.c $(MAIN)/clu_time.c $(MAIN)/clu_state.c $(MAIN)/clu_diag.c $(MAIN)/clu_sysinfo.c
 SYS_OBJS := $(patsubst $(MAIN)/%.c,sys_%.o,$(SYS_SRCS))
 SYS_INC := -Istubs -I. -I$(MAIN) -I$(PROTO)/include -I$(COMP)/clu_crypto/include -I$(LUA_DIR) \
-           -I$(COMP)/clu_lua/include -I$(COMP)/tfbus_master/include -I$(COMP)/clu_mqtt/include
+           -I$(COMP)/clu_lua/include -I$(COMP)/tfbus_master/include -I$(COMP)/clu_mqtt/include \
+           -I$(COMP)/clu_rtc/include
 HOST_CFLAGS := -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) $(LUA_DEFS)
 
 sys_%.o: $(MAIN)/%.c sys_host.h $(STUBS) $(HDRS)
@@ -88,11 +89,26 @@ test_lua: test_lua.c $(COMP)/clu_lua/clu_lua.c $(COMP)/clu_lua/prelude.lua $(COM
           liblua_host.a $(STUBS) $(HDRS)
 	$(TCC) $(HOST_CFLAGS) -Istubs -I$(LUA_DIR) -I$(COMP)/clu_lua/include -o $@ test_lua.c liblua_host.a -lm -ldl -lpthread
 
+# PCF85063 RTC (clu_rtc.c included, pcf85063.c linked) against a fake chip on a fake I2C bus.
+test_rtc: test_rtc.c $(COMP)/clu_rtc/clu_rtc.c $(COMP)/clu_rtc/pcf85063.c $(STUBS) $(HDRS)
+	$(TCC) $(HOST_CFLAGS) -Istubs -I$(COMP)/clu_rtc/include -o $@ test_rtc.c $(COMP)/clu_rtc/pcf85063.c
+
+# clu_time.c with CLU_RTC off (the RTC driver must never be called).
+nortc_clu_time.o: $(MAIN)/clu_time.c sys_host.h $(STUBS) $(HDRS)
+	$(TCC) $(HOST_CFLAGS) $(SYS_INC) -DCONFIG_CLU_RTC=0 -include sys_host.h -c $< -o $@
+
+test_time_nortc: test_time_nortc.c nortc_clu_time.o fake_nvs.h $(STUBS) $(HDRS)
+	$(TCC) $(HOST_CFLAGS) $(SYS_INC) -o $@ test_time_nortc.c nortc_clu_time.o
+
 # Boot wiring (main.c, included by the test): every module / ESP-IDF call stubbed and logged.
 MAIN_INC := -Istubs -I$(MAIN) -I$(PROTO)/include -I$(LUA_DIR) $(addprefix -I$(COMP)/,$(addsuffix /include,\
             clu_crypto clu_lua clu_mqtt clu_telnet clu_tftp tfbus_drivers tfbus_master tfbus_uart))
 test_main: test_main.c $(MAIN)/main.c $(STUBS) $(HDRS)
 	$(TCC) $(HOST_CFLAGS) $(MAIN_INC) -o $@ test_main.c -lm
+
+# The same with CLU_TFBUS off: no UART, drivers or bus master.
+test_main_nobus: test_main.c $(MAIN)/main.c $(STUBS) $(HDRS)
+	$(TCC) $(HOST_CFLAGS) $(MAIN_INC) -DCONFIG_CLU_TFBUS=0 -o $@ test_main.c -lm
 
 # AES (clu_crypto.c) against the host's mbedtls 3.6 PSA API (Arch: mbedtls3; elsewhere set
 # MBEDTLS3_INC / MBEDTLS3_LIB). Skipped by `make test` when the headers are missing.
@@ -105,7 +121,7 @@ test_crypto: test_crypto.c $(COMP)/clu_crypto/clu_crypto.c $(PROTO)/clu_keys.c
 
 HAVE_MBEDTLS3 := $(wildcard $(MBEDTLS3_INC)/psa/crypto.h)
 
-C_TESTS := test_proto test_drivers test_master test_udp test_uart test_sys test_tftp test_telnet test_mqttc test_lua test_main $(if $(HAVE_MBEDTLS3),test_crypto)
+C_TESTS := test_proto test_drivers test_master test_udp test_uart test_sys test_tftp test_telnet test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc $(if $(HAVE_MBEDTLS3),test_crypto)
 
 .PHONY: test test-c clean coverage
 test: test-c test-lua
@@ -115,6 +131,7 @@ test-c: $(C_TESTS)
 	ASAN_OPTIONS=detect_leaks=0 ./test_drivers
 	ASAN_OPTIONS=detect_leaks=0 ./test_master 2>/dev/null
 	./test_udp 2>/dev/null
+	./test_rtc 2>/dev/null
 	./test_uart 2>/dev/null
 	ASAN_OPTIONS=detect_leaks=0 ./test_sys 2>/dev/null
 	./test_tftp 2>/dev/null
@@ -122,10 +139,12 @@ test-c: $(C_TESTS)
 	ASAN_OPTIONS=detect_leaks=0 ./test_mqttc 2>/dev/null
 	ASAN_OPTIONS=detect_leaks=0 ./test_lua 2>/dev/null
 	./test_main 2>/dev/null
+	./test_main_nobus 2>/dev/null
+	./test_time_nortc 2>/dev/null
 	$(if $(HAVE_MBEDTLS3),./test_crypto,@echo "skip test_crypto: no $(MBEDTLS3_INC)/psa/crypto.h")
 
 clean:
-	rm -f test_proto test_drivers test_master test_udp test_uart test_sys test_tftp test_telnet test_mqttc test_lua test_main test_crypto liblua_host.a *.o
+	rm -f test_proto test_drivers test_master test_udp test_uart test_sys test_tftp test_telnet test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc test_crypto liblua_host.a *.o
 	rm -rf *.gcda *.gcno coverage
 
 # Prelude (Lua object model) + MQTT/Home Assistant (clu_mqtt/mqtt.lua) tests; needs lua$(LUA) on the host. Pass OM=<path> to also load a real OM.LUA.

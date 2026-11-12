@@ -650,6 +650,9 @@ static int clu0_execute(lua_State *L, int obj, int idx, int first, int nargs)
         if (nargs > 0) {
             struct timeval tv = {.tv_sec = (time_t)luaL_checkinteger(L, first)};
             settimeofday(&tv, NULL);
+            if (s_cfg.on_time_set) {
+                s_cfg.on_time_set();
+            }
         }
         return 0;
     }

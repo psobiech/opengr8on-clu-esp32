@@ -47,7 +47,7 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 
 | Komponent | Rola |
 |---|---|
-| `main/` | start, WiFi/IP (`clu_net`), czas/SNTP (`clu_time`), serwer UDP/1234 (`udp_server`), diagnostyka OM (`clu_diag`), stan CLU (`clu_state`) |
+| `main/` | start, WiFi/IP (`clu_net`), czas/SNTP/RTC (`clu_time`), serwer UDP/1234 (`udp_server`), diagnostyka OM (`clu_diag`), stan CLU (`clu_state`) |
 | `components/clu_crypto` | AES-128-CBC/PKCS#7 (PSA crypto, mbedtls 4) |
 | `components/clu_proto` | wyprowadzanie kluczy, ramkowanie TF-Bus, protokół TFTP (czysty C, testowany na hoście) |
 | `components/clu_lua` | środowisko Lua: prelude (model obiektów OM), obiekty wirtualne (`objects.lua`) |
@@ -58,6 +58,7 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 | `components/clu_tftp` | serwer TFTP (a:\ i p:\) |
 | `components/clu_telnet` | konsola logów (TCP 23, tylko odczyt) |
 | `components/clu_mqtt` | MQTT + discovery Home Assistant |
+| `components/clu_rtc` | zegar RTC PCF85063 na I2C (podtrzymywany bateryjnie) |
 
 Partycje (`partitions.csv`): NVS (klucze, PIN, sieć, czas), dwie partycje aplikacji po 4 MB, FAT
 6 MB jako `a:\` (projekt, CONFIG.JSON, STORAGE.DAT, certyfikaty).
@@ -145,8 +146,14 @@ Piny z przykładów producenta (`WS_GPIO.h`), domyślne w menuconfig:
 | RS485 RX | 18 |
 | RS485 DE | 21 (sterowany jako UART RTS w `UART_MODE_RS485_HALF_DUPLEX`) |
 | CAN TX / RX | 15 / 16 (nieużywane) |
+| RTC PCF85063 SDA / SCL | 39 / 38 (INT 40 nieużywany) |
 
 Podłącz A/B RS485 płytki do A/B TF-Bus oraz GND.
+
+Zegar RTC ustawia czas systemowy przy starcie, zanim ruszą skrypty, więc mają poprawny czas bez
+sieci. Każda synchronizacja SNTP i `SetDateTime` zapisuje go z powrotem. Czas przez zanik zasilania
+przetrwa tylko z ogniwem podtrzymującym w złączu baterii RTC (J7); bez niego po włączeniu RTC
+zgłasza czas jako nieważny i zegar jest błędny do pierwszej synchronizacji SNTP.
 
 ### Inne płytki
 
@@ -225,10 +232,13 @@ Wartości z NVS mają pierwszeństwo — zmiana w menuconfig nie nadpisze już z
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|
+| `CLU_TFBUS` | y | master TF-Bus (moduły na RS485); wyłączony = tylko obiekty wirtualne, skrypty i usługi sieciowe |
 | `CLU_RS485_UART` | 1 | numer UART |
 | `CLU_RS485_TX_GPIO` / `RX_GPIO` | 17 / 18 | piny |
 | `CLU_RS485_DE_GPIO` | 21 | pin DE/RE, `-1` = transceiver z automatycznym kierunkiem |
 | `CLU_RS485_BAUD` | 115200 | prędkość magistrali |
+| `CLU_RTC` | y | zegar RTC PCF85063 (brak układu jest logowany i pomijany) |
+| `CLU_RTC_SDA_GPIO` / `SCL_GPIO` | 39 / 38 | piny I2C zegara RTC |
 
 ### Inne
 
@@ -390,11 +400,12 @@ make -C test/host coverage                        # pokrycie C (gcov) i Lua; FAI
 | `test_mqtt.lua` | mapowanie encji HA, tematy, surowe API |
 | `test_udp` | serwer UDP (`main/udp_server.c`): discovery, klucze, `req:`, TFTP/diagnostyka, reset, wywołania zdalnych CLU, okno konfiguracji i przycisk |
 | `test_uart` | transport RS485 (`tfbus_uart.c`) na symulowanym sterowniku UART: echo, odpowiedzi dzielone, timeouty |
-| `test_sys` | `main/`: statyczne IP i DNS, strefa czasu i SNTP, tożsamość i klucze (NVS), CONFIG.JSON / config.txt, pakiet diagnostyczny, `sys_info` |
+| `test_sys` | `main/`: statyczne IP i DNS, strefa czasu, SNTP i odtwarzanie czasu z RTC, tożsamość i klucze (NVS), CONFIG.JSON / config.txt, pakiet diagnostyczny, `sys_info` |
 | `test_tftp` | serwer TFTP: pobieranie / wysyłanie (octet, netascii), utrata pakietów, obce hosty, limity, błędy |
 | `test_telnet` | konsola logów: historia, filtr `CLU_TELNET_ALLOW`, komendy telnet (IAC, Ctrl-C), wolni klienci |
 | `test_mqttc` | połączenie MQTT (`clu_mqtt.c`): konfiguracja klienta i TLS, subskrypcje, wiadomości przychodzące, API Lua |
 | `test_lua` | środowisko Lua (`clu_lua.c`): wywołania `req:`, limit czasu, zdarzenia, przeładowanie, tryb awaryjny, `BAD_M.LUA` |
+| `test_rtc` | RTC PCF85063: kodowanie BCD ↔ epoch (lata przestępne, zakres 2000–2099, flaga OS), sterownik I2C na symulowanym układzie |
 | `test_main` | kolejność startu, konfiguracja modułów, zdarzenia WiFi, mapowanie cech CLU (NTP, strefa, DNS, UseCloud) |
 
 `make coverage` zapisuje też `test/host/coverage/summary.md` (tabela Markdown) i `coverage.json`;
@@ -416,7 +427,7 @@ wymaga tylko `gcc`/`gcov`, `python3` i `luac$(LUA)`.
   `req…`, nie dostają odpowiedzi.
 - **Okno konfiguracji po starcie** (`CLU_SETUP_WINDOW_S`, domyślnie 60 s, `0` wyłącza): tylko przez
   tyle sekund od pełnego uruchomienia CLU po starcie układu (zasilanie, przycisk reset, restart;
-  odliczanie rusza, gdy WiFi ma IP i wszystkie usługi — Lua, TFTP, serwer UDP — działają) albo od
+  odliczanie rusza, gdy WiFi po raz pierwszy dostanie IP) albo od
   wciśnięcia przycisku konfiguracji (`CLU_SETUP_BUTTON_GPIO`, domyślnie BOOT/GPIO0, przytrzymanie ≥100 ms
   w trakcie pracy — przytrzymany podczas resetu włącza tryb wgrywania), a w trybie awaryjnym
   (MAIN.LUA zawiódł, działa EMERGNCY.LUA) bez limitu czasu, aż CLU z niego wyjdzie — CLU odpowiada na

@@ -2,8 +2,9 @@
  * @file main.c
  * @brief Firmware entry point: OpenGr8on ESP32-S3 CLU.
  *
- * Boot order: NVS, crypto, CLU identity, telnet log hook, time zone, FAT storage (a:\\, p:\\),
- * config files, RS485 + TFBUS master and drivers, WiFi, SNTP, telnet server, MQTT, TFTP, the
+ * Boot order: NVS, crypto, CLU identity, telnet log hook, time zone + clock from the RTC (CLU_RTC), FAT
+ * storage (a:\\, p:\\),
+ * config files, RS485 + TFBUS master and drivers (CLU_TFBUS), WiFi, SNTP, telnet server, MQTT, TFTP, the
  * UDP/1234 CLU protocol server and the Lua runtime.
  *
  * Nothing waits for an IP: the bus and the local scripts run without the network. Network
@@ -192,7 +193,11 @@ static void on_clu_feature(int idx, const char *str, double num)
  */
 static bool on_lua_reload(void)
 {
+#if CONFIG_CLU_TFBUS
     return tfbus_master_reset(8000);
+#else
+    return true;
+#endif
 }
 
 /**
@@ -200,7 +205,9 @@ static bool on_lua_reload(void)
  */
 static void on_lua_init(void)
 {
+#if CONFIG_CLU_TFBUS
     tfbus_master_start();
+#endif
     clu_mqtt_start();
 }
 
@@ -229,6 +236,7 @@ void app_main(void)
     storage_mount();
     clu_state_write_config_files();
 
+#if CONFIG_CLU_TFBUS
     const tfbus_uart_cfg_t uc = {
         .uart_num = CONFIG_CLU_RS485_UART,
         .tx_pin = CONFIG_CLU_RS485_TX_GPIO,
@@ -240,6 +248,7 @@ void app_main(void)
     tfbus_drivers_register_all();
     tfbus_master_init();
     tfbus_master_on_scan(clu_state_write_config_files); // CONFIG.JSON tfbusDevices
+#endif
 
     wifi_start(); // does not wait for an IP: see the file comment
     clu_time_start_sntp();
@@ -265,6 +274,7 @@ void app_main(void)
         .clu_feature = on_clu_feature,
         .cloud_connected = clu_mqtt_connected,
         .on_reload = on_lua_reload,
+        .on_time_set = clu_time_store,
     };
     clu_lua_start(&lc);
 }

@@ -27,6 +27,9 @@ static int host_settimeofday(const struct timeval *tv, const void *tz)
     return 0;
 }
 #define settimeofday host_settimeofday
+static int s_time_sets;
+static time_t s_time_set_seen;
+static void cb_time_set(void) { s_time_sets++; s_time_set_seen = s_settime; }
 
 // Lua heap budget is a variable here, so a test can shrink it.
 static int s_mem_limit_kb = 4096;
@@ -638,8 +641,16 @@ static void test_unit(void)
     lua_settop(L, clu);
     lua_pushinteger(L, 1700000000);
     check("CLU SetDateTime(epoch)", clu0_execute(L, clu, 2, clu + 1, 1) == 0 && s_settime == 1700000000);
+    s_cfg.on_time_set = cb_time_set;
+    s_time_sets = 0;
+    lua_settop(L, clu);
+    lua_pushinteger(L, 1700000001);
+    check("CLU SetDateTime(epoch): host told after the clock is set (RTC write-back)",
+          clu0_execute(L, clu, 2, clu + 1, 1) == 0 && s_time_sets == 1 && s_time_set_seen == 1700000001);
     s_settime = -1;
-    check("CLU SetDateTime() without argument: clock untouched", clu0_execute(L, clu, 2, clu + 1, 0) == 0 && s_settime == -1);
+    check("CLU SetDateTime() without argument: clock untouched, host not told",
+          clu0_execute(L, clu, 2, clu + 1, 0) == 0 && s_settime == -1 && s_time_sets == 1);
+    s_cfg.on_time_set = NULL;
     check("CLU unknown method -> -1", clu0_execute(L, clu, 9, clu + 1, 0) == -1);
     lua_settop(L, clu);
     lua_pushstring(L, "pool.ntp.org");

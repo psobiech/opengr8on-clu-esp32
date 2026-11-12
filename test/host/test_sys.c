@@ -16,6 +16,7 @@
 #include "clu_lua.h"
 #include "clu_mqtt.h"
 #include "clu_net.h"
+#include "clu_rtc.h"
 #include "clu_state.h"
 #include "clu_sysinfo.h"
 #include "clu_time.h"
@@ -153,6 +154,18 @@ char *esp_ip4addr_ntoa(const esp_ip4_addr_t *a, char *buf, int len)
     struct in_addr x = {.s_addr = a->addr};
     return (char *)inet_ntop(AF_INET, &x, buf, (socklen_t)len);
 }
+
+// wall clock (sys_host.h) and RTC
+static time_t s_now = 1000; // system clock: not set (1970) unless a test says otherwise
+static time_t s_settime = -1;
+int host_settimeofday(const struct timeval *tv, const void *tz) { s_now = s_settime = tv->tv_sec; return 0; }
+time_t host_time(time_t *t) { if (t) *t = s_now; return s_now; }
+static bool s_rtc_present = true, s_rtc_valid;
+static int s_rtc_sda = -2, s_rtc_scl = -2, s_rtc_sets;
+static time_t s_rtc_time;
+bool clu_rtc_init(int sda, int scl) { s_rtc_sda = sda; s_rtc_scl = scl; return s_rtc_present; }
+bool clu_rtc_get(time_t *t) { if (!s_rtc_valid) return false; *t = s_rtc_time; return true; }
+bool clu_rtc_set(time_t t) { s_rtc_sets++; s_rtc_time = t; s_rtc_valid = true; return true; }
 
 // sntp
 static char s_sntp_server[64];
@@ -353,6 +366,56 @@ static void test_time(void)
     clu_time_init();
     nvs_fail_open = 0;
     check_str("time: no NVS at boot -> default zone", getenv("TZ"), "CET-1CEST,M3.5.0,M10.5.0/3");
+}
+
+static void test_time_rtc(void)
+{
+    nvs_reset();
+    // valid RTC: system clock set from it at boot
+    s_now = 1000;
+    s_rtc_valid = true;
+    s_rtc_time = 1750000000;
+    s_settime = -1;
+    s_rtc_sets = 0;
+    clu_time_init();
+    check("rtc: Kconfig pins used", s_rtc_sda == 39 && s_rtc_scl == 38);
+    check("rtc: valid time -> system clock set from it, RTC not rewritten",
+          s_settime == 1750000000 && s_rtc_sets == 0);
+
+    // RTC lost power, system clock kept across a software reset: RTC seeded from it
+    s_rtc_valid = false;
+    s_now = 1760000000;
+    s_settime = -1;
+    clu_time_init();
+    check("rtc: invalid, system clock plausible -> RTC seeded, clock untouched",
+          s_settime == -1 && s_rtc_sets == 1 && s_rtc_time == 1760000000);
+
+    // cold boot, no backup cell: nothing to restore, nothing written
+    s_rtc_valid = false;
+    s_now = 1000;
+    s_rtc_sets = 0;
+    clu_time_init();
+    check("rtc: invalid, clock not set -> both left alone", s_settime == -1 && s_rtc_sets == 0 && s_now == 1000);
+
+    // no chip: nothing read or written
+    s_rtc_present = false;
+    s_rtc_valid = true;
+    s_rtc_time = 1750000000;
+    clu_time_init();
+    check("rtc: no chip -> clock untouched", s_settime == -1 && s_now == 1000);
+    s_rtc_present = true;
+
+    // SNTP sync and SetDateTime write the RTC back
+    clu_time_start_sntp();
+    struct timeval tv = {.tv_sec = 1770000000};
+    s_rtc_sets = 0;
+    s_sntp_cb(&tv);
+    check("rtc: SNTP sync written to the RTC", s_rtc_sets == 1 && s_rtc_time == 1770000000);
+    s_now = 1780000000;
+    clu_time_store();
+    check("rtc: clu_time_store writes the system clock", s_rtc_sets == 2 && s_rtc_time == 1780000000);
+    s_now = 1000;
+    s_rtc_valid = false;
 }
 
 // ---------------------------------------------------------------- clu_state
@@ -623,6 +686,7 @@ int main(void)
     }
     test_net();
     test_time();
+    test_time_rtc();
     test_state();
     test_config_files();
     test_diag();

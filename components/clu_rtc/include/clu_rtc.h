@@ -1,0 +1,40 @@
+/**
+ * @file clu_rtc.h
+ * @brief Battery-backed PCF85063 RTC on I2C (Waveshare ESP32-S3-RS485-CAN: SDA IO39, SCL IO38).
+ *
+ * Holds UTC. Keeps time through a power cut only with a backup cell on the board's RTC battery
+ * header (J7); without one the chip reports its time as invalid after power-up.
+ */
+#pragma once
+
+#include <stdbool.h>
+#include <time.h>
+
+/** @brief Earliest time taken as a set clock (2024-01-01 UTC): anything before is "not set". */
+#define CLU_RTC_MIN_VALID ((time_t)1704067200)
+
+/**
+ * @brief Create the I2C bus and probe the chip; 24-hour mode and a running clock are enforced.
+ *
+ * Idempotent. A pin < 0 means no RTC: returns false.
+ *
+ * @return true if the chip answered.
+ */
+bool clu_rtc_init(int sda_gpio, int scl_gpio);
+
+/**
+ * @brief Read the RTC.
+ *
+ * @param out UTC epoch.
+ * @return false if there is no chip, the read failed, the chip lost power (OS flag) or the time
+ *         is before CLU_RTC_MIN_VALID.
+ */
+bool clu_rtc_get(time_t *out);
+
+/**
+ * @brief Set the RTC (clears the OS flag). Thread-safe (I2C bus lock).
+ *
+ * @param t UTC epoch; ignored if before CLU_RTC_MIN_VALID.
+ * @return true if written.
+ */
+bool clu_rtc_set(time_t t);

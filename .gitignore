@@ -17,6 +17,9 @@ test/host/test_telnet
 test/host/test_mqttc
 test/host/test_lua
 test/host/test_main
+test/host/test_rtc
+test/host/test_main_nobus
+test/host/test_time_nortc
 test/host/*.o
 test/host/*.gcda
 test/host/*.gcno

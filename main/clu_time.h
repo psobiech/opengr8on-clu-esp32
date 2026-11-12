@@ -4,10 +4,17 @@
  */
 #pragma once
 
-/** @brief Load persisted time zone (TZ env) and NTP server. Call after nvs_flash_init(). */
+/**
+ * @brief Load persisted time zone (TZ env) and NTP server; set the system clock from the RTC.
+ *
+ * Call after nvs_flash_init() and before the Lua runtime starts.
+ */
 void clu_time_init(void);
 
-/** @brief Start SNTP (after the network is up). */
+/** @brief Write the system clock to the RTC (after it was set by hand, e.g. SetDateTime). */
+void clu_time_store(void);
+
+/** @brief Start SNTP. Needs lwIP (esp_netif_init()), not an IP: it retries until it gets one. */
 void clu_time_start_sntp(void);
 
 /**

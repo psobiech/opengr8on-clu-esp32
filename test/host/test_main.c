@@ -80,6 +80,7 @@ static clu_telnet_cfg_t s_tc;
 void clu_telnet_init(const clu_telnet_cfg_t *c) { s_tc = *c; L("telnet_init"); }
 void clu_telnet_start(void) { L("telnet_start"); }
 void clu_time_init(void) { L("time_init"); }
+void clu_time_store(void) {}
 void clu_time_start_sntp(void) { L("sntp"); }
 void clu_time_set_ntp_server(const char *s) { L("ntp(%s)", s); }
 void clu_time_set_zone(int z) { L("zone(%d)", z); }
@@ -161,21 +162,31 @@ void udp_server_send_report(const char *a, int p, const char *b) {}
 uint32_t udp_server_remote_exec(uint32_t ip, const char *s) { return 0; }
 
 // ---------------------------------------------------------------- tests
+#if CONFIG_CLU_TFBUS
+#define BUS_BOOT "uart drivers master_init on_scan "
+#else
+#define BUS_BOOT ""
+#endif
+
 int main(void)
 {
     app_main();
     check_log("boot order: NVS, crypto, identity (PIN logged) before the telnet hook, then storage, bus, WiFi "
               "(no wait for an IP), services, TFTP, UDP before Lua",
-              "nvs_init crypto state_load telnet_init time_init mount(/fs,storage,1) config_files uart drivers "
-              "master_init on_scan netif net_init(sta) wifi_init handler(WIFI_EVENT,-1) handler(IP_EVENT,0) "
+              "nvs_init crypto state_load telnet_init time_init mount(/fs,storage,1) config_files " BUS_BOOT
+              "netif net_init(sta) wifi_init handler(WIFI_EVENT,-1) handler(IP_EVENT,0) "
               "wifi_config ps(0) wifi_start txpower(60) sntp telnet_start mqtt_init sysinfo tftp(/fs) udp_start "
               "lua_start ");
     check("storage: a:\\ and p:\\ created", !strcmp(s_mkdirs, "/fs/a /fs/p "));
     check("telnet config from Kconfig", s_tc.port == 23 && s_tc.max_clients == 2 && s_tc.history == 4096 &&
                                             !strcmp(s_tc.allow, "192.168.1.0/24"));
+#if CONFIG_CLU_TFBUS
     check("RS485 config from Kconfig", s_uc.uart_num == 1 && s_uc.tx_pin == 17 && s_uc.rx_pin == 18 &&
                                            s_uc.de_pin == 8 && s_uc.baud == 115200);
     check("bus scans rewrite CONFIG.JSON / config.txt", s_scan_cb == clu_state_write_config_files);
+#else
+    check("CLU_TFBUS off: no UART, drivers or bus master", !s_scan_cb && !strstr(s_log, "uart"));
+#endif
     check("WiFi: SSID / password, WPA2-PSK minimum, SAE both, PMF capable, no BSSID lock",
           !strcmp((char *)s_wc.sta.ssid, "HomeNet") && !strcmp((char *)s_wc.sta.password, "secretpw") &&
               s_wc.sta.threshold.authmode == WIFI_AUTH_WPA2_PSK && s_wc.sta.sae_pwe_h2e == WPA3_SAE_PWE_BOTH &&
@@ -185,7 +196,8 @@ int main(void)
     check("Lua: root a:\\, serial, transport / feature / reload hooks wired",
           !strcmp(s_lc.root, "/fs/a") && s_lc.sn == 330017203 && s_lc.report == udp_server_send_report &&
               s_lc.remote == udp_server_remote_exec && s_lc.cloud_connected == clu_mqtt_connected &&
-              s_lc.on_init == on_lua_init && s_lc.on_reload == on_lua_reload && s_lc.clu_feature == on_clu_feature);
+              s_lc.on_init == on_lua_init && s_lc.on_reload == on_lua_reload && s_lc.clu_feature == on_clu_feature &&
+              s_lc.on_time_set == clu_time_store);
 
     // NVS partition full / from a newer IDF: erased and initialised again; mount failure tolerated
     s_nvs_init[0] = ESP_ERR_NVS_NO_FREE_PAGES;
@@ -245,10 +257,16 @@ int main(void)
 
     // Lua lifecycle hooks
     on_lua_init();
+#if CONFIG_CLU_TFBUS
     check("SYSTEM.Init: bus polling and MQTT start", !strcmp(s_log, "master_start mqtt_start ") && (s_log[0] = 0, 1));
     check("reload: bus registry reset (8 s)", on_lua_reload() && !strcmp(s_log, "master_reset(8000) "));
     s_reset_ok = false;
     check("reload: bus reset failure reported", !on_lua_reload());
+#else
+    check("CLU_TFBUS off: SYSTEM.Init starts only MQTT", !strcmp(s_log, "mqtt_start ") && (s_log[0] = 0, 1));
+    s_reset_ok = false;
+    check("CLU_TFBUS off: reload succeeds, bus untouched", on_lua_reload() && !s_log[0]);
+#endif
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

@@ -9,8 +9,18 @@
 /** @brief UDP port of the CLU protocol. */
 #define CLU_UDP_PORT 1234
 
-/** @brief Start the UDP server task. */
+/**
+ * @brief Start the UDP server tasks. Needs lwIP (esp_netif_init()), not an IP address.
+ */
 void udp_server_start(void);
+
+/**
+ * @brief The STA interface got its first IP: start the setup-window countdown (once per boot).
+ *
+ * Until then the window stays open, so the time spent waiting for WiFi does not use it up.
+ * Safe from the event loop task.
+ */
+void udp_server_net_up(void);
 
 /**
  * @brief Set the current STA IPv4 address (called by the WiFi code).

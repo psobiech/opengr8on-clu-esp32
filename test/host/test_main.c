@@ -101,16 +101,7 @@ void tfbus_master_start(void) { L("master_start"); }
 static bool s_reset_ok = true;
 bool tfbus_master_reset(uint32_t ms) { L("master_reset(%u)", (unsigned)ms); return s_reset_ok; }
 
-struct host_event_group { int bits; };
-static struct host_event_group s_eg;
-EventGroupHandle_t xEventGroupCreate(void) { return &s_eg; }
-EventBits_t xEventGroupSetBits(EventGroupHandle_t g, EventBits_t b) { g->bits |= b; return g->bits; }
-EventBits_t xEventGroupClearBits(EventGroupHandle_t g, EventBits_t b) { g->bits &= ~b; return g->bits; }
-EventBits_t xEventGroupWaitBits(EventGroupHandle_t g, EventBits_t b, BaseType_t c, BaseType_t a, TickType_t t)
-{
-    L("wait_wifi");
-    return b;
-}
+bool sntp_restart(void) { L("sntp_restart"); return true; }
 
 static esp_netif_t *const STA = (esp_netif_t *)0x5a;
 esp_err_t esp_netif_init(void) { L("netif"); return ESP_OK; }
@@ -163,6 +154,7 @@ static clu_lua_cfg_t s_lc;
 void clu_lua_start(const clu_lua_cfg_t *c) { s_lc = *c; L("lua_start"); }
 void clu_tftp_init(const char *root) { L("tftp(%s)", root); }
 void udp_server_start(void) { L("udp_start"); }
+void udp_server_net_up(void) { L("net_up"); }
 static uint32_t s_local_ip;
 void udp_server_set_local_ip(uint32_t ip) { s_local_ip = ip; L("local_ip"); }
 void udp_server_send_report(const char *a, int p, const char *b) {}
@@ -172,12 +164,12 @@ uint32_t udp_server_remote_exec(uint32_t ip, const char *s) { return 0; }
 int main(void)
 {
     app_main();
-    check_log("boot order: NVS, crypto, identity (PIN logged) before the telnet hook, then storage, bus, WiFi, "
-              "services, Lua, TFTP, UDP",
+    check_log("boot order: NVS, crypto, identity (PIN logged) before the telnet hook, then storage, bus, WiFi "
+              "(no wait for an IP), services, TFTP, UDP before Lua",
               "nvs_init crypto state_load telnet_init time_init mount(/fs,storage,1) config_files uart drivers "
               "master_init on_scan netif net_init(sta) wifi_init handler(WIFI_EVENT,-1) handler(IP_EVENT,0) "
-              "wifi_config ps(0) wifi_start txpower(60) wait_wifi sntp telnet_start mqtt_init sysinfo lua_start "
-              "tftp(/fs) udp_start ");
+              "wifi_config ps(0) wifi_start txpower(60) sntp telnet_start mqtt_init sysinfo tftp(/fs) udp_start "
+              "lua_start ");
     check("storage: a:\\ and p:\\ created", !strcmp(s_mkdirs, "/fs/a /fs/p "));
     check("telnet config from Kconfig", s_tc.port == 23 && s_tc.max_clients == 2 && s_tc.history == 4096 &&
                                             !strcmp(s_tc.allow, "192.168.1.0/24"));
@@ -202,7 +194,7 @@ int main(void)
     s_mkdirs[0] = 0;
     app_main();
     check("NVS without free pages: erased, initialised again", !strncmp(s_log, "nvs_init nvs_erase nvs_init crypto", 34));
-    check("storage mount failure: no drive directories, boot continues", !s_mkdirs[0] && strstr(s_log, "udp_start"));
+    check("storage mount failure: no drive directories, boot continues", !s_mkdirs[0] && strstr(s_log, "lua_start"));
     s_log[0] = 0;
     s_mount = ESP_OK;
 
@@ -216,11 +208,14 @@ int main(void)
     wifi_event_sta_connected_t con = {.ssid = "HomeNet", .ssid_len = 7, .channel = 6, .authmode = 3};
     s_wifi_handler(NULL, WIFI_EVENT, WIFI_EVENT_STA_CONNECTED, &con);
     ip_event_got_ip_t ip = {.ip_info.ip.addr = 0x1401a8c0};
+    s_log[0] = 0;
     s_wifi_handler(NULL, IP_EVENT, IP_EVENT_STA_GOT_IP, &ip);
-    check("got IP: UDP server learns it, WiFi-up bit set", s_local_ip == 0x1401a8c0 && (s_eg.bits & WIFI_UP));
+    check("got IP: UDP server learns it", s_local_ip == 0x1401a8c0);
+    check_log("got IP: setup window armed, SNTP polls now", "local_ip net_up sntp_restart ");
     wifi_event_sta_disconnected_t dis = {.reason = 201, .rssi = -80};
+    s_log[0] = 0;
     s_wifi_handler(NULL, WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &dis);
-    check("disconnected: WiFi-up bit cleared, reconnect", !(s_eg.bits & WIFI_UP) && strstr(s_log, "connect"));
+    check_log("disconnected: reconnect", "connect ");
     s_log[0] = 0;
     s_wifi_handler(NULL, IP_EVENT, 99, NULL);
     check_log("other events ignored", "");

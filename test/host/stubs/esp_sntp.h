@@ -7,3 +7,5 @@ void esp_sntp_setoperatingmode(esp_sntp_operatingmode_t m);
 void esp_sntp_setservername(int idx, const char *server);
 void sntp_set_time_sync_notification_cb(void (*cb)(struct timeval *tv));
 void esp_sntp_init(void);
+bool sntp_restart(void);
+#define esp_sntp_restart sntp_restart

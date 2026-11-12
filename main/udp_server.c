@@ -66,16 +66,16 @@ static QueueHandle_t s_discovery_q;
 #define SETUP_BUTTON_POLL_MS 50
 #define SETUP_BUTTON_HOLD_POLLS 3 // held low for >= 100 ms (3 samples) counts as a press
 
-// End of the setup window [esp_timer us]. Open (not counting) until udp_server_start() arms it;
-// written by udp_server_start() and the setup task, read by the UDP task.
+// End of the setup window [esp_timer us]. Open (not counting) until the first IP arms it
+// (udp_server_net_up()); written by the event loop and the setup task, read by the UDP task.
 static _Atomic int64_t s_setup_until_us = INT64_MAX;
 // Set by a discovery answered inside the window: keeps it open until a soft reset (req_reset)
 // or a reboot, so a setup started from OM is not cut off halfway. Written / read by the UDP task.
 static _Atomic bool s_setup_latched;
 
 /**
- * @brief True during the setup window: the first CONFIG_CLU_SETUP_WINDOW_S seconds after the CLU
- * is up (udp_server_start(): WiFi has an IP, every service started), or after a press of the
+ * @brief True during the setup window: until the first IP, then the first CONFIG_CLU_SETUP_WINDOW_S
+ * seconds after it (udp_server_net_up()), or after a press of the
  * setup button, and for as long as the Lua runtime is in emergency mode (MAIN.LUA failed, so the
  * project must be re-uploaded) (0 = always). A discovery answered inside the window keeps it open
  * until the next soft reset (req_reset) or reboot.
@@ -138,9 +138,6 @@ static void setup_task(void *arg)
 static void setup_start(void)
 {
 #if CONFIG_CLU_SETUP_WINDOW_S > 0
-    // Count from here, not from the chip boot: waiting for WiFi must not use up the window.
-    atomic_store(&s_setup_until_us, esp_timer_get_time() + (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000);
-    ESP_LOGW(TAG, "setup window: discovery / keys / TFTP open for %d s", CONFIG_CLU_SETUP_WINDOW_S);
     if (CONFIG_CLU_SETUP_BUTTON_GPIO >= 0) {
         gpio_config_t c = {.pin_bit_mask = 1ULL << CONFIG_CLU_SETUP_BUTTON_GPIO,
                            .mode = GPIO_MODE_INPUT,
@@ -150,6 +147,19 @@ static void setup_start(void)
         }
     }
     xTaskCreatePinnedToCore(setup_task, "clu_setup", 2048, NULL, 2, NULL, 0);
+#endif
+}
+
+void udp_server_net_up(void)
+{
+#if CONFIG_CLU_SETUP_WINDOW_S > 0
+    static atomic_bool s_armed;
+    if (atomic_exchange(&s_armed, true)) {
+        return; // once per chip boot: a WiFi reconnect does not reopen the window
+    }
+    // Count from the first IP, not from the chip boot: waiting for WiFi must not use up the window.
+    atomic_store(&s_setup_until_us, esp_timer_get_time() + (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000);
+    ESP_LOGW(TAG, "setup window: discovery / keys / TFTP open for %d s", CONFIG_CLU_SETUP_WINDOW_S);
 #endif
 }
 

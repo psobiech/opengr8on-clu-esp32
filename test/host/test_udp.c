@@ -495,6 +495,22 @@ static void test_before_start(void)
     s_now_us = 0;
 }
 
+// The window counts from the first IP, not from udp_server_start() (which runs before WiFi is up).
+static void test_net_up(void)
+{
+    s_now_us = 3600LL * 1000000; // started long ago, still no IP
+    check("setup window: open (not counting) after start, before the first IP", setup_window_open());
+    s_now_us = 0;
+    udp_server_net_up(); // first IP at t = 0
+    check("setup window: armed by the first IP", setup_window_open() &&
+                                                     s_setup_until_us == (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000);
+    s_now_us = 5LL * 1000000;
+    udp_server_net_up(); // WiFi reconnect
+    check("setup window: a later IP (reconnect) does not re-arm it",
+          s_setup_until_us == (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000);
+    s_now_us = 0;
+}
+
 static void test_start_and_socket_errors(void)
 {
     udp_server_start();
@@ -1082,6 +1098,7 @@ int main(void)
 
     test_before_start();
     test_start_and_socket_errors();
+    test_net_up();
     udp_server_set_local_ip(inet_addr("192.168.1.20"));
     check("local IP stored as text", strcmp(s_ip, "192.168.1.20") == 0);
     test_discovery();

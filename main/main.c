@@ -3,8 +3,12 @@
  * @brief Firmware entry point: OpenGr8on ESP32-S3 CLU.
  *
  * Boot order: NVS, crypto, CLU identity, telnet log hook, time zone, FAT storage (a:\\, p:\\),
- * config files, RS485 + TFBUS master and drivers, WiFi (wait for IP), SNTP, telnet server, MQTT,
- * Lua runtime, TFTP and the UDP/1234 CLU protocol server.
+ * config files, RS485 + TFBUS master and drivers, WiFi, SNTP, telnet server, MQTT, TFTP, the
+ * UDP/1234 CLU protocol server and the Lua runtime.
+ *
+ * Nothing waits for an IP: the bus and the local scripts run without the network. Network
+ * services (SNTP, MQTT, telnet, UDP) bind to INADDR_ANY / retry on their own and pick the IP up
+ * when WiFi connects.
  */
 #include <stdio.h>
 #include <string.h>
@@ -26,7 +30,7 @@
 #include "esp_vfs_fat.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
+#include "esp_sntp.h"
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 #include "tfbus_drivers.h"
@@ -35,8 +39,6 @@
 #include "udp_server.h"
 
 static const char *TAG = "main";
-static EventGroupHandle_t s_wifi_ev;
-#define WIFI_UP BIT0
 
 /**
  * @brief WiFi / IP event handler: scan-then-connect, reconnect on disconnect, publish the IP.
@@ -70,13 +72,13 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
         // 204=HANDSHAKE_TIMEOUT 205=CONNECTION_FAIL 210=NO_AP_FOUND_W_COMPATIBLE_SECURITY
         // 211=NO_AP_FOUND_IN_AUTHMODE_THRESHOLD 212=NO_AP_FOUND_IN_RSSI_THRESHOLD
         ESP_LOGW(TAG, "WiFi disconnected: reason %d rssi %d", e->reason, e->rssi);
-        xEventGroupClearBits(s_wifi_ev, WIFI_UP);
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *e = data;
         udp_server_set_local_ip(e->ip_info.ip.addr);
         ESP_LOGI(TAG, "IP " IPSTR, IP2STR(&e->ip_info.ip));
-        xEventGroupSetBits(s_wifi_ev, WIFI_UP);
+        udp_server_net_up();
+        esp_sntp_restart(); // first poll now instead of at the next retry after a failed early one
     }
 }
 
@@ -85,7 +87,6 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
  */
 static void wifi_start(void)
 {
-    s_wifi_ev = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     clu_net_init(esp_netif_create_default_wifi_sta());
@@ -240,8 +241,7 @@ void app_main(void)
     tfbus_master_init();
     tfbus_master_on_scan(clu_state_write_config_files); // CONFIG.JSON tfbusDevices
 
-    wifi_start();
-    xEventGroupWaitBits(s_wifi_ev, WIFI_UP, pdFALSE, pdTRUE, portMAX_DELAY);
+    wifi_start(); // does not wait for an IP: see the file comment
     clu_time_start_sntp();
 #if CONFIG_CLU_TELNET
     clu_telnet_start();
@@ -253,6 +253,8 @@ void app_main(void)
     };
     clu_mqtt_init(&mc);
     clu_sysinfo_init();
+    clu_tftp_init(CLU_FS_ROOT);
+    udp_server_start(); // before Lua: OM.LUA's remote calls / reports need its queue and lock
     const clu_lua_cfg_t lc = {
         .root = CLU_FS_ROOT "/a",
         .sn = g_clu.sn,
@@ -265,7 +267,4 @@ void app_main(void)
         .on_reload = on_lua_reload,
     };
     clu_lua_start(&lc);
-
-    clu_tftp_init(CLU_FS_ROOT);
-    udp_server_start();
 }

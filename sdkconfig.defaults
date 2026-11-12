@@ -1,5 +1,5 @@
-# Default target ESP32-S3 (Waveshare ESP32-S3-RS485-CAN). Grenton GATE hardware (ESP32-WROVER-B,
-# LAN8720A Ethernet): idf.py -B build-esp32 set-target esp32 build
+# Common defaults for every board preset (CMakePresets.json: waveshare, gate, f8, a8v3). The target
+# comes from the preset; this line only applies to builds without one.
 # Target-specific settings (flash size, partition table, PSRAM mode): sdkconfig.defaults.<target>.
 CONFIG_IDF_TARGET="esp32s3"
 CONFIG_PARTITION_TABLE_CUSTOM=y

@@ -58,7 +58,9 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 | `components/clu_tftp` | serwer TFTP (a:\ i p:\) |
 | `components/clu_telnet` | konsola logów (TCP 23, tylko odczyt) |
 | `components/clu_mqtt` | MQTT + discovery Home Assistant |
-| `components/clu_rtc` | zegar RTC PCF85063 na I2C (podtrzymywany bateryjnie) |
+| `components/clu_rtc` | zegar RTC PCF85063 albo DS3231 na I2C (podtrzymywany bateryjnie) |
+| `components/clu_i2c` | wspólne magistrale I2C (jedna na parę pinów: RTC + ekspander IO) |
+| `components/clu_localio` | IO płytki (PCF8575) jako moduł IO_MODULE_DIN_8 odpowiadający na ramki TF-Bus |
 
 Partycje (`partitions.csv`): NVS (klucze, PIN, sieć, czas), dwie partycje aplikacji po 4 MB, FAT
 6 MB jako `a:\` (projekt, CONFIG.JSON, STORAGE.DAT, certyfikaty).
@@ -105,13 +107,14 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 | DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM: SetValue/Switch*/HoldValue, rampa, Min/Max, LastValue; ramki zgodne z przechwytem, semantyka zdarzeń/Hold niezweryfikowana |
 | LED_RGBW_DIN (0x18) | 🟡 | LEDRGB: model HSV/RGB + W w CLU, korekcja bieli, Switch*/Hold*; PowerSupplyVoltage; ramki zgodne z przechwytem, LED_CHANNEL/LED_CCT brak |
 | Pozostałe moduły TF-Bus (ściemniacze FM, LED FM, analogowe itd.) | ❌ | brak sterowników |
+| Wbudowane IO płytki (PCF8575) jako IO_MODULE_DIN_8 | 🟡 | KinCony F8, KC868-A8v3, zob. [DEVICES.md](DEVICES.md#kincony-f8-i-kc868-a8v3); niesprawdzone na sprzęcie |
 
 ### Czego brakuje względem CLU_ZWAVE_2
 
 - **Z-Wave** — brak radia; węzły Z-Wave z OM.LUA są pomijane.
-- **Ethernet** — tylko na targecie `esp32` (LAN8720A na sprzęcie Grenton GATE, inne PHY RMII przez
-  sterownik generyczny, np. JL1101); ESP32-S3 nie ma EMAC,
-  więc tam wyłącznie WiFi.
+- **Ethernet** — wewnętrzny EMAC tylko na targecie `esp32` (LAN8720A na sprzęcie Grenton GATE, inne
+  PHY RMII przez sterownik generyczny, np. JL1101); ESP32-S3 nie ma EMAC, więc tam Ethernet tylko
+  przez W5500 na SPI (KinCony F8, KC868-A8v3) albo wyłącznie WiFi.
 - **Pomiar napięcia magistrali** (cechy 27–30, zdarzenia OnBusVoltage*) — brak ADC na płytce.
 - **Chmura Grentona** (aplikacja mobilna, Push) — świadomie wyłączona; zamiast niej MQTT + Home Assistant.
 - **Aktualizacja firmware z OM** — firmware wgrywa się przez `idf.py flash`.
@@ -137,81 +140,14 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 
 ## Sprzęt
 
-### Zalecana płytka
+Piny, profile i uwagi do każdej płytki: [DEVICES.md](DEVICES.md).
 
-**[Waveshare ESP32-S3-RS485-CAN](https://www.waveshare.com/wiki/ESP32-S3-RS485-CAN)** (ESP32-S3R8, 16 MB flash, 8 MB PSRAM, RS485 na płytce).
-Piny z przykładów producenta (`WS_GPIO.h`), domyślne w menuconfig:
-
-| Sygnał | GPIO |
-|---|---|
-| RS485 TX | 17 |
-| RS485 RX | 18 |
-| RS485 DE | 21 (sterowany jako UART RTS w `UART_MODE_RS485_HALF_DUPLEX`) |
-| CAN TX / RX | 15 / 16 (nieużywane) |
-| RTC PCF85063 SDA / SCL | 39 / 38 (INT 40 nieużywany) |
-
-Podłącz A/B RS485 płytki do A/B TF-Bus oraz GND.
-
-Zegar RTC ustawia czas systemowy przy starcie, zanim ruszą skrypty, więc mają poprawny czas bez
-sieci. Każda synchronizacja SNTP i `SetDateTime` zapisuje go z powrotem. Czas przez zanik zasilania
-przetrwa tylko z ogniwem podtrzymującym w złączu baterii RTC (J7); bez niego po włączeniu RTC
-zgłasza czas jako nieważny i zegar jest błędny do pierwszej synchronizacji SNTP.
-
-### Inne płytki
-
-Wymagane: ESP32-S3 z 16 MB flash i 8 MB PSRAM (octal), transceiver RS485 3,3 V, zasilanie z 24 V
-magistrali przez przetwornicę.
-
-```
- ESP32-S3                3.3 V RS485 transceiver            TFBUS cable
- GPIO17 (TX) ─────────── DI                          A ──── A
- GPIO18 (RX) ─────────── RO                          B ──── B
- GPIO21 (DE) ─────────── DE + /RE (tied)                    GND (isolated side)
- 3V3, GND ────────────── VCC, GND                           +24 V → buck → 5 V → board
-```
-
-- Użyj transceivera 3,3 V (MAX3485, SP3485, THVD1450) albo izolowanego (ADM2587E, ISO3082).
-  Moduł MAX485 na 5 V wystawia RO na poziomie 5 V, czego GPIO S3 nie tolerują.
-- Moduły z automatycznym kierunkiem (bez pinu DE) działają z `CLU_RS485_DE_GPIO=-1`. Wolniej
-  przełączają kierunek, więc szybko odpowiadające moduły mogą zostać pominięte.
-- Zamontuj terminator 120 Ω po stronie CLU oraz rezystory polaryzujące, jeśli transceiver nie ma
-  funkcji fail-safe.
-- **Nigdy nie podłączaj dwóch masterów (prawdziwej CLU i tej) do tej samej magistrali.**
-
-### Sprzęt Grenton GATE (ESP32-WROVER-B, Ethernet)
-
-Target `esp32` (`sdkconfig.defaults.esp32`, `partitions_4mb.csv`): ESP32-WROVER-B (4 MB flash,
-PSRAM), Ethernet przez wewnętrzny EMAC + PHY LAN8720A. Domyślne piny:
-
-| Funkcja | GPIO | Opcja |
-|---|---|---|
-| LAN8720A: MDC / MDIO, adres PHY | 23 / 18, 0 | `CLU_ETH_MDC_GPIO`, `CLU_ETH_MDIO_GPIO`, `CLU_ETH_PHY_ADDR` |
-| LAN8720A: reset | 2 | `CLU_ETH_PHY_RST_GPIO` |
-| RMII 50 MHz | wejście z oscylatora na GPIO0 | `CLU_ETH_CLK` |
-| RMII dane (stałe w ESP32) | TXEN 21, TXD0 19, TXD1 22, CRS_DV 27, RXD0 25, RXD1 26 | — |
-| RS485 (UART1) TX / RX / DE | 4 / 3 / 5 | `CLU_RS485_*` |
-| Przycisk reset (aktywny niski) | 34 | `CLU_SETUP_BUTTON_GPIO` |
-
-- WiFi i Ethernet mogą działać równolegle (`CLU_WIFI` + `CLU_ETH`); bez Ethernetu WiFi jest
-  zawsze włączone. Domyślnie na `esp32`: tylko Ethernet.
-- RTC (`CLU_RTC`) domyślnie wyłączony na `esp32` (GPIO38/39 to na ESP32 tylko wejścia).
-- RX RS485 na GPIO3 to pin U0RXD: konsola UART nie przyjmuje wejścia (log wychodzi dalej na TX).
-- Partycje: 2 × 1,5 MB OTA, 896 KB FAT.
-
-#### Wgrywanie na GATE z włączonym szyfrowaniem flash
-
-Wyłącz szyfrowanie, dopalając
-kolejny bit `FLASH_CRYPT_CNT` (parzysta liczba ustawionych bitów = szyfrowanie wyłączone), potem
-wgraj całość od zera:
-
-```bash
-espefuse.py -p /dev/ttyUSB0 summary                    # FLASH_CRYPT_CNT: nieparzysta = włączone
-espefuse.py -p /dev/ttyUSB0 burn_efuse FLASH_CRYPT_CNT # +1 bit -> wyłączone
-idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig -p /dev/ttyUSB0 erase-flash flash monitor
-```
-
-> **eFuse są nieodwracalne.** `FLASH_CRYPT_CNT` ma 7 bitów, więc szyfrowanie można przełączać
-> tylko kilka razy. Po dopaleniu eFuse fabryczny firmware przestaje się uruchamiać i niejest możliwe jego przywrócenie!
+| Płytka | Układ | Sieć | Uwagi |
+|---|---|---|---|
+| [Waveshare ESP32-S3-RS485-CAN](DEVICES.md#waveshare-esp32-s3-rs485-can) | ESP32-S3R8 | WiFi | zalecana; RS485 i RTC na płytce |
+| [Inne płytki ESP32-S3](DEVICES.md#inne-płytki-esp32-s3) | ESP32-S3, 16 MB / 8 MB PSRAM | WiFi | własny transceiver RS485 |
+| [KinCony F8, KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3) | ESP32-S3 N16R8 | Ethernet W5500 | 8 przekaźników + 8 wejść jako IO_MODULE_DIN_8 |
+| [Grenton GATE](DEVICES.md#grenton-gate) | ESP32-WROVER-B | Ethernet LAN8720A | target `esp32` |
 
 ## Budowanie i wgrywanie
 
@@ -220,28 +156,30 @@ idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig -p /dev/ttyUSB0 erase-f
 - **ESP-IDF 6.0** (projekt budowany na 6.0.2, zob. `dependencies.lock`), target `esp32s3` albo
   `esp32` (Grenton GATE).
 - Sieć przy pierwszym budowaniu: component manager pobiera `espressif/mqtt`
-  (`components/clu_mqtt/idf_component.yml`) i na `esp32` `espressif/lan87xx`
-  (`main/idf_component.yml`), bo esp-mqtt i sterowniki PHY nie są już częścią ESP-IDF 6.
+  (`components/clu_mqtt/idf_component.yml`), `espressif/w5500` i na `esp32` `espressif/lan87xx`
+  (`main/idf_component.yml`), bo esp-mqtt i sterowniki Ethernet nie są już częścią ESP-IDF 6.
 - Lua jest dołączona w repozytorium (`components/lua`), nic więcej nie trzeba instalować.
 
 ### Budowanie
 
+Płytkę wybiera preset CMake (`CMakePresets.json`). Każdy ma własny katalog budowania, target i
+plik `sdkconfig`, więc można przełączać się między płytkami bez `set-target` i bez czyszczenia:
+
+| Preset | Płytka | Katalog | Konfiguracja |
+|---|---|---|---|
+| `waveshare` (domyślny) | [Waveshare ESP32-S3-RS485-CAN](DEVICES.md#waveshare-esp32-s3-rs485-can) | `build/` | `sdkconfig` |
+| `gate` | [Grenton GATE](DEVICES.md#grenton-gate) (`esp32`) | `build-gate/` | `sdkconfig.gate` |
+| `f8` | [KinCony F8](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-f8/` | `sdkconfig.f8` |
+| `a8v3` | [KinCony KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-a8v3/` | `sdkconfig.a8v3` |
+
 ```bash
 . /opt/esp-idf/export.sh        # ścieżka do Twojej instalacji ESP-IDF
-idf.py set-target esp32s3
+export IDF_PRESET=f8            # wybór płytki; bez tego: waveshare
 idf.py menuconfig               # zob. "Konfiguracja"
 idf.py build flash monitor
 ```
 
-ESP32 (Grenton GATE) w osobnym katalogu, z własnym `sdkconfig`:
-
-```bash
-. /opt/esp-idf/export.sh        # ścieżka do Twojej instalacji ESP-IDF
-export SDKCONFIG=build-esp32/sdkconfig
-idf.py -B build-esp32 set-target esp32
-idf.py -B build-esp32 menuconfig
-idf.py -B build-esp32 build
-```
+Jednorazowo bez zmiennej: `idf.py --preset gate build`.
 
 ### Pierwsze uruchomienie
 
@@ -257,8 +195,11 @@ Wszystko w `idf.py menuconfig` → **OpenGr8on ESP32 CLU** (na górze menu).
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|
-| `CLU_ETH` | y (tylko `esp32`) | Ethernet EMAC + PHY RMII, zob. "Sprzęt Grenton GATE" |
-| `CLU_ETH_PHY` | LAN87xx | sterownik PHY: LAN8720A albo generyczny IEEE 802.3 (np. JL1101) |
+| `CLU_ETH` | y na `esp32`, n na `esp32s3` | Ethernet |
+| `CLU_ETH_IF` | EMAC na `esp32`, W5500 na `esp32s3` | wewnętrzny EMAC + PHY RMII (tylko `esp32`, zob. [Grenton GATE](DEVICES.md#grenton-gate)) albo W5500 na SPI (zob. [KinCony F8 i KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3)) |
+| `CLU_ETH_PHY` | LAN87xx | EMAC: sterownik PHY, LAN8720A albo generyczny IEEE 802.3 (np. JL1101) |
+| `CLU_ETH_SPI_*_GPIO` | piny F8 | W5500: SCLK / MOSI / MISO / CS / INT (`-1` = odpytywanie co 10 ms) / RST (`-1` = brak) |
+| `CLU_ETH_SPI_CLOCK_MHZ` | 20 | W5500: zegar SPI |
 | `CLU_WIFI` | y bez Ethernetu, n z nim | WiFi STA; z Ethernetem opcjonalne (oba równolegle) |
 | `CLU_WIFI_SSID` / `CLU_WIFI_PASSWORD` | — | sieć WiFi |
 | `CLU_WIFI_BSSID` | puste | przypięcie do konkretnego AP (`aa:bb:cc:dd:ee:ff`) |
@@ -293,8 +234,15 @@ Wartości z NVS mają pierwszeństwo — zmiana w menuconfig nie nadpisze już z
 | `CLU_RS485_TX_GPIO` / `RX_GPIO` | 17 / 18 | piny |
 | `CLU_RS485_DE_GPIO` | 21 | pin DE/RE, `-1` = transceiver z automatycznym kierunkiem |
 | `CLU_RS485_BAUD` | 115200 | prędkość magistrali |
-| `CLU_RTC` | y | zegar RTC PCF85063 (brak układu jest logowany i pomijany) |
-| `CLU_RTC_SDA_GPIO` / `SCL_GPIO` | 39 / 38 | piny I2C zegara RTC |
+| `CLU_LOCAL_IO` | n (y w profilach F8 / A8v3) | 8 przekaźników + 8 wejść płytki na PCF8575 jako IO_MODULE_DIN_8, zob. [DEVICES.md](DEVICES.md#kincony-f8-i-kc868-a8v3) |
+| `CLU_LOCAL_IO_SDA_GPIO` / `SCL_GPIO` | 8 / 18 | I2C ekspandera (te same piny co RTC = wspólna magistrala) |
+| `CLU_LOCAL_IO_ADDR` | 0x24 | adres PCF8575 |
+| `CLU_LOCAL_IO_OUT_PINS` | P10–P17 | przekaźniki na P10–P17 (wejścia P00–P07, F8) albo P00–P07 (wejścia P10–P17, A8v3) |
+| `CLU_LOCAL_IO_OUT_ACTIVE_LOW` / `IN_ACTIVE_LOW` | y / y | polaryzacja wyjść / wejść |
+| `CLU_LOCAL_IO_SN` | losowy | numer seryjny modułu (dziesiętnie), zapisywany w NVS |
+| `CLU_RTC` | y (n na `esp32`) | zegar RTC (brak układu jest logowany i pomijany) |
+| `CLU_RTC_CHIP` | PCF85063 | układ: PCF85063 (Waveshare) albo DS3231 (KinCony F8, KC868-A8v3) |
+| `CLU_RTC_SDA_GPIO` / `SCL_GPIO` | 39 / 38 | piny I2C zegara RTC (mogą być wspólne z ekspanderem IO) |
 
 ### Inne
 
@@ -455,13 +403,15 @@ make -C test/host coverage                        # pokrycie C (gcov) i Lua; FAI
 | `test_prelude.lua` | model obiektów Lua, obiekty wirtualne, OM.LUA z `fixtures/` |
 | `test_mqtt.lua` | mapowanie encji HA, tematy, surowe API |
 | `test_udp` | serwer UDP (`main/udp_server.c`): discovery, klucze, `req:`, TFTP/diagnostyka, reset, wywołania zdalnych CLU, okno konfiguracji i przycisk |
-| `test_uart` | transport RS485 (`tfbus_uart.c`) na symulowanym sterowniku UART: echo, odpowiedzi dzielone, timeouty |
+| `test_uart` | transport RS485 (`tfbus_uart.c`) na symulowanym sterowniku UART: echo, odpowiedzi dzielone, timeouty, lokalne moduły |
+| `test_localio` | emulacja IO_MODULE_DIN_8 (`localio.c`): DISCOVER, adresowanie, odpytywanie, ACTIVATE/DEACTIVATE, debouncing, awarie ekspandera, RESET |
+| `test_localio_f8` / `test_localio_a8v3` | IO płytki (`clu_localio.c`) na symulowanym PCF8575: mapowanie pinów F8 / A8v3, numer seryjny w NVS |
 | `test_sys` | `main/`: statyczne IP i DNS, strefa czasu, SNTP i odtwarzanie czasu z RTC, tożsamość i klucze (NVS), CONFIG.JSON / config.txt, pakiet diagnostyczny, `sys_info` |
 | `test_tftp` | serwer TFTP: pobieranie / wysyłanie (octet, netascii), utrata pakietów, obce hosty, limity, błędy |
 | `test_telnet` | konsola logów: historia, filtr `CLU_TELNET_ALLOW`, komendy telnet (IAC, Ctrl-C), wolni klienci |
 | `test_mqttc` | połączenie MQTT (`clu_mqtt.c`): konfiguracja klienta i TLS, subskrypcje, wiadomości przychodzące, API Lua |
 | `test_lua` | środowisko Lua (`clu_lua.c`): wywołania `req:`, limit czasu, zdarzenia, przeładowanie, tryb awaryjny, `BAD_M.LUA` |
-| `test_rtc` | RTC PCF85063: kodowanie BCD ↔ epoch (lata przestępne, zakres 2000–2099, flaga OS), sterownik I2C na symulowanym układzie |
+| `test_rtc` | RTC PCF85063 i DS3231: kodowanie BCD ↔ epoch (lata przestępne, zakres 2000–2099, flagi OS / OSF, tryb 12h), sterownik I2C na symulowanych układach, wspólna magistrala I2C |
 | `test_main` | kolejność startu, konfiguracja modułów, zdarzenia WiFi, mapowanie cech CLU (NTP, strefa, DNS, UseCloud) |
 
 `make coverage` zapisuje też `test/host/coverage/summary.md` (tabela Markdown) i `coverage.json`;

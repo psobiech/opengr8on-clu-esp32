@@ -50,6 +50,23 @@ int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxc
  */
 esp_err_t tfbus_uart_send(const uint8_t *tx, size_t txlen);
 
+/**
+ * @brief Local bus endpoint: modules emulated by the firmware itself (e.g. on-board IO).
+ *
+ * Sees every frame before the wire, in the bus task. Returns the reply length written to @p rx
+ * (> 0: frame handled locally, nothing goes on the wire), 0 if the frame is not (only) for a
+ * local module (it goes on the wire as usual), or < 0 if a local module owns the frame but has
+ * no reply (handled, the caller sees no reply). For frames sent with tfbus_uart_send() the
+ * result is ignored and the frame always goes on the wire too.
+ */
+typedef int (*tfbus_uart_local_fn_t)(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap);
+
+/**
+ * @brief Install the local bus endpoint (NULL = none). Call before the bus master starts.
+ * @param fn Endpoint.
+ */
+void tfbus_uart_set_local(tfbus_uart_local_fn_t fn);
+
 #ifdef __cplusplus
 }
 #endif

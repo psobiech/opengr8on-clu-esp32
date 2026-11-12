@@ -4,7 +4,8 @@
  *
  * Boot order: NVS, crypto, CLU identity, telnet log hook, time zone + clock from the RTC (CLU_RTC), FAT
  * storage (a:\\, p:\\),
- * config files, RS485 + TFBUS master and drivers (CLU_TFBUS), network (WiFi and / or Ethernet), SNTP,
+ * config files, RS485 + TFBUS master and drivers (CLU_TFBUS) with the on-board IO modules (CLU_LOCAL_IO),
+ * network (WiFi and / or Ethernet), SNTP,
  * telnet server, MQTT, TFTP, the UDP/1234 CLU protocol server and the Lua runtime.
  *
  * Nothing waits for an IP: the bus and the local scripts run without the network. Network
@@ -18,6 +19,9 @@
 #include "clu_crypto.h"
 #include "clu_eth.h"
 #include "clu_lua.h"
+#if CONFIG_CLU_LOCAL_IO
+#include "clu_localio.h"
+#endif
 #include "clu_mqtt.h"
 #include "clu_net.h"
 #include "clu_time.h"
@@ -274,6 +278,9 @@ void app_main(void)
         .baud = CONFIG_CLU_RS485_BAUD,
     };
     tfbus_uart_init(&uc);
+#if CONFIG_CLU_LOCAL_IO
+    clu_localio_start(); // answers the bus frames for the on-board IO modules
+#endif
     tfbus_drivers_register_all();
     tfbus_master_init();
     tfbus_master_on_scan(clu_state_write_config_files); // CONFIG.JSON tfbusDevices

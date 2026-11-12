@@ -2,6 +2,9 @@ build/
 doxygen/
 sdkconfig
 sdkconfig.old
+# per-preset configs (CMakePresets.json); the board defaults stay tracked
+/sdkconfig.*
+!/sdkconfig.defaults*
 managed_components/
 dependencies.lock
 test/host/test_proto
@@ -11,6 +14,9 @@ test/host/liblua_host.a
 test/host/test_crypto
 test/host/test_udp
 test/host/test_uart
+test/host/test_localio
+test/host/test_localio_f8
+test/host/test_localio_a8v3
 test/host/test_sys
 test/host/test_tftp
 test/host/test_telnet

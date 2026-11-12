@@ -1,6 +1,10 @@
 dependencies:
-  # LAN8720A PHY driver (CLU_ETH): moved out of ESP-IDF in v6.0. Only the ESP32 has the EMAC.
+  # Ethernet PHY / MAC drivers (CLU_ETH): moved out of ESP-IDF in v6.0.
+  # LAN8720A for the internal EMAC (only the ESP32 has one).
   espressif/lan87xx:
     version: "^1.1.0"
     rules:
       - if: "target == esp32"
+  # WIZnet W5500 SPI Ethernet (KinCony F8, KC868-A8v3).
+  espressif/w5500:
+    version: "^2.0.1"

@@ -131,6 +131,21 @@ static void reset(void)
     s_echo = s_short_write = false;
 }
 
+// Local endpoint (on-board modules): answers STATUS_POLL to address 5, owns address 6 without a
+// reply, records what it saw.
+static int s_local_calls;
+static uint8_t s_local_last[TFBUS_MAX_FRAME];
+static int fake_local(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap)
+{
+    s_local_calls++;
+    memcpy(s_local_last, tx, txlen < sizeof s_local_last ? txlen : sizeof s_local_last);
+    if (tx[1] == 5 && rxcap >= 4) {
+        memcpy(rx, (const uint8_t[]){0xaa, 0x00, 0x01, 0xab}, 4);
+        return 4;
+    }
+    return tx[1] == 6 ? -1 : 0;
+}
+
 // Module -> CLU frame: aa 00 len payload xor
 static size_t reply(uint8_t *out, const uint8_t *pl, size_t n)
 {
@@ -236,6 +251,33 @@ int main(void)
     s_short_write = true;
     check("send: short write -> ESP_FAIL", tfbus_uart_send(f, fl) == ESP_FAIL);
     check("transact: send failure -> -1", tfbus_uart_transact(f, fl, rx, sizeof rx, 20) == -1);
+
+    // local endpoint
+    tfbus_uart_set_local(fake_local);
+    reset();
+    s_local_calls = 0;
+    fl = tfbus_status_poll(f, sizeof f, 5);
+    n = tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
+    check("local: frame for a local module answered locally, nothing on the wire",
+          n == 4 && rx[0] == 0xaa && rx[2] == 0x01 && s_txlen == 0 && s_local_calls == 1);
+    reset();
+    size_t f6l = tfbus_status_poll(other, sizeof other, 6);
+    t0 = s_now_us;
+    n = tfbus_uart_transact(other, f6l, rx, sizeof rx, 20);
+    check("local: owned without a reply -> 0 at once, nothing on the wire",
+          n == 0 && s_txlen == 0 && s_now_us == t0);
+    reset();
+    size_t f7l = tfbus_status_poll(other, sizeof other, 7);
+    rx_at(1000, r, rl);
+    n = tfbus_uart_transact(other, f7l, rx, sizeof rx, 20);
+    check("local: other frames go on the wire", n == (int)rl && s_txlen == f7l);
+    reset();
+    s_local_calls = 0;
+    size_t rstl = tfbus_reset(f, sizeof f, TFBUS_BROADCAST);
+    check("local: send() shows the frame to the local endpoint and puts it on the wire",
+          tfbus_uart_send(f, rstl) == ESP_OK && s_local_calls == 1 && memcmp(s_local_last, f, rstl) == 0 &&
+              s_txlen == rstl);
+    tfbus_uart_set_local(NULL);
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

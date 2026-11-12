@@ -1,4 +1,5 @@
-// Host stub: the ESP-IDF I2C master driver API used by clu_rtc.c (test_rtc.c implements it).
+// Host stub: the ESP-IDF I2C master driver API used by clu_rtc.c and clu_localio.c (the tests
+// implement it).
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
@@ -26,5 +27,6 @@ esp_err_t i2c_master_bus_add_device(i2c_master_bus_handle_t bus, const i2c_devic
                                     i2c_master_dev_handle_t *dev);
 esp_err_t i2c_master_bus_rm_device(i2c_master_dev_handle_t dev);
 esp_err_t i2c_master_transmit(i2c_master_dev_handle_t dev, const uint8_t *w, size_t wn, int timeout_ms);
+esp_err_t i2c_master_receive(i2c_master_dev_handle_t dev, uint8_t *r, size_t rn, int timeout_ms);
 esp_err_t i2c_master_transmit_receive(i2c_master_dev_handle_t dev, const uint8_t *w, size_t wn, uint8_t *r,
                                       size_t rn, int timeout_ms);

@@ -163,8 +163,9 @@ int host_settimeofday(const struct timeval *tv, const void *tz) { s_now = s_sett
 time_t host_time(time_t *t) { if (t) *t = s_now; return s_now; }
 static bool s_rtc_present = true, s_rtc_valid;
 static int s_rtc_sda = -2, s_rtc_scl = -2, s_rtc_sets;
+static clu_rtc_chip_t s_rtc_chip = (clu_rtc_chip_t)-1;
 static time_t s_rtc_time;
-bool clu_rtc_init(int sda, int scl) { s_rtc_sda = sda; s_rtc_scl = scl; return s_rtc_present; }
+bool clu_rtc_init(clu_rtc_chip_t chip, int sda, int scl) { s_rtc_chip = chip; s_rtc_sda = sda; s_rtc_scl = scl; return s_rtc_present; }
 bool clu_rtc_get(time_t *t) { if (!s_rtc_valid) return false; *t = s_rtc_time; return true; }
 bool clu_rtc_set(time_t t) { s_rtc_sets++; s_rtc_time = t; s_rtc_valid = true; return true; }
 
@@ -405,7 +406,7 @@ static void test_time_rtc(void)
     s_settime = -1;
     s_rtc_sets = 0;
     clu_time_init();
-    check("rtc: Kconfig pins used", s_rtc_sda == 39 && s_rtc_scl == 38);
+    check("rtc: Kconfig chip (PCF85063) and pins used", s_rtc_chip == CLU_RTC_PCF85063 && s_rtc_sda == 39 && s_rtc_scl == 38);
     check("rtc: valid time -> system clock set from it, RTC not rewritten",
           s_settime == 1750000000 && s_rtc_sets == 0);
 

@@ -41,6 +41,26 @@ test_master: test_master.c $(COMP)/tfbus_master/tfbus_master.c $(PROTO)/tfbus_fr
 	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-but-set-variable -O1 -g $(SAN) \
 	    $(LUA_DEFS) $(MASTER_INC) -o $@ test_master.c $(PROTO)/tfbus_frame.c liblua_host.a -lm -ldl
 
+# On-board IO emulation (two IO_MODULE_DIN_8 answering TF-Bus frames) against fake expanders.
+test_localio: test_localio.c $(COMP)/clu_localio/localio.c $(PROTO)/tfbus_frame.c $(STUBS) $(HDRS)
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
+	    -Istubs -I$(PROTO)/include -I$(COMP)/clu_localio/include -o $@ $(filter %.c,$^)
+
+# On-board IO board glue (clu_localio.c, included by the test): serial in NVS, PCF8575 pin mapping
+# of KinCony F8 and KC868-A8v3, against a fake expander.
+LOCALIO_BOARD_DEPS := test_localio_board.c $(COMP)/clu_localio/clu_localio.c $(COMP)/clu_localio/localio.c \
+                      $(COMP)/clu_i2c/clu_i2c.c $(PROTO)/tfbus_frame.c fake_nvs.h $(STUBS) $(HDRS)
+LOCALIO_BOARD_CC = $(TCC) $(HOST_CFLAGS) -Wno-unused-function -Istubs -I. -I$(PROTO)/include -I$(COMP)/clu_localio/include \
+                   -I$(COMP)/clu_crypto/include -I$(COMP)/tfbus_uart/include -I$(COMP)/clu_i2c/include \
+                   -o $@ test_localio_board.c $(COMP)/clu_localio/localio.c $(COMP)/clu_i2c/clu_i2c.c \
+                   $(PROTO)/tfbus_frame.c
+
+test_localio_f8: $(LOCALIO_BOARD_DEPS)
+	$(LOCALIO_BOARD_CC) -DBOARD_F8=1
+
+test_localio_a8v3: $(LOCALIO_BOARD_DEPS)
+	$(LOCALIO_BOARD_CC) -DBOARD_A8V3=1
+
 # UDP command server (main/udp_server.c, included by the test) with fake sockets and cipher.
 UDP_INC := -Istubs -I$(MAIN) -I$(PROTO)/include -I$(COMP)/clu_crypto/include -I$(LUA_DIR) \
            -I$(COMP)/clu_lua/include -I$(COMP)/tfbus_master/include -I$(COMP)/clu_tftp/include
@@ -89,9 +109,11 @@ test_lua: test_lua.c $(COMP)/clu_lua/clu_lua.c $(COMP)/clu_lua/prelude.lua $(COM
           liblua_host.a $(STUBS) $(HDRS)
 	$(TCC) $(HOST_CFLAGS) -Istubs -I$(LUA_DIR) -I$(COMP)/clu_lua/include -o $@ test_lua.c liblua_host.a -lm -ldl -lpthread
 
-# PCF85063 RTC (clu_rtc.c included, pcf85063.c linked) against a fake chip on a fake I2C bus.
-test_rtc: test_rtc.c $(COMP)/clu_rtc/clu_rtc.c $(COMP)/clu_rtc/pcf85063.c $(STUBS) $(HDRS)
-	$(TCC) $(HOST_CFLAGS) -Istubs -I$(COMP)/clu_rtc/include -o $@ test_rtc.c $(COMP)/clu_rtc/pcf85063.c
+# RTC (clu_rtc.c + clu_i2c.c included, pcf85063.c / ds3231.c linked) against fake chips on a fake I2C bus.
+test_rtc: test_rtc.c $(COMP)/clu_rtc/clu_rtc.c $(COMP)/clu_rtc/pcf85063.c $(COMP)/clu_rtc/ds3231.c \
+          $(COMP)/clu_i2c/clu_i2c.c $(STUBS) $(HDRS)
+	$(TCC) $(HOST_CFLAGS) -Istubs -I$(COMP)/clu_rtc/include -I$(COMP)/clu_i2c/include -o $@ test_rtc.c \
+	    $(COMP)/clu_rtc/pcf85063.c $(COMP)/clu_rtc/ds3231.c
 
 # clu_time.c with CLU_RTC off (the RTC driver must never be called).
 nortc_clu_time.o: $(MAIN)/clu_time.c sys_host.h $(STUBS) $(HDRS)
@@ -121,7 +143,7 @@ test_crypto: test_crypto.c $(COMP)/clu_crypto/clu_crypto.c $(PROTO)/clu_keys.c
 
 HAVE_MBEDTLS3 := $(wildcard $(MBEDTLS3_INC)/psa/crypto.h)
 
-C_TESTS := test_proto test_drivers test_master test_udp test_uart test_sys test_tftp test_telnet test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc $(if $(HAVE_MBEDTLS3),test_crypto)
+C_TESTS := test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc $(if $(HAVE_MBEDTLS3),test_crypto)
 
 .PHONY: test test-c clean coverage
 test: test-c test-lua
@@ -133,6 +155,9 @@ test-c: $(C_TESTS)
 	./test_udp 2>/dev/null
 	./test_rtc 2>/dev/null
 	./test_uart 2>/dev/null
+	./test_localio
+	./test_localio_f8 2>/dev/null
+	./test_localio_a8v3 2>/dev/null
 	ASAN_OPTIONS=detect_leaks=0 ./test_sys 2>/dev/null
 	./test_tftp 2>/dev/null
 	./test_telnet 2>/dev/null
@@ -144,7 +169,7 @@ test-c: $(C_TESTS)
 	$(if $(HAVE_MBEDTLS3),./test_crypto,@echo "skip test_crypto: no $(MBEDTLS3_INC)/psa/crypto.h")
 
 clean:
-	rm -f test_proto test_drivers test_master test_udp test_uart test_sys test_tftp test_telnet test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc test_crypto liblua_host.a *.o
+	rm -f test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc test_crypto liblua_host.a *.o
 	rm -rf *.gcda *.gcno coverage
 
 # Prelude (Lua object model) + MQTT/Home Assistant (clu_mqtt/mqtt.lua) tests; needs lua$(LUA) on the host. Pass OM=<path> to also load a real OM.LUA.

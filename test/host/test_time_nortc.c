@@ -19,7 +19,7 @@ static void check(const char *name, int cond)
     failures += !cond;
 }
 
-bool clu_rtc_init(int sda, int scl) { s_rtc_calls++; return true; }
+bool clu_rtc_init(clu_rtc_chip_t chip, int sda, int scl) { s_rtc_calls++; return true; }
 bool clu_rtc_get(time_t *t) { s_rtc_calls++; *t = 1750000000; return true; }
 bool clu_rtc_set(time_t t) { s_rtc_calls++; return true; }
 

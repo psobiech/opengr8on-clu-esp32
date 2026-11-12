@@ -15,6 +15,12 @@
 
 static const char *TAG = "tfbus_uart";
 static int s_uart = -1;
+static tfbus_uart_local_fn_t s_local;
+
+void tfbus_uart_set_local(tfbus_uart_local_fn_t fn)
+{
+    s_local = fn;
+}
 
 esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg)
 {
@@ -38,7 +44,8 @@ esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg)
     return ESP_OK;
 }
 
-esp_err_t tfbus_uart_send(const uint8_t *tx, size_t txlen)
+/** @brief Put a frame on the wire. */
+static esp_err_t wire_send(const uint8_t *tx, size_t txlen)
 {
     if (s_uart < 0) {
         return ESP_ERR_INVALID_STATE;
@@ -48,6 +55,15 @@ esp_err_t tfbus_uart_send(const uint8_t *tx, size_t txlen)
         return ESP_FAIL;
     }
     return uart_wait_tx_done(s_uart, pdMS_TO_TICKS(20));
+}
+
+esp_err_t tfbus_uart_send(const uint8_t *tx, size_t txlen)
+{
+    if (s_local) {
+        uint8_t rx[TFBUS_MAX_FRAME];
+        s_local(tx, txlen, rx, sizeof rx); // e.g. RESET broadcast: local modules hear it too
+    }
+    return wire_send(tx, txlen);
 }
 
 /** @brief Reply collector state for tfbus_uart_transact(). */
@@ -84,7 +100,13 @@ static void on_frame(const uint8_t *f, size_t len, void *ctx)
 
 int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap, int timeout_ms)
 {
-    if (tfbus_uart_send(tx, txlen) != ESP_OK) {
+    if (s_local) {
+        int r = s_local(tx, txlen, rx, rxcap);
+        if (r != 0) {
+            return r > 0 ? r : 0;
+        }
+    }
+    if (wire_send(tx, txlen) != ESP_OK) {
         return -1;
     }
     tfbus_rx_t parser;

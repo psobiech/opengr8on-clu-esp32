@@ -108,7 +108,12 @@ static void time_synced(struct timeval *tv)
 static void rtc_restore(void)
 {
 #if CONFIG_CLU_RTC
-    if (!clu_rtc_init(CONFIG_CLU_RTC_SDA_GPIO, CONFIG_CLU_RTC_SCL_GPIO)) {
+#if CONFIG_CLU_RTC_DS3231
+    const clu_rtc_chip_t chip = CLU_RTC_DS3231;
+#else
+    const clu_rtc_chip_t chip = CLU_RTC_PCF85063;
+#endif
+    if (!clu_rtc_init(chip, CONFIG_CLU_RTC_SDA_GPIO, CONFIG_CLU_RTC_SCL_GPIO)) {
         return;
     }
     time_t t;

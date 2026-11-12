@@ -409,16 +409,16 @@ static void test_download(void)
     serve(TFTP_RRQ, "a:\\BIG.BIN", "octet");
     check("RRQ: silent peer -> 4 tries x 5 s, then give up", s_now - t0 >= 4 * 5000000LL && s_now - t0 < 5 * 5000000LL);
 
-    // memory: PSRAM allocation fails -> internal heap; netascii buffer fails -> error
+    // memory: PSRAM allocations fail (board without PSRAM) -> internal heap for both buffers
     peer_reset();
     host_heap_fail = 1;
     serve(TFTP_RRQ, "a:\\BIG.BIN", "octet");
     check("RRQ: no PSRAM -> internal heap used", P.got_len == sizeof data);
     peer_reset();
-    host_heap_fail = 2; // file buffer: PSRAM fails, internal heap used; netascii buffer fails
+    host_heap_fail = 2; // file buffer and netascii buffer: PSRAM fails, internal heap used
     serve(TFTP_RRQ, "a:\\T.TXT", "netascii");
     host_heap_fail = 0;
-    check("RRQ netascii: out of memory -> error 0", s_xfer_err == TFTP_E_UNDEFINED && !P.blocks);
+    check("RRQ netascii: no PSRAM -> internal heap used", s_xfer_err == 0xffff && P.blocks > 0 && P.got_len > 0);
 
     peer_reset();
     s_sock_fail_at = FD_LISTEN + 1; // transfer socket

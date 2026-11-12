@@ -1,0 +1,45 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "waveshare",
+            "displayName": "Waveshare ESP32-S3-RS485-CAN (default)",
+            "binaryDir": "build",
+            "cacheVariables": {
+                "IDF_TARGET": "esp32s3",
+                "SDKCONFIG": "${sourceDir}/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults"
+            }
+        },
+        {
+            "name": "gate",
+            "displayName": "Grenton GATE (ESP32-WROVER-B, LAN8720A)",
+            "binaryDir": "build-gate",
+            "cacheVariables": {
+                "IDF_TARGET": "esp32",
+                "SDKCONFIG": "${sourceDir}/sdkconfig.gate",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults"
+            }
+        },
+        {
+            "name": "f8",
+            "displayName": "KinCony F8 (ESP32-S3, W5500)",
+            "binaryDir": "build-f8",
+            "cacheVariables": {
+                "IDF_TARGET": "esp32s3",
+                "SDKCONFIG": "${sourceDir}/sdkconfig.f8",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.f8"
+            }
+        },
+        {
+            "name": "a8v3",
+            "displayName": "KinCony KC868-A8v3 (ESP32-S3, W5500)",
+            "binaryDir": "build-a8v3",
+            "cacheVariables": {
+                "IDF_TARGET": "esp32s3",
+                "SDKCONFIG": "${sourceDir}/sdkconfig.a8v3",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.a8v3"
+            }
+        }
+    ]
+}

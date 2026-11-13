@@ -9,6 +9,7 @@ binaries can be used without rebuilding. Everything in namespace "cfg":
     pin (str)                        - CLU private key / PIN (8 characters, from the CLU sticker)
     wifi_ssid, wifi_pass             - WiFi station (boards with WiFi)
     mqtt_uri, mqtt_user, mqtt_pass   - MQTT broker (empty URI = MQTT off)
+    ota_pass                         - password for network updates (POST /ota, 8..64 bytes)
 
 Options left out are not written: the firmware then uses its compiled-in default (WiFi / MQTT),
 or keeps the serial / PIN it has (random on first boot, shown in the boot log).
@@ -70,6 +71,8 @@ def main():
     ap.add_argument("--mqtt-uri", help="mqtt://host:1883, mqtts://host:8883, ws://..., wss://... ('' = MQTT off)")
     ap.add_argument("--mqtt-user")
     ap.add_argument("--mqtt-pass")
+    ap.add_argument("--ota-pass", type=limited("OTA password", 8, 64),
+                    help="enables firmware updates over HTTP (POST /ota) with this password")
     ap.add_argument("-o", "--output", default="cfg.bin", help="output image (default: cfg.bin)")
     ap.add_argument("--csv", help="also write the generator CSV here (contains the secrets in clear text)")
     a = ap.parse_args()
@@ -82,6 +85,7 @@ def main():
     cfg += [[k, "data", "string", v] for k, v in (
         ("wifi_ssid", a.wifi_ssid), ("wifi_pass", a.wifi_pass),
         ("mqtt_uri", a.mqtt_uri), ("mqtt_user", a.mqtt_user), ("mqtt_pass", a.mqtt_pass),
+        ("ota_pass", a.ota_pass),
     ) if v is not None]
     if not cfg:
         ap.error("nothing to store: give at least one option")

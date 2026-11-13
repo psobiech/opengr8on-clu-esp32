@@ -20,6 +20,7 @@ test/host/test_localio_a8v3
 test/host/test_sys
 test/host/test_tftp
 test/host/test_telnet
+test/host/test_ota
 test/host/test_mqttc
 test/host/test_lua
 test/host/test_main

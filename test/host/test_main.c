@@ -19,6 +19,10 @@ static const char *cfg_bssid = "";
 #define CONFIG_CLU_TELNET_MAX_CLIENTS 2
 #define CONFIG_CLU_TELNET_HISTORY     4096
 #define CONFIG_CLU_TELNET_ALLOW       "192.168.1.0/24"
+#define CONFIG_CLU_OTA                1
+#define CONFIG_CLU_OTA_PASSWORD       "menupass"
+#define CONFIG_CLU_OTA_PORT           8080
+#define CONFIG_CLU_OTA_CORS_ORIGIN    "https://example.github.io"
 #define CONFIG_CLU_RS485_UART         1
 #define CONFIG_CLU_RS485_TX_GPIO      17
 #define CONFIG_CLU_RS485_RX_GPIO      18
@@ -77,13 +81,15 @@ esp_err_t nvs_flash_erase(void) { L("nvs_erase"); return ESP_OK; }
 esp_err_t clu_crypto_init(void) { L("crypto"); return ESP_OK; }
 void clu_state_load(void) { L("state_load"); }
 // NVS cfg/* settings: key -> value (NULL = not provisioned)
-static const char *s_set_wifi_ssid, *s_set_wifi_pass, *s_set_mqtt_uri = "mqtt://10.0.0.5", *s_set_mqtt_user;
+static const char *s_set_wifi_ssid, *s_set_wifi_pass, *s_set_mqtt_uri = "mqtt://10.0.0.5", *s_set_mqtt_user,
+                  *s_set_ota_pass = "cfgpass1";
 const char *clu_state_setting(const char *key, const char *fallback)
 {
     const char *v = !strcmp(key, "wifi_ssid") ? s_set_wifi_ssid
                   : !strcmp(key, "wifi_pass") ? s_set_wifi_pass
                   : !strcmp(key, "mqtt_uri")  ? s_set_mqtt_uri
-                  : !strcmp(key, "mqtt_user") ? s_set_mqtt_user : NULL;
+                  : !strcmp(key, "mqtt_user") ? s_set_mqtt_user
+                  : !strcmp(key, "ota_pass")  ? s_set_ota_pass : NULL;
     return v ? v : fallback;
 }
 static clu_telnet_cfg_t s_tc;
@@ -164,6 +170,9 @@ void clu_mqtt_start(void) { L("mqtt_start"); }
 void clu_mqtt_set_enabled(bool on) { L("mqtt(%d)", on); }
 bool clu_mqtt_connected(void) { return false; }
 void clu_sysinfo_init(void) { L("sysinfo"); }
+static clu_ota_cfg_t s_oc;
+bool clu_ota_start(const clu_ota_cfg_t *c) { s_oc = *c; L("ota_start"); return true; }
+void clu_ota_confirm(void) { L("ota_confirm"); }
 static clu_lua_cfg_t s_lc;
 void clu_lua_start(const clu_lua_cfg_t *c) { s_lc = *c; L("lua_start"); }
 void clu_tftp_init(const char *root) { L("tftp(%s)", root); }
@@ -186,7 +195,7 @@ int main(void)
               "(no wait for an IP), services, TFTP, UDP before Lua",
               "nvs_init crypto state_load telnet_init time_init mount(/fs,storage,1) config_files " BUS_BOOT
               "netif handler(IP_EVENT,0) handler(IP_EVENT,4) net_init(wifi,sta) wifi_init handler(WIFI_EVENT,-1) "
-              "wifi_config ps(0) wifi_start txpower(60) sntp telnet_start mqtt_init sysinfo tftp(/fs) udp_start "
+              "wifi_config ps(0) wifi_start txpower(60) sntp telnet_start ota_start mqtt_init sysinfo tftp(/fs) udp_start "
               "lua_start ");
     check("storage: a:\\ and p:\\ created", !strcmp(s_mkdirs, "/fs/a /fs/p "));
     check("telnet config from Kconfig", s_tc.port == 23 && s_tc.max_clients == 2 && s_tc.history == 4096 &&
@@ -202,6 +211,8 @@ int main(void)
           !strcmp((char *)s_wc.sta.ssid, "HomeNet") && !strcmp((char *)s_wc.sta.password, "secretpw") &&
               s_wc.sta.threshold.authmode == WIFI_AUTH_WPA2_PSK && s_wc.sta.sae_pwe_h2e == WPA3_SAE_PWE_BOTH &&
               s_wc.sta.pmf_cfg.capable && !s_wc.sta.bssid_set);
+    check("OTA: port / CORS origin from Kconfig, password from the cfg partition", s_oc.port == 8080 && !strcmp(s_oc.password, "cfgpass1") &&
+              !strcmp(s_oc.cors_origin, "https://example.github.io"));
     check("MQTT: serial, firmware version, CA path on a:\\",
           s_mc.sn == 330017203 && !strcmp(s_mc.fw_version, "1.0.0") && !strcmp(s_mc.ca_path, "/fs/a/MQTT_CA.PEM"));
     check("MQTT: broker URI from NVS, unset user / password left to menuconfig (NULL)",
@@ -235,9 +246,10 @@ int main(void)
     ip_event_got_ip_t ip = {.ip_info.ip.addr = 0x1401a8c0};
     s_log[0] = 0;
     s_ip_handler(NULL, IP_EVENT, IP_EVENT_STA_GOT_IP, &ip);
-    check_log("WiFi got IP: setup window armed, SNTP polls now", "net_up sntp_restart mqtt_start ");
+    check_log("WiFi got IP: setup window armed, SNTP polls now, OTA image confirmed",
+              "net_up sntp_restart mqtt_start ota_confirm ");
     s_ip_handler(NULL, IP_EVENT, IP_EVENT_ETH_GOT_IP, &ip);
-    check_log("Ethernet got IP: the same", "net_up sntp_restart mqtt_start ");
+    check_log("Ethernet got IP: the same", "net_up sntp_restart mqtt_start ota_confirm ");
 
 #if CONFIG_CLU_WIFI
     // ---- prebuilt firmware: WiFi credentials from NVS win over menuconfig; no SSID -> WiFi off

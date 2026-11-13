@@ -33,7 +33,7 @@ export function crc32(data, prev = 0) {
 const enc = new TextEncoder();
 
 /** Settings keys in the order tools/mknvs.py writes them. */
-export const KEYS = ["sn", "pin", "wifi_ssid", "wifi_pass", "mqtt_uri", "mqtt_user", "mqtt_pass"];
+export const KEYS = ["sn", "pin", "wifi_ssid", "wifi_pass", "mqtt_uri", "mqtt_user", "mqtt_pass", "ota_pass"];
 
 /**
  * Validate the settings (same rules as tools/mknvs.py). Empty / undefined = not written.
@@ -51,6 +51,8 @@ export function validate(s) {
   if (s.wifi_ssid && len(s.wifi_ssid) > 32) err.push({ key: "err_ssid" });
   if (s.wifi_pass && (len(s.wifi_pass) < 8 || len(s.wifi_pass) > 63))
     err.push({ key: "err_wifi_pass" });
+  if (s.ota_pass && (len(s.ota_pass) < 8 || len(s.ota_pass) > 64))
+    err.push({ key: "err_ota_pass" });
   for (const k of ["mqtt_uri", "mqtt_user", "mqtt_pass"])
     if (s[k] && len(s[k]) > 1000) err.push({ key: "err_too_long", vars: { key: k } });
   return err;
@@ -58,7 +60,7 @@ export function validate(s) {
 
 /**
  * Build the cfg partition image.
- * @param {object} s {sn, pin, wifi_ssid, wifi_pass, mqtt_uri, mqtt_user, mqtt_pass}; values that
+ * @param {object} s {sn, pin, wifi_ssid, wifi_pass, mqtt_uri, mqtt_user, mqtt_pass, ota_pass}; values that
  *   are undefined / "" are left out (mqtt_uri: pass {mqtt_uri: "", mqtt_off: true} to store "").
  * @returns {Uint8Array} CFG_SIZE bytes
  */

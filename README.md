@@ -59,6 +59,7 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 | `components/clu_tftp` | serwer TFTP (a:\ i p:\) |
 | `components/clu_telnet` | konsola logów (TCP 23, tylko odczyt) |
 | `components/clu_mqtt` | MQTT + discovery Home Assistant |
+| `components/clu_ota` | aktualizacja firmware przez HTTP z hasłem (`POST /ota`), potwierdzanie nowego obrazu |
 | `components/clu_rtc` | zegar RTC PCF85063 albo DS3231 na I2C (podtrzymywany bateryjnie) |
 | `components/clu_i2c` | wspólne magistrale I2C (jedna na parę pinów: RTC + ekspander IO) |
 | `components/clu_localio` | IO płytki (PCF8575) jako moduł IO_MODULE_DIN_8 odpowiadający na ramki TF-Bus |
@@ -137,6 +138,7 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
   metody.
 - **`MQTT.*` w USER.LUA** — własne mapowania encji, ukrywanie, publikowanie dowolnych tematów.
 - **Bez chmury Grentona** — OM nie rejestruje CLU w chmurze (zob. niżej).
+- **Aktualizacja firmware przez sieć** (OTA, HTTP z hasłem, cofanie nieudanej aktualizacji).
 - **Lua 5.5** jako opcja kompilacji.
 - **Wzmocnienia bezpieczeństwa** zgodne z OM; jedyna zmiana obsługi: discovery, klucz i TFTP tylko w oknie
   konfiguracji po starcie lub po wciśnięciu BOOT (zob. [Bezpieczeństwo](#bezpieczeństwo)).
@@ -159,7 +161,8 @@ Piny, profile i uwagi do każdej płytki: [DEVICES.md](DEVICES.md).
 
 Bez instalowania ESP-IDF. Każde wydanie na stronie
 [Releases](https://github.com/psobiech/opengr8on-clu-esp32/releases) ma dla każdej płytki pełny
-obraz `opengr8on-clu-<płytka>-<wersja>.bin`:
+obraz `opengr8on-clu-<płytka>-<wersja>.bin` (instalacja / aktualizacja przez USB) i sam obraz
+aplikacji `opengr8on-clu-<płytka>-<wersja>-ota.bin` ([aktualizacja przez sieć](#aktualizacja-przez-sieć-ota)):
 
 | Płytka | `<płytka>` | Układ | Sieć |
 |---|---|---|---|
@@ -178,12 +181,49 @@ z powrotem). Obraz ustawień powstaje w przeglądarce (ten sam co z `mknvs.py`,
 hasła nigdzie nie są wysyłane); można go też pobrać jako `cfg.bin`. Flasher sprawdza, czy obraz
 pasuje do podłączonego układu, a po wgraniu pokazuje log UART.
 
+### Aktualizacja przez sieć (OTA)
+
+Z hasłem OTA (`--ota-pass` w `mknvs.py`, pole w flasherze w przeglądarce albo `CLU_OTA_PASSWORD`)
+CLU przyjmuje nowy firmware przez HTTP — obraz aplikacji `opengr8on-clu-<płytka>-<wersja>-ota.bin`
+z wydania (w paczce / artefakcie `opengr8on-clu-<płytka>-ota.bin`, to samo co
+`opengr8on_clu_esp32.bin` z budowania; nie pełny obraz). Bez hasła serwer nie startuje.
+
+**Z przeglądarki:** otwórz `http://IP_CLU:8080/`, wybierz plik, wpisz hasło, **Update**. Strona
+najpierw sprawdza hasło, potem wysyła obraz z paskiem postępu; po restarcie (~20 s) pokazuje nową
+wersję. Działa w każdej przeglądarce (strona i `/ota` to ten sam adres).
+
+**Z linii poleceń:**
+
+```bash
+curl -u ota:HASLO --data-binary @opengr8on-clu-gate-v0.0.3-ota.bin http://IP_CLU:8080/ota
+```
+
+Nazwa użytkownika jest dowolna. Obraz trafia do drugiego slotu OTA, jest weryfikowany (układ,
+SHA-256, nazwa projektu), a CLU restartuje się do niego; ustawienia, stan i dysk `a:\` zostają.
+Bootloader cofa do poprzedniego firmware, jeśli nowy zrestartuje się, zanim dostanie IP
+(`BOOTLOADER_APP_ROLLBACK_ENABLE`; wymaga bootloadera z tej wersji lub nowszej, wgranego raz przez
+USB/UART). Odpowiedzi: `200` — wgrane, restart; `401` — złe hasło (każda próba ~2 s); `400` — nie ten
+plik / inny układ; `411` — brak obrazu; `413` — obraz większy niż slot.
+
+**Z [flashera w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/):** tryb **Przez sieć
+(OTA)** w kroku 3 (domyślnie nadal wgrywanie przez USB) — adres CLU i hasło OTA; przyjmuje pełny
+obraz z wydania (wycina z niego aplikację) albo `…-ota.bin`. CLU wysyła nagłówki
+CORS dla `CLU_OTA_CORS_ORIGIN` (domyślnie `https://psobiech.github.io`), ale strona HTTPS dosięgnie
+adresu HTTP w sieci lokalnej tylko w przeglądarce z dostępem do sieci lokalnej (Chrome, po zgodzie
+użytkownika). Gdy połączenie zostanie zablokowane (Firefox, Safari, odmowa), flasher daje link do
+strony samej CLU i zapisuje obraz aplikacji do wybrania tam.
+
+Uwaga: obraz `waveshare`, `f8` i `a8v3` to ten sam układ (`esp32s3`) — CLU nie odróżni płytki,
+wgraj obraz właściwy dla swojej.
+
 ### Wgrywanie z linii poleceń
 
 Do linii poleceń służy `opengr8on-clu-<płytka>-<wersja>.zip` z wydania (ta sama zawartość co
 artefakt z GitHub Actions):
 
 - `opengr8on-clu-<płytka>-full.bin`: pełny obraz od adresu `0x0` (ten sam co `.bin` wydania),
+- `opengr8on-clu-<płytka>-ota.bin`: sam obraz aplikacji do aktualizacji przez sieć (ten sam co
+  `-ota.bin` wydania),
 - osobne obrazy i `flash_args`: aktualizacja bez kasowania ustawień — pełny obraz nadpisuje też
   partycje `nvs` (`0x9000`) i `cfg` (`0x12000`) leżące przed aplikacją,
 - `mknvs.py`: obraz ustawień (`cfg.bin`),
@@ -228,6 +268,7 @@ esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash 0x12000 cfg.bin
 | `--wifi-ssid`, `--wifi-pass` | `cfg/wifi_ssid`, `cfg/wifi_pass` | sieć WiFi; tylko obraz `waveshare` (płytki z Ethernetem są budowane bez WiFi) |
 | `--mqtt-uri` | `cfg/mqtt_uri` | broker, np. `mqtt://192.168.1.10:1883`, `mqtts://host:8883`; puste = MQTT wyłączone |
 | `--mqtt-user`, `--mqtt-pass` | `cfg/mqtt_user`, `cfg/mqtt_pass` | dane logowania do brokera |
+| `--ota-pass` | `cfg/ota_pass` | hasło aktualizacji przez sieć, 8..64 bajty (zob. [Aktualizacja przez sieć](#aktualizacja-przez-sieć-ota)); pominięte = OTA wyłączone |
 
 Obraz zastępuje tylko partycję `cfg`: stan zapisywany w czasie pracy (partycja `nvs`: klucze
 projektu z OM, statyczne IP, lista modułów TF-Bus, czas) zostaje, więc ustawienia można zmieniać w
@@ -251,7 +292,7 @@ Grenton GATE: `--chip esp32`, w pozostałych przykładach bez zmian.
 
 Workflow **Firmware** buduje każdy push na `develop` / `main` (bez wydania): zakładka **Actions** →
 przebieg *Firmware* → **Artifacts**. Zawartość jak `.zip` wydania (zob. wyżej); do flashera wybierz z
-niego `…-full.bin`.
+niego `…-full.bin` (USB) albo `…-ota.bin` (przez sieć).
 
 ### Wymagania do budowania
 
@@ -360,6 +401,10 @@ zapisane w NVS albo losowe przy pierwszym starcie.
 | `CLU_TELNET` | y | konsola logów |
 | `CLU_TELNET_PORT` / `MAX_CLIENTS` / `HISTORY` | 23 / 2 / 8192 | port, liczba klientów, bufor historii |
 | `CLU_TELNET_ALLOW` | puste (wszyscy) | dozwolone adresy: IP lub CIDR |
+| `CLU_OTA` | y | aktualizacja przez sieć ([OTA](#aktualizacja-przez-sieć-ota)) |
+| `CLU_OTA_PASSWORD` | puste (wyłączone) | hasło OTA, 8..64 znaki; `cfg/ota_pass` z partycji `cfg` ma pierwszeństwo |
+| `CLU_OTA_PORT` | 8080 | port HTTP (strona aktualizacji pod `/`) |
+| `CLU_OTA_CORS_ORIGIN` | `https://psobiech.github.io` | strona, która może wywołać `POST /ota` z przeglądarki (CORS); puste = tylko strona CLU |
 
 ### Projekt
 
@@ -516,6 +561,7 @@ make -C test/host coverage                        # pokrycie C (gcov) i Lua; FAI
 | `test_master` | master magistrali na symulowanej magistrali (adresowanie, discovery, odpytywanie) |
 | `test_prelude.lua` | model obiektów Lua, obiekty wirtualne, OM.LUA z `fixtures/` |
 | `test/web/test_nvs.mjs` | obraz ustawień z flashera (`web/nvs.js`) bajt w bajt jak `tools/mknvs.py` (`node test/web/test_nvs.mjs`) |
+| `test/web/test_ota.mjs` | aktualizacja przez sieć we flasherze (`web/ota.js`): wycinanie obrazu aplikacji z pełnego obrazu, adres CLU, Basic auth |
 | `test_mqtt.lua` | mapowanie encji HA, tematy, surowe API |
 | `test_udp` | serwer UDP (`main/udp_server.c`): discovery, klucze, `req:`, TFTP/diagnostyka, reset, wywołania zdalnych CLU, okno konfiguracji i przycisk |
 | `test_uart` | transport RS485 (`tfbus_uart.c`) na symulowanym sterowniku UART: echo, odpowiedzi dzielone, timeouty, lokalne moduły |
@@ -575,6 +621,12 @@ wymaga tylko `gcc`/`gcov`, `python3` i `luac$(LUA)`.
   API jest dekodowany, nigdy nie przechodzi przez `load`. Mimo to przy włączonym
   `CLU_MQTT_OBJECT_API` każdy, kto może publikować pod `<base>/`, steruje każdym obiektem —
   **ogranicz to przez ACL brokera** i używaj osobnego użytkownika dla CLU.
+- **OTA tylko z hasłem:** bez hasła (`cfg/ota_pass` / `CLU_OTA_PASSWORD`) serwer HTTP nie startuje.
+  Hasło jest porównywane w stałym czasie, a każda błędna próba kosztuje ~2 s (jedno żądanie naraz).
+  To zwykły HTTP z Basic auth — **hasło idzie przez sieć jawnym tekstem**, więc aktualizuj z
+  zaufanej sieci lokalnej i nie używaj tego hasła nigdzie indziej. Firmware nie jest podpisany:
+  kto zna hasło, może wgrać dowolny obraz z tą samą nazwą projektu.
+  CORS (`CLU_OTA_CORS_ORIGIN`) wpuszcza tylko jedną stronę i nie zastępuje hasła; puste = wyłączone.
 - **Brak połączeń z chmurą Grentona** (zastępczy `CLOUD-PUBLIC.CRT`).
 
 ### Ograniczenia wynikające z protokołu Grentona

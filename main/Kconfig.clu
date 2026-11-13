@@ -432,6 +432,47 @@ menu "OpenGr8on ESP32 CLU"
 
     endmenu
 
+    menu "OpenGr8on OTA updates"
+
+        config CLU_OTA
+            bool "Firmware update over the network (HTTP, password)"
+            default y
+            help
+                POST the application image (release asset opengr8on-clu-<board>-<version>-ota.bin, or the
+                build's opengr8on_clu_esp32.bin; not the full image) to
+                http://<CLU IP>:<port>/ota with HTTP Basic auth (any user name, the OTA password):
+                  curl -u ota:PASSWORD --data-binary @opengr8on-clu-gate-v1.0.0-ota.bin http://CLU_IP:8080/ota
+                The image is verified (chip, SHA-256, project name) before it becomes the boot
+                image; the CLU then restarts. With bootloader rollback on, an image that restarts
+                before it gets an IP is replaced by the previous one.
+                The server only starts with a password: cfg partition ota_pass (tools/mknvs.py,
+                web flasher) over CLU_OTA_PASSWORD. Plain HTTP: the password is sent in clear text.
+
+        config CLU_OTA_PASSWORD
+            string "Password (8..64 characters, empty = off unless set in the cfg partition)"
+            default ""
+            depends on CLU_OTA
+
+        config CLU_OTA_PORT
+            int "HTTP port"
+            range 1 65535
+            default 8080
+            depends on CLU_OTA
+            help
+                http://<CLU IP>:<port>/ also serves an upload page (file + password).
+
+        config CLU_OTA_CORS_ORIGIN
+            string "Browser origin allowed to upload (CORS, empty = only the CLU's own page)"
+            default "https://psobiech.github.io"
+            depends on CLU_OTA
+            help
+                Lets the hosted web flasher call POST /ota directly. Browsers block HTTPS pages
+                from reaching plain-HTTP LAN addresses unless they support local network access
+                (Chrome asks for permission); the CLU's own page works everywhere. The password is
+                still required.
+
+    endmenu
+
     menu "OpenGr8on MQTT / Home Assistant"
 
         config CLU_MQTT_BROKER_URI

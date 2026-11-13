@@ -6,7 +6,7 @@
  * storage (a:\\, p:\\),
  * config files, RS485 + TFBUS master and drivers (CLU_TFBUS) with the on-board IO modules (CLU_LOCAL_IO),
  * network (WiFi and / or Ethernet), SNTP,
- * telnet server, MQTT, TFTP, the UDP/1234 CLU protocol server and the Lua runtime.
+ * telnet server, OTA updates (HTTP), MQTT, TFTP, the UDP/1234 CLU protocol server and the Lua runtime.
  *
  * Nothing waits for an IP: the bus and the local scripts run without the network. Network
  * services (SNTP, MQTT, telnet, UDP) bind to INADDR_ANY / retry on their own and pick the IP up
@@ -23,6 +23,7 @@
 #include "clu_localio.h"
 #endif
 #include "clu_mqtt.h"
+#include "clu_ota.h"
 #include "clu_net.h"
 #include "clu_time.h"
 #include "clu_state.h"
@@ -62,6 +63,7 @@ static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
     udp_server_net_up();
     esp_sntp_restart(); // first poll now instead of at the next retry after a failed early one
     clu_mqtt_start(); // MQTT does not wait for the Lua scripts (SYSTEM.Init)
+    clu_ota_confirm(); // a fresh OTA image that reached the network is kept (no rollback)
 }
 
 #if CONFIG_CLU_WIFI
@@ -301,6 +303,15 @@ void app_main(void)
     clu_time_start_sntp();
 #if CONFIG_CLU_TELNET
     clu_telnet_start();
+#endif
+#if CONFIG_CLU_OTA
+    const clu_ota_cfg_t oc = {
+        .port = CONFIG_CLU_OTA_PORT,
+        // cfg partition (prebuilt firmware) over menuconfig; empty = no network updates
+        .password = clu_state_setting("ota_pass", CONFIG_CLU_OTA_PASSWORD),
+        .cors_origin = CONFIG_CLU_OTA_CORS_ORIGIN,
+    };
+    clu_ota_start(&oc);
 #endif
     const clu_mqtt_cfg_t mc = {
         .sn = g_clu.sn,

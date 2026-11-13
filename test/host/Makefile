@@ -98,6 +98,10 @@ test_tftp: test_tftp.c $(COMP)/clu_tftp/clu_tftp.c $(PROTO)/tftp_proto.c $(STUBS
 test_telnet: test_telnet.c $(COMP)/clu_telnet/clu_telnet.c $(STUBS) $(HDRS)
 	$(TCC) $(HOST_CFLAGS) -Istubs -I$(COMP)/clu_telnet/include -o $@ test_telnet.c
 
+# Network updates (clu_ota.c, included by the test) against a fake HTTP server and OTA API.
+test_ota: test_ota.c $(COMP)/clu_ota/clu_ota.c $(STUBS) $(HDRS)
+	$(TCC) $(HOST_CFLAGS) -Istubs -I$(COMP)/clu_ota/include -o $@ test_ota.c
+
 # MQTT link (clu_mqtt.c, included by the test) against a fake esp-mqtt client.
 test_mqttc: test_mqttc.c $(COMP)/clu_mqtt/clu_mqtt.c liblua_host.a $(STUBS) $(HDRS)
 	$(TCC) $(HOST_CFLAGS) -Istubs -I$(LUA_DIR) -I$(COMP)/clu_lua/include -I$(COMP)/clu_mqtt/include \
@@ -124,7 +128,7 @@ test_time_nortc: test_time_nortc.c nortc_clu_time.o fake_nvs.h $(STUBS) $(HDRS)
 
 # Boot wiring (main.c, included by the test): every module / ESP-IDF call stubbed and logged.
 MAIN_INC := -Istubs -I$(MAIN) -I$(PROTO)/include -I$(LUA_DIR) $(addprefix -I$(COMP)/,$(addsuffix /include,\
-            clu_crypto clu_lua clu_mqtt clu_telnet clu_tftp tfbus_drivers tfbus_master tfbus_uart))
+            clu_crypto clu_lua clu_mqtt clu_ota clu_telnet clu_tftp tfbus_drivers tfbus_master tfbus_uart))
 test_main: test_main.c $(MAIN)/main.c $(STUBS) $(HDRS)
 	$(TCC) $(HOST_CFLAGS) $(MAIN_INC) -o $@ test_main.c -lm
 
@@ -143,7 +147,7 @@ test_crypto: test_crypto.c $(COMP)/clu_crypto/clu_crypto.c $(PROTO)/clu_keys.c
 
 HAVE_MBEDTLS3 := $(wildcard $(MBEDTLS3_INC)/psa/crypto.h)
 
-C_TESTS := test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc $(if $(HAVE_MBEDTLS3),test_crypto)
+C_TESTS := test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc $(if $(HAVE_MBEDTLS3),test_crypto)
 
 .PHONY: test test-c clean coverage
 test: test-c test-lua
@@ -161,6 +165,7 @@ test-c: $(C_TESTS)
 	ASAN_OPTIONS=detect_leaks=0 ./test_sys 2>/dev/null
 	./test_tftp 2>/dev/null
 	./test_telnet 2>/dev/null
+	./test_ota 2>/dev/null
 	ASAN_OPTIONS=detect_leaks=0 ./test_mqttc 2>/dev/null
 	ASAN_OPTIONS=detect_leaks=0 ./test_lua 2>/dev/null
 	./test_main 2>/dev/null
@@ -169,7 +174,7 @@ test-c: $(C_TESTS)
 	$(if $(HAVE_MBEDTLS3),./test_crypto,@echo "skip test_crypto: no $(MBEDTLS3_INC)/psa/crypto.h")
 
 clean:
-	rm -f test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc test_crypto liblua_host.a *.o
+	rm -f test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc test_crypto liblua_host.a *.o
 	rm -rf *.gcda *.gcno coverage
 
 # Prelude (Lua object model) + MQTT/Home Assistant (clu_mqtt/mqtt.lua) tests; needs lua$(LUA) on the host. Pass OM=<path> to also load a real OM.LUA.

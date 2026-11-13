@@ -20,5 +20,10 @@ CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
 CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
 CONFIG_HEAP_POISONING_LIGHT=y
 
-# Sockets: UDP/1234, TFTP (+transfer), MQTT, SNTP, DNS, telnet listener + clients
+# Sockets: UDP/1234, TFTP (+transfer), MQTT, SNTP, DNS, telnet listener + clients,
+# OTA HTTP server (listener, control socket, 2 clients)
 CONFIG_LWIP_MAX_SOCKETS=16
+
+# OTA (components/clu_ota): a new image that restarts before it reaches the network (clu_ota_confirm)
+# is rolled back to the previous one by the bootloader.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

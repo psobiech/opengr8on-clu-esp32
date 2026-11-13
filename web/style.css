@@ -61,6 +61,13 @@ button {
 }
 button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 button:disabled { opacity: 0.5; cursor: default; }
+a.button {
+  display: inline-block; font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--fg); text-decoration: none;
+}
+a.button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+#ota-net { margin-top: 12px; }
+.ota-fallback { margin-top: 12px; }
 .hint, small { color: var(--muted); font-size: 0.9rem; }
 .info { color: var(--muted); min-height: 1.5em; }
 .info.ok { color: var(--accent); }
@@ -80,6 +87,8 @@ label.lang select {
   border: 1px solid var(--line); border-radius: 6px;
 }
 fieldset:disabled { opacity: 0.55; }
+#s2.off label.write-cfg, label.check:has(input:disabled) { opacity: 0.55; }
+#ota-mode-hint { display: block; }
 label.write-cfg { margin: 0 0 4px; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; }
 #mon { margin-top: 16px; }

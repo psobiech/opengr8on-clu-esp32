@@ -38,13 +38,14 @@
     <p id="fw-info" class="info" aria-live="polite"></p>
   </section>
 
-  <section>
+  <section id="s2">
     <h2><span class="step">2</span> <span data-i18n="s2_title"></span></h2>
     <p data-i18n-html="s2_text"></p>
     <form id="cfg" autocomplete="off">
       <label class="check write-cfg"><input type="checkbox" id="write-cfg">
         <span data-i18n-html="cfg_write"></span></label>
       <p class="hint" id="cfg-keep-hint" data-i18n="cfg_keep_hint"></p>
+      <p class="hint" id="cfg-ota-hint" data-i18n="cfg_ota_hint" hidden></p>
       <fieldset class="cfg-fields">
         <legend data-i18n="lg_identity"></legend>
         <label><span data-i18n="l_sn"></span> <input name="sn" inputmode="numeric" placeholder="221010155"></label>
@@ -62,6 +63,11 @@
         <label><span data-i18n="l_pass"></span> <input name="mqtt_pass" type="password"></label>
         <label class="check"><input type="checkbox" name="mqtt_off"> <span data-i18n="mqtt_off"></span></label>
       </fieldset>
+      <fieldset class="cfg-fields">
+        <legend data-i18n="lg_ota"></legend>
+        <label><span data-i18n="l_pass"></span> <input name="ota_pass" type="password" maxlength="64"></label>
+        <p class="hint" data-i18n-html="ota_hint"></p>
+      </fieldset>
       <p id="cfg-errors" class="warn" aria-live="polite"></p>
       <button type="button" id="download" data-i18n="download"></button>
       <span class="hint" data-i18n-html="download_hint"></span>
@@ -77,14 +83,32 @@
         <span data-i18n-html="m_update"></span></label>
       <label class="check"><input type="radio" name="mode" value="settings">
         <span data-i18n-html="m_settings"></span></label>
+      <label class="check"><input type="radio" name="mode" value="ota">
+        <span><span data-i18n-html="m_ota"></span>
+          <small id="ota-mode-hint" data-i18n="ota_mode_off" hidden></small></span></label>
     </fieldset>
-    <p class="hint" data-i18n="boot_hint"></p>
+    <fieldset id="ota-net" hidden>
+      <legend data-i18n="lg_ota_net"></legend>
+      <label><span data-i18n="l_clu_addr"></span>
+        <input id="ota-host" placeholder="192.168.1.50" autocomplete="off" spellcheck="false"></label>
+      <label><span data-i18n="l_ota_pass"></span>
+        <input id="ota-pw" type="password" maxlength="64" autocomplete="off"></label>
+      <p class="hint" data-i18n-html="ota_net_hint"></p>
+    </fieldset>
+    <p class="hint" id="boot-hint" data-i18n="boot_hint"></p>
     <div class="actions">
       <button type="button" id="flash" class="primary" data-i18n="flash_btn"></button>
       <button type="button" id="mon-open" data-i18n="mon_open"></button>
     </div>
     <progress id="progress" max="1" value="0" hidden></progress>
     <pre id="log" aria-live="polite"></pre>
+    <div id="ota-fallback" class="ota-fallback" hidden>
+      <p class="warn" data-i18n="ota_blocked"></p>
+      <div class="actions">
+        <a id="ota-open" class="button primary" target="_blank" rel="noopener" data-i18n="ota_open"></a>
+        <a id="ota-save" class="button" download="opengr8on_clu_esp32.bin" data-i18n="ota_save_app"></a>
+      </div>
+    </div>
     <div id="mon" hidden>
       <div class="mon-bar">
         <strong data-i18n="mon_title"></strong>

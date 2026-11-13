@@ -58,6 +58,10 @@ jobs:
           python3 -m pip install --user --break-system-packages esp-idf-nvs-partition-gen
           node test/web/test_nvs.mjs
 
+      # web/ota.js (network update: application image out of the full image, CLU address, auth)
+      - name: Web flasher network update
+        run: node test/web/test_ota.mjs
+
       - name: Tests with coverage
         run: |
           make -C test/host coverage \

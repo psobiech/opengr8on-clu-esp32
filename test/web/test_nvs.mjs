@@ -16,7 +16,8 @@ const check = (name, ok) => {
 };
 
 const ARGS = { sn: "--serial", pin: "--pin", wifi_ssid: "--wifi-ssid", wifi_pass: "--wifi-pass",
-               mqtt_uri: "--mqtt-uri", mqtt_user: "--mqtt-user", mqtt_pass: "--mqtt-pass" };
+               mqtt_uri: "--mqtt-uri", mqtt_user: "--mqtt-user", mqtt_pass: "--mqtt-pass",
+               ota_pass: "--ota-pass" };
 const dir = mkdtempSync(join(tmpdir(), "cfgnvs-"));
 function reference(s) {
   const out = join(dir, "ref.bin");
@@ -31,7 +32,8 @@ function reference(s) {
 const cases = {
   "identity only": { sn: "221010155", pin: "ABCD1234" },
   "everything": { sn: "4294967295", pin: "Q1w2E3r4", wifi_ssid: "Home,Net \"x\"", wifi_pass: "p\"a,ss word 123",
-                  mqtt_uri: "mqtts://broker.example.org:8883", mqtt_user: "clu", mqtt_pass: "zażółć" },
+                  mqtt_uri: "mqtts://broker.example.org:8883", mqtt_user: "clu", mqtt_pass: "zażółć",
+                  ota_pass: "ota pass \"ż\"" },
   "MQTT off (empty URI stored)": { mqtt_uri: "", mqtt_off: true },
   "long values (multi-entry strings)": { wifi_ssid: "S".repeat(32), wifi_pass: "P".repeat(63),
                                          mqtt_uri: "ws://" + "h".repeat(200) + "/mqtt" },
@@ -47,9 +49,10 @@ try {
     check(`${name}: identical to mknvs.py`, mine.length === ref.length && diff < 0);
     if (diff >= 0) console.log(`  first difference at 0x${diff.toString(16)}`);
   }
-  check("validate: bad PIN / serial / WiFi password rejected",
+  check("validate: bad PIN / serial / WiFi / OTA password rejected",
         validate({ pin: "abc" }).length === 1 && validate({ sn: "0" }).length === 1 &&
         validate({ sn: "12a" }).length === 1 && validate({ wifi_pass: "short" }).length === 1 &&
+        validate({ ota_pass: "short" }).length === 1 && validate({ ota_pass: "o".repeat(65) }).length === 1 &&
         validate({ sn: "221010155", pin: "ABCD1234" }).length === 0);
   let threw = false;
   try { buildCfgImage({ pin: "x" }); } catch { threw = true; }

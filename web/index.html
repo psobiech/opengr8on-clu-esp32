@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flasher opengr8on CLU</title>
+  <meta name="description" content="Instalacja i aktualizacja firmware opengr8on ESP32 CLU i jego ustawień z przeglądarki.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <div class="top">
+      <h1 data-i18n="title">Flasher opengr8on CLU</h1>
+      <label class="lang"><span data-i18n="lang">Język</span>
+        <select id="lang"></select>
+      </label>
+    </div>
+    <p data-i18n="intro"></p>
+    <p id="no-serial" class="warn" data-i18n="no_serial" hidden></p>
+  </header>
+
+  <section>
+    <h2><span class="step">1</span> <span data-i18n="s1_title"></span></h2>
+    <p data-i18n-html="s1_text"></p>
+    <table class="boards">
+      <thead><tr><th data-i18n="th_board"></th><th data-i18n="th_file"></th><th data-i18n="th_net"></th></tr></thead>
+      <tbody>
+        <tr><td>Waveshare ESP32-S3-RS485-CAN</td><td><code>waveshare</code></td><td>WiFi</td></tr>
+        <tr><td>Grenton GATE</td><td><code>gate</code></td><td data-i18n="net_eth"></td></tr>
+        <tr><td>KinCony F8</td><td><code>f8</code></td><td data-i18n="net_eth"></td></tr>
+        <tr><td>KinCony KC868-A8v3</td><td><code>a8v3</code></td><td data-i18n="net_eth"></td></tr>
+      </tbody>
+    </table>
+    <label class="file"><span data-i18n="fw_label"></span>
+      <input type="file" id="fw" accept=".bin,application/octet-stream">
+    </label>
+    <p id="fw-info" class="info" aria-live="polite"></p>
+  </section>
+
+  <section>
+    <h2><span class="step">2</span> <span data-i18n="s2_title"></span></h2>
+    <p data-i18n-html="s2_text"></p>
+    <form id="cfg" autocomplete="off">
+      <label class="check write-cfg"><input type="checkbox" id="write-cfg">
+        <span data-i18n-html="cfg_write"></span></label>
+      <p class="hint" id="cfg-keep-hint" data-i18n="cfg_keep_hint"></p>
+      <fieldset class="cfg-fields">
+        <legend data-i18n="lg_identity"></legend>
+        <label><span data-i18n="l_sn"></span> <input name="sn" inputmode="numeric" placeholder="221010155"></label>
+        <label><span data-i18n="l_pin"></span> <input name="pin" maxlength="8" data-i18n-placeholder="ph_pin"></label>
+      </fieldset>
+      <fieldset class="cfg-fields">
+        <legend><span data-i18n="lg_wifi"></span> <small data-i18n="wifi_only"></small></legend>
+        <label><span data-i18n="l_ssid"></span> <input name="wifi_ssid" maxlength="32"></label>
+        <label><span data-i18n="l_pass"></span> <input name="wifi_pass" type="password" maxlength="63"></label>
+      </fieldset>
+      <fieldset class="cfg-fields">
+        <legend data-i18n="lg_mqtt"></legend>
+        <label><span data-i18n="l_uri"></span> <input name="mqtt_uri" placeholder="mqtt://192.168.1.10:1883"></label>
+        <label><span data-i18n="l_user"></span> <input name="mqtt_user"></label>
+        <label><span data-i18n="l_pass"></span> <input name="mqtt_pass" type="password"></label>
+        <label class="check"><input type="checkbox" name="mqtt_off"> <span data-i18n="mqtt_off"></span></label>
+      </fieldset>
+      <p id="cfg-errors" class="warn" aria-live="polite"></p>
+      <button type="button" id="download" data-i18n="download"></button>
+      <span class="hint" data-i18n-html="download_hint"></span>
+    </form>
+  </section>
+
+  <section>
+    <h2><span class="step">3</span> <span data-i18n="s3_title"></span></h2>
+    <fieldset class="modes">
+      <label class="check"><input type="radio" name="mode" value="install" checked>
+        <span data-i18n-html="m_install"></span></label>
+      <label class="check"><input type="radio" name="mode" value="update">
+        <span data-i18n-html="m_update"></span></label>
+      <label class="check"><input type="radio" name="mode" value="settings">
+        <span data-i18n-html="m_settings"></span></label>
+    </fieldset>
+    <p class="hint" data-i18n="boot_hint"></p>
+    <button type="button" id="flash" class="primary" data-i18n="flash_btn"></button>
+    <progress id="progress" max="1" value="0" hidden></progress>
+    <pre id="log" aria-live="polite"></pre>
+  </section>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>

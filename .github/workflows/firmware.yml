@@ -63,3 +63,37 @@ jobs:
           name: opengr8on-clu-${{ matrix.preset }}
           path: dist/opengr8on-clu-${{ matrix.preset }}
           if-no-files-found: error
+
+  # Tag v*: GitHub release with one full image per board (what the web flasher and the README
+  # commands take) and the complete per-board artifact as a zip.
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assets
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          mkdir -p assets
+          for dir in artifacts/opengr8on-clu-*; do
+            preset="${dir##*/opengr8on-clu-}"
+            cp "$dir/opengr8on-clu-${preset}-full.bin" "assets/opengr8on-clu-${preset}-${tag}.bin"
+            (cd "$dir" && zip -qr "../../assets/opengr8on-clu-${preset}-${tag}.zip" .)
+          done
+          ls -l assets
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" assets/* --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --generate-notes \
+            $([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease)

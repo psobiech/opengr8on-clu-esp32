@@ -62,6 +62,7 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 | `components/clu_i2c` | wspólne magistrale I2C (jedna na parę pinów: RTC + ekspander IO) |
 | `components/clu_localio` | IO płytki (PCF8575) jako moduł IO_MODULE_DIN_8 odpowiadający na ramki TF-Bus |
 | `tools/mknvs.py` | obraz partycji `cfg` z ustawieniami dla gotowych obrazów (seryjny, PIN, WiFi, MQTT) |
+| `web/` | flasher w przeglądarce (GitHub Pages): obraz z Releases + ustawienia generowane w stronie (`web/nvs.js`) |
 
 Partycje (`partitions.csv`): NVS (klucze, PIN, sieć, czas), `cfg` (12 KB pod `0x12000`, ustawienia
 z `mknvs.py`, firmware tylko je czyta), dwie partycje aplikacji po 4 MB, FAT 6 MB jako `a:\`
@@ -185,9 +186,21 @@ Jednorazowo bez zmiennej: `idf.py --preset gate build`.
 
 ### Gotowe obrazy (GitHub Actions)
 
-Bez instalowania ESP-IDF: workflow **Firmware** buduje każdy preset przy każdym pushu na
-`develop` / `main` i przy tagu `v*`. Obrazy są w zakładce **Actions** → przebieg *Firmware* →
-**Artifacts**:
+Bez instalowania ESP-IDF. Najprościej przez przeglądarkę:
+**[flasher w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/)** (Chrome / Edge na
+komputerze, Web Serial). Pobierz obraz płytki ze strony
+[Releases](https://github.com/psobiech/opengr8on-clu-esp32/releases)
+(`opengr8on-clu-<płytka>-<wersja>.bin`), wybierz go we flasherze i wybierz tryb: **Instalacja**
+(kasuje cały flash), **Aktualizacja** (stan i dysk `a:\` zostają) albo **Tylko ustawienia**.
+Ustawienia (seryjny, PIN, WiFi, MQTT) są zapisywane tylko po zaznaczeniu **Zapisz nowe
+ustawienia**; bez tego zostają te z urządzenia (instalacja odczytuje je przed kasowaniem i wgrywa
+z powrotem). Obraz ustawień powstaje w przeglądarce (ten sam co z `mknvs.py`,
+hasła nigdzie nie są wysyłane); można go też pobrać jako `cfg.bin`. Flasher sprawdza, czy obraz
+pasuje do podłączonego układu.
+
+Wydania (tag `v*`) zawierają dla każdej płytki pełny obraz `opengr8on-clu-<płytka>-<wersja>.bin` i
+cały artefakt jako `.zip`. Workflow **Firmware** buduje też każdy push na `develop` / `main`:
+zakładka **Actions** → przebieg *Firmware* → **Artifacts**. Poniżej wgrywanie z linii poleceń.
 
 | Artefakt | Płytka | `--chip` | Sieć |
 |---|---|---|---|
@@ -253,9 +266,7 @@ artefaktu; wgrywa też aktualną tablicę partycji, adresy aplikacji się nie zm
 esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash @flash_args
 ```
 
-Bez Pythona: [ESP Web Tool](https://espressif.github.io/esptool-js/) w Chrome / Edge — **Connect**,
-plik `…-full.bin` pod adres `0x0` (pierwsza instalacja), `cfg.bin` pod `0x12000`. Obraz ustawień
-i tak trzeba wygenerować `mknvs.py`.
+Bez Pythona: [flasher w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/) (wyżej).
 
 Grenton GATE: `--chip esp32`, w pozostałych przykładach bez zmian.
 
@@ -491,6 +502,7 @@ make -C test/host coverage                        # pokrycie C (gcov) i Lua; FAI
 | `test_drivers` | sekwencje sterowników bajt po bajcie vs. przechwyt prawdziwej CLU |
 | `test_master` | master magistrali na symulowanej magistrali (adresowanie, discovery, odpytywanie) |
 | `test_prelude.lua` | model obiektów Lua, obiekty wirtualne, OM.LUA z `fixtures/` |
+| `test/web/test_nvs.mjs` | obraz ustawień z flashera (`web/nvs.js`) bajt w bajt jak `tools/mknvs.py` (`node test/web/test_nvs.mjs`) |
 | `test_mqtt.lua` | mapowanie encji HA, tematy, surowe API |
 | `test_udp` | serwer UDP (`main/udp_server.c`): discovery, klucze, `req:`, TFTP/diagnostyka, reset, wywołania zdalnych CLU, okno konfiguracji i przycisk |
 | `test_uart` | transport RS485 (`tfbus_uart.c`) na symulowanym sterowniku UART: echo, odpowiedzi dzielone, timeouty, lokalne moduły |

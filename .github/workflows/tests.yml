@@ -52,6 +52,12 @@ jobs:
           cp -r "/tmp/mbedtls-${MBEDTLS_VERSION}/include" ~/mbedtls3/include
           cp "/tmp/mbedtls-${MBEDTLS_VERSION}"/library/*.a ~/mbedtls3/lib/
 
+      # web/nvs.js (settings image built by the web flasher) against the ESP-IDF generator
+      - name: Web flasher settings image
+        run: |
+          python3 -m pip install --user --break-system-packages esp-idf-nvs-partition-gen
+          node test/web/test_nvs.mjs
+
       - name: Tests with coverage
         run: |
           make -C test/host coverage \

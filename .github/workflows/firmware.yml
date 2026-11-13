@@ -28,7 +28,7 @@ jobs:
           - { preset: f8,        target: esp32s3 } # KinCony F8 (Ethernet W5500)
           - { preset: a8v3,      target: esp32s3 } # KinCony KC868-A8v3 (Ethernet W5500)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: ESP-IDF build
         uses: espressif/esp-idf-ci-action@v1
@@ -58,7 +58,7 @@ jobs:
           ls -lR "$out"
 
       - name: Upload firmware
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: opengr8on-clu-${{ matrix.preset }}
           path: dist/opengr8on-clu-${{ matrix.preset }}
@@ -74,7 +74,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 

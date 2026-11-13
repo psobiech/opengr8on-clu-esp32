@@ -23,7 +23,7 @@ jobs:
     name: Host tests and coverage
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install host tools
         run: |
@@ -36,7 +36,7 @@ jobs:
 
       - name: Cache mbedtls
         id: mbedtls-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/mbedtls3
           key: mbedtls-${{ env.MBEDTLS_VERSION }}-${{ runner.os }}
@@ -73,7 +73,7 @@ jobs:
 
       - name: Upload coverage report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: |

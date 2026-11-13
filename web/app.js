@@ -2,6 +2,7 @@
 import { ESPLoader, Transport } from "https://unpkg.com/esptool-js@0.7.0/bundle.js";
 import { buildCfgImage, validate, CFG_OFFSET, CFG_SIZE, KEYS } from "./nvs.js";
 import { LANGS, apply, getLang, setLang, t } from "./i18n.js";
+import { CONSOLE_BAUD, Monitor } from "./monitor.js";
 
 const $ = (id) => document.getElementById(id);
 const BAUD = 460800;
@@ -172,17 +173,18 @@ const terminal = {
   },
 };
 
+/** Flash per the form; resolves to the (closed) port on success, null when cancelled. */
 async function flash() {
   const mode = document.querySelector("input[name=mode]:checked").value;
   const s = settings();
   const withCfg = writeCfg(); // else: keep the device's cfg partition
-  if (withCfg && !checkSettings()) return;
+  if (withCfg && !checkSettings()) return null;
   if (mode !== "settings" && !image) throw new UiError("err_select_fw");
   if (mode === "settings" && !withCfg) throw new UiError("err_settings_keep");
   if (mode === "settings" && !hasSettings(s)) throw new UiError("err_fill_setting");
   const fwHasCfg = image && image.parts.some((p) => p.label === "cfg" && p.offset === CFG_OFFSET);
   if (mode !== "settings" && withCfg && !fwHasCfg) throw new UiError("err_fw_no_cfg");
-  if (mode === "install" && !confirm(t("confirm_install"))) return;
+  if (mode === "install" && !confirm(t("confirm_install"))) return null;
 
   logEl.textContent = "";
   const port = await navigator.serial.requestPort();
@@ -231,22 +233,65 @@ async function flash() {
       },
     });
     progress.value = 1;
-    await loader.after("hard_reset");
     log(`\n${t("done", { mode: t(`mode_${mode}`) })}`);
+    return port; // the monitor resets the chip into the firmware
   } finally {
     await transport.disconnect().catch(() => {});
   }
 }
 
+// ---------------------------------------------------------------- UART log
+const monEl = $("mon-log");
+const monitor = new Monitor(monEl, {
+  note: (k) => `--- ${t(`mon_${k}`)} ---`,
+  onState: (on) => {
+    $("mon").hidden = false;
+    $("mon-stop").disabled = !on;
+    $("mon-reset").disabled = !on;
+    $("mon-state").textContent = t(on ? "mon_on" : "mon_off", { baud: CONSOLE_BAUD });
+  },
+});
+
+async function startMonitor(port, reset) {
+  try {
+    await monitor.start(port, { reset });
+    monEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) {
+    log(`\n${t("error")}: ${t("mon_fail")} (${e?.message || e})`);
+  }
+}
+
+$("mon-open").addEventListener("click", async () => {
+  await monitor.stop();
+  try {
+    await startMonitor(await navigator.serial.requestPort(), false);
+  } catch { /* port chooser closed */ }
+});
+$("mon-reset").addEventListener("click", () => monitor.reset().catch(() => {}));
+$("mon-stop").addEventListener("click", () => monitor.stop());
+$("mon-clear").addEventListener("click", () => monitor.clear());
+$("mon-save").addEventListener("click", () => {
+  const url = URL.createObjectURL(new Blob([monitor.text()], { type: "text/plain" }));
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+  Object.assign(document.createElement("a"), { href: url, download: `clu-uart-${stamp}.log` }).click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
 const btn = $("flash");
 if (!("serial" in navigator)) {
   $("no-serial").hidden = false;
   btn.disabled = true;
+  $("mon-open").disabled = true;
 }
 btn.addEventListener("click", async () => {
   btn.disabled = true;
   try {
-    await flash();
+    await monitor.stop(); // frees the port for the flasher
+    const port = await flash();
+    if (port) {
+      monitor.clear();
+      await startMonitor(port, true);
+    }
   } catch (e) {
     if (e?.name !== "NotFoundError") log(`\n${t("error")}: ${e?.message || e}`); // NotFoundError = port chooser closed
   } finally {

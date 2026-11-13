@@ -79,9 +79,25 @@
         <span data-i18n-html="m_settings"></span></label>
     </fieldset>
     <p class="hint" data-i18n="boot_hint"></p>
-    <button type="button" id="flash" class="primary" data-i18n="flash_btn"></button>
+    <div class="actions">
+      <button type="button" id="flash" class="primary" data-i18n="flash_btn"></button>
+      <button type="button" id="mon-open" data-i18n="mon_open"></button>
+    </div>
     <progress id="progress" max="1" value="0" hidden></progress>
     <pre id="log" aria-live="polite"></pre>
+    <div id="mon" hidden>
+      <div class="mon-bar">
+        <strong data-i18n="mon_title"></strong>
+        <span id="mon-state" class="hint"></span>
+        <span class="mon-tools">
+          <button type="button" id="mon-reset" data-i18n="mon_reset"></button>
+          <button type="button" id="mon-clear" data-i18n="mon_clear"></button>
+          <button type="button" id="mon-save" data-i18n="mon_save"></button>
+          <button type="button" id="mon-stop" data-i18n="mon_stop"></button>
+        </span>
+      </div>
+      <pre id="mon-log"></pre>
+    </div>
   </section>
 </main>
 <script type="module" src="app.js"></script>

@@ -81,3 +81,17 @@ label.lang select {
 }
 fieldset:disabled { opacity: 0.55; }
 label.write-cfg { margin: 0 0 4px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+#mon { margin-top: 16px; }
+.mon-bar { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 6px; }
+.mon-tools { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.mon-tools button { padding: 4px 10px; font-size: 0.9rem; }
+#mon-log {
+  margin: 0; padding: 10px; height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  background: #11120f; color: #d8d7d0; border-radius: 6px; font-size: 0.8rem; line-height: 1.4;
+}
+#mon-log .e { color: #ff7b72; }
+#mon-log .w { color: #e3b341; }
+#mon-log .i { color: #7ee787; }
+#mon-log .d, #mon-log .v { color: #8b949e; }
+#mon-log .s { color: #79c0ff; font-style: italic; }

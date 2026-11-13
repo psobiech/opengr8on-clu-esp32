@@ -71,10 +71,11 @@ jobs:
           path: dist/opengr8on-clu-${{ matrix.preset }}
           if-no-files-found: error
 
-  # Tag v*: GitHub release with, per board, the full image (what the web flasher and the README
-  # commands take), the application image for network updates (-ota.bin) and the complete
-  # artifact as a zip. MySensors variants: the same with -mysensors before the extension
-  # (opengr8on-clu-<board>-<tag>-mysensors.bin, ...-ota-mysensors.bin, ...-mysensors.zip).
+  # Tag v*: GitHub release with, per board and variant, the full image (what the web flasher and
+  # the README commands take) and the application image for network updates (-ota.bin); MySensors
+  # variant with -mysensors before the extension (opengr8on-clu-<board>-<tag>-mysensors.bin,
+  # ...-ota-mysensors.bin). One zip per board holds both complete artifacts, unchanged, as
+  # tfbus/ and mysensors/ (flash_args paths stay relative to each).
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -98,7 +99,14 @@ jobs:
             variant="${preset#"$board"}" # "" or "-mysensors"
             cp "$dir/opengr8on-clu-${preset}-full.bin" "assets/opengr8on-clu-${board}-${tag}${variant}.bin"
             cp "$dir/opengr8on-clu-${preset}-ota.bin" "assets/opengr8on-clu-${board}-${tag}-ota${variant}.bin"
-            (cd "$dir" && zip -qr "../../assets/opengr8on-clu-${board}-${tag}${variant}.zip" .)
+            sub=tfbus; [[ -n "$variant" ]] && sub=mysensors
+            mkdir -p "zip/$board"
+            cp -r "$dir" "zip/$board/$sub"
+          done
+          for bdir in zip/*; do
+            board="${bdir##*/}"
+            [[ -d "$bdir/tfbus" && -d "$bdir/mysensors" ]] || { echo "missing variant for $board"; exit 1; }
+            (cd "$bdir" && zip -qr "../../assets/opengr8on-clu-${board}-${tag}.zip" tfbus mysensors)
           done
           ls -l assets
 

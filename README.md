@@ -223,12 +223,14 @@ wgraj obraz właściwy dla swojej.
 
 ### Wgrywanie z linii poleceń
 
-Do linii poleceń służy `opengr8on-clu-<płytka>-<wersja>.zip` z wydania (ta sama zawartość co
-artefakt z GitHub Actions):
+Do linii poleceń służy `opengr8on-clu-<płytka>-<wersja>.zip` z wydania: katalog `tfbus/` i
+`mysensors/` (wariant [MySensors](MYSENSORS.md)), każdy z zawartością artefaktu z GitHub Actions
+(`opengr8on-clu-<płytka>` / `opengr8on-clu-<płytka>-mysensors`):
 
-- `opengr8on-clu-<płytka>-full.bin`: pełny obraz od adresu `0x0` (ten sam co `.bin` wydania),
-- `opengr8on-clu-<płytka>-ota.bin`: sam obraz aplikacji do aktualizacji przez sieć (ten sam co
-  `-ota.bin` wydania),
+- `opengr8on-clu-<płytka>[-mysensors]-full.bin`: pełny obraz od adresu `0x0` (ten sam co `.bin`
+  wydania),
+- `opengr8on-clu-<płytka>[-mysensors]-ota.bin`: sam obraz aplikacji do aktualizacji przez sieć
+  (ten sam co `-ota.bin` wydania),
 - osobne obrazy i `flash_args`: aktualizacja bez kasowania ustawień — pełny obraz nadpisuje też
   partycje `nvs` (`0x9000`) i `cfg` (`0x12000`) leżące przed aplikacją,
 - `mknvs.py`: obraz ustawień (`cfg.bin`),
@@ -248,7 +250,7 @@ Windows. Jeśli esptool nie może się połączyć, wejdź w tryb pobierania rę
 **1. Pierwsza instalacja** (kasuje cały flash, także ustawienia i dysk `a:\`):
 
 ```bash
-unzip opengr8on-clu-waveshare-v0.0.2-alpha.zip -d clu && cd clu
+unzip opengr8on-clu-waveshare-v0.0.2-alpha.zip -d clu && cd clu/tfbus   # albo clu/mysensors
 esptool --chip esp32s3 --port /dev/ttyUSB0 erase-flash
 esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash 0x0 opengr8on-clu-waveshare-full.bin
 ```
@@ -291,12 +293,14 @@ esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash @flash_args
 
 Bez Pythona: [flasher w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/) (wyżej).
 
-Grenton GATE: `--chip esp32`, w pozostałych przykładach bez zmian.
+Grenton GATE: `--chip esp32`, w pozostałych przykładach bez zmian. Wariant MySensors: katalog
+`mysensors/`, pełny obraz `opengr8on-clu-<płytka>-mysensors-full.bin`.
 
 ### Obrazy z GitHub Actions
 
 Workflow **Firmware** buduje każdy push na `develop` / `main` (bez wydania): zakładka **Actions** →
-przebieg *Firmware* → **Artifacts**. Zawartość jak `.zip` wydania (zob. wyżej); do flashera wybierz z
+przebieg *Firmware* → **Artifacts**, osobny artefakt na płytkę i wariant (zawartość jak katalog
+`tfbus/` / `mysensors/` w `.zip` wydania, zob. wyżej); do flashera wybierz z
 niego `…-full.bin` (USB) albo `…-ota.bin` (przez sieć).
 
 ### Wymagania do budowania

@@ -816,14 +816,10 @@ static int l_get(lua_State *L)
  *  children = { [child] = { type, desc } } } }. Node 0 is the gateway. */
 static int l_nodes(lua_State *L)
 {
-    // Snapshot first: a Lua error (out of memory) must not leave the lock held.
-    ms_node_t *nodes = malloc(sizeof s_nodes);
-    ms_child_t *children = malloc(sizeof s_children);
-    if (!nodes || !children) {
-        free(nodes);
-        free(children);
-        return luaL_error(L, "out of memory");
-    }
+    // Snapshot first: a Lua error (out of memory) must not leave the lock held. The buffers are
+    // Lua userdata (collected by the GC), so an error while building the table leaks nothing.
+    ms_node_t *nodes = lua_newuserdata(L, sizeof s_nodes);
+    ms_child_t *children = lua_newuserdata(L, sizeof s_children);
     xSemaphoreTake(s_mx, portMAX_DELAY);
     memcpy(nodes, s_nodes, sizeof s_nodes);
     memcpy(children, s_children, sizeof s_children);
@@ -872,8 +868,6 @@ static int l_nodes(lua_State *L)
         }
         lua_pop(L, 1);
     }
-    free(nodes);
-    free(children);
     return 1;
 }
 
@@ -920,10 +914,8 @@ static int l_status(lua_State *L)
  *  (module and channel 1-based, as OM numbers them) */
 static int l_slots(lua_State *L)
 {
-    ms_vmod_slot_t *v = malloc(sizeof *v * MS_VMOD_MAX * MS_VMOD_SLOTS);
-    if (!v) {
-        return luaL_error(L, "out of memory");
-    }
+    // Lua userdata, not malloc: an error while building the table must not leak it.
+    ms_vmod_slot_t *v = lua_newuserdata(L, sizeof *v * MS_VMOD_MAX * MS_VMOD_SLOTS);
     int n = ms_vmod_list(v, MS_VMOD_MAX * MS_VMOD_SLOTS);
     lua_createtable(L, n, 0);
     for (int i = 0; i < n; i++) {
@@ -944,7 +936,6 @@ static int l_slots(lua_State *L)
         lua_setfield(L, -2, "vtype");
         lua_rawseti(L, -2, i + 1);
     }
-    free(v);
     return 1;
 }
 

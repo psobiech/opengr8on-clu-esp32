@@ -619,15 +619,23 @@ local function sto_assign(name, v)
   if type(setVar) == "function" then setVar(name, v) else _G[name] = v end
 end
 
+-- Tables are stored as deep copies (round-trip through ser, i.e. exactly what gets saved): an
+-- alias would follow in-place edits of the global and hide them from the change check.
+local function sto_copy(v, s)
+  if type(v) ~= "table" then return v end
+  return load("return " .. (s or ser(v)), "=storage", "t", {})()
+end
+
 local function sto_capture(name)
   local vars = sto_vars()
   local cur = _G[name]
-  if ser(cur) == nil then
+  local s = ser(cur)
+  if s == nil then
     C.log(2, "storage: " .. name .. " has unsupported type " .. type(cur))
     return false
   end
-  if ser(cur) ~= ser(vars[name]) or vars[name] == nil then
-    vars[name] = cur
+  if vars[name] == nil or s ~= ser(vars[name]) then
+    vars[name] = sto_copy(cur, s)
     persist.mark()
     return true
   end
@@ -648,7 +656,7 @@ function Storage.init(o)
   if storage_hooked then return end
   storage_hooked = true
   HOOKS.init[#HOOKS.init + 1] = function()
-    for name, v in pairs(sto_vars()) do sto_assign(name, v) end
+    for name, v in pairs(sto_vars()) do sto_assign(name, sto_copy(v)) end
   end
   HOOKS.loop[#HOOKS.loop + 1] = sto_scan
   table.insert(HOOKS.close, 1, sto_scan) -- capture last changes before the final flush

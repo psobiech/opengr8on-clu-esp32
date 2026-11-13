@@ -70,6 +70,10 @@ typedef struct tfbus_driver {
     /** Registry reset (Lua reload): stop and delete timers etc. Optional; drv_ctx is freed by the
      *  master afterwards. Runs in the Lua task with the bus task parked. */
     void (*deinit)(tfbus_module_t *m);
+    /** A tfbus_master_defer() call was dropped (queue full): run the work of every timer whose
+     *  deadline has passed, as its deferred call would have. Optional; bus task, driver lock
+     *  held, only for modules with a drv_ctx. */
+    void (*overdue)(tfbus_module_t *m);
 
     /** IO object hosted on the module created: OBJECT:new(class, module, channel, name).
      *  The io_* hooks run in the Lua task; `obj` is the object table's stack index. */
@@ -125,7 +129,8 @@ void tfbus_master_set_log_tag(const char *tag);
  * Not from the bus task.
  *
  * @param timeout_ms How long to wait for the bus task to pause.
- * @return false (registry untouched) if the bus task did not stop in time.
+ * @return false (registry and driver state untouched, polling resumed; driver init still waits
+ *         for tfbus_master_start()) if the bus task did not stop in time.
  */
 bool tfbus_master_reset(uint32_t timeout_ms);
 
@@ -198,6 +203,8 @@ typedef void (*tfbus_defer_fn_t)(tfbus_module_t *m, void *arg, uint32_t tag);
  * Meant for esp_timer callbacks: never blocks, so the esp_timer task is not held up and the work
  * does not race the bus task's on_status / init. Calls still queued at tfbus_master_reset() are
  * dropped. `tag` lets the callee ignore a call made stale meanwhile (e.g. a timer generation).
+ * A call dropped because the queue is full is not lost for timers: the bus task then calls every
+ * driver's tfbus_driver_t::overdue, which runs the expired ones by their deadline.
  *
  * @return false if the queue is full.
  */

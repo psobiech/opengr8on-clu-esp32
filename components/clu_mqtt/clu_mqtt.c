@@ -344,6 +344,15 @@ static int l_outbox(lua_State *L)
     return 1;
 }
 
+/** @brief lua_pcall body of l_recv: push the ::rx_msg_t (light userdata at 1) as topic, payload. */
+static int recv_push(lua_State *L)
+{
+    const rx_msg_t *m = lua_touserdata(L, 1);
+    lua_pushstring(L, m->topic);
+    lua_pushstring(L, m->payload);
+    return 2;
+}
+
 // __clu.mqtt_recv() -> topic, payload | nil
 static int l_recv(lua_State *L)
 {
@@ -351,9 +360,14 @@ static int l_recv(lua_State *L)
     if (!s_rx || xQueueReceive(s_rx, &m, 0) != pdTRUE) {
         return 0;
     }
-    lua_pushstring(L, m->topic);
-    lua_pushstring(L, m->payload);
+    // Pushing can raise (out of memory): push under pcall so m is freed either way.
+    lua_pushcfunction(L, recv_push);
+    lua_pushlightuserdata(L, m);
+    int st = lua_pcall(L, 1, 2, 0);
     free(m);
+    if (st != LUA_OK) {
+        return lua_error(L);
+    }
     return 2;
 }
 

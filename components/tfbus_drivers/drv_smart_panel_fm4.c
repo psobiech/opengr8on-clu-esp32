@@ -330,8 +330,8 @@ static int panel_execute(tfbus_module_t *m, lua_State *L, int idx, int first, in
         uint8_t d[19] = {0};
         d[0] = (uint8_t)luaL_optinteger(L, first, 0);
         d[1] = (uint8_t)luaL_optinteger(L, first + 1, 0);
+        d[2] = (uint8_t)luaL_optinteger(L, first + 3, 1); // before tolstring: it pushes
         const char *txt = nargs > 2 ? luaL_tolstring(L, first + 2, NULL) : "";
-        d[2] = (uint8_t)luaL_optinteger(L, first + 3, 1);
         strncpy((char *)d + 3, txt, 16);
         tfbus_cmd_queue(m, 0x0a, d, sizeof d);
         return 0;

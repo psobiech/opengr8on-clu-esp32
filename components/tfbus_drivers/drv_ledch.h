@@ -40,3 +40,6 @@ void ledch_init(tfbus_module_t *m, ledch_t *s);
 
 /** @brief Stop the timers. */
 void ledch_deinit(ledch_t *s);
+
+/** @brief tfbus_driver_t::overdue helper: run the expired channel timers. */
+void ledch_overdue(ledch_t *s);

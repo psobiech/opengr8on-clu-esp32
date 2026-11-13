@@ -56,6 +56,7 @@ typedef struct {
     int ch;
     bool revert_to; // output state when the timer expires
     volatile uint32_t gen; // bumped on every start/cancel: a fire queued before is stale
+    int64_t due_us;        // revert deadline [esp_timer us], 0 = none (driver lock)
     esp_timer_handle_t timer;
 } dout_timer_t;
 
@@ -103,7 +104,8 @@ static void set_output(tfbus_module_t *m, int ch, bool on);
 static void timed_fire(tfbus_module_t *m, void *arg, uint32_t gen)
 {
     dout_timer_t *t = arg;
-    if (gen == t->gen) {
+    if (gen == t->gen && t->due_us) {
+        t->due_us = 0;
         set_output(m, t->ch, t->revert_to);
     }
 }
@@ -121,8 +123,23 @@ static void timed_cb(void *arg)
 static void timed_cancel(io8_t *c, int ch)
 {
     c->timed[ch].gen++;
+    c->timed[ch].due_us = 0;
     if (c->timed[ch].timer) {
         esp_timer_stop(c->timed[ch].timer);
+    }
+}
+
+/** @brief tfbus_driver_t::overdue: revert outputs whose timer expired but whose deferred call was dropped. */
+static void overdue(tfbus_module_t *m)
+{
+    io8_t *c = m->drv_ctx;
+    int64_t now = esp_timer_get_time();
+    for (int ch = 0; ch < CH; ch++) {
+        dout_timer_t *t = &c->timed[ch];
+        if (t->due_us && now >= t->due_us) {
+            t->due_us = 0;
+            set_output(m, t->ch, t->revert_to);
+        }
     }
 }
 
@@ -154,6 +171,7 @@ static void timed_start(tfbus_module_t *m, io8_t *c, int ch, bool revert_to, uin
     t->revert_to = revert_to;
     esp_timer_stop(t->timer);
     t->gen++;
+    t->due_us = esp_timer_get_time() + (int64_t)ms * 1000;
     esp_timer_start_once(t->timer, (uint64_t)ms * 1000);
 }
 
@@ -354,6 +372,7 @@ const tfbus_driver_t tfbus_drv_relay_din4 = {
     .cfg = &CFG_RELAY4,
     .init = init,
     .deinit = deinit,
+    .overdue = overdue,
     .on_status = on_status,
     .io_new = io_new,
     .io_set = io_set,
@@ -366,6 +385,7 @@ const tfbus_driver_t tfbus_drv_io_module_din8 = {
     .cfg = &CFG_IO8,
     .init = init,
     .deinit = deinit,
+    .overdue = overdue,
     .on_status = on_status,
     .io_new = io_new,
     .io_set = io_set,

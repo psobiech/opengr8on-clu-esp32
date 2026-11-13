@@ -308,9 +308,11 @@ static bool fd_ioset(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, 
     return idx == 1;
 }
 static void fd_deinit(tfbus_module_t *m) { DRV("deinit:%u:%s ", m->addr, (char *)m->drv_ctx); }
+static void fd_overdue(tfbus_module_t *m) { DRV("overdue:%u:%s ", m->addr, (char *)m->drv_ctx); }
 static const tfbus_driver_t s_fake = {
     .hw_type = 0x1e, .name = "FAKE", .init = fd_init, .on_status = fd_status, .on_online = fd_online,
     .io_new = fd_io_new, .io_execute = fd_exec, .io_set = fd_ioset, .deinit = fd_deinit,
+    .overdue = fd_overdue,
 };
 
 static void drv_reset(void)
@@ -741,6 +743,7 @@ int main(void)
     check("bus never parked outside a reset (independent of Lua)", !s_park);
     s_parked = false;
     check("reset times out while the bus task is still running", !tfbus_master_reset(30) && tfbus_master_count() == 4);
+    check("reset timeout: bus not left parked", !s_park);
     s_parked = true; // the stubbed bus task never runs: pretend it parked
     tfbus_master_get(0)->drv_ctx = strdup("A");
     tfbus_master_get(1)->drv_ctx = strdup("B"); // driverless: freed without deinit
@@ -924,14 +927,26 @@ int main(void)
     for (int i = 0; i < 33; i++) {
         queued += tfbus_master_defer(defer_fn, tfbus_master_get(0), "q", (uint32_t)i);
     }
-    check("defer: queue holds 32 calls, the 33rd is dropped", queued == 32);
+    check("defer: queue holds 32 calls, the 33rd is dropped (flagged)", queued == 32 && s_defer_lost);
     host_mutex_busy = 1;
     run_deferred();
-    check("defer: calls wait while a Lua hook holds the driver lock", !s_deferred[0] && s_defer->n == 32);
+    check("defer: calls wait while a Lua hook holds the driver lock", !s_deferred[0] && s_defer->n == 32 &&
+                                                                         s_defer_lost);
     host_mutex_busy = 0;
+    tfbus_master_get(0)->drv_ctx = strdup("A"); // only modules with a context are asked
+    drv_reset();
     run_deferred();
     check("defer: calls run in order once the lock is free",
           s_defer->n == 0 && strncmp(s_deferred, "mm_A:q:0 mm_A:q:1 ", 18) == 0 && strstr(s_deferred, "mm_A:q:31 "));
+    char want_od[32];
+    snprintf(want_od, sizeof want_od, "overdue:%u:A ", tfbus_master_get(0)->addr);
+    check("defer: dropped call -> overdue timers run (drivers with a context only)",
+          !strcmp(s_drv, want_od) && !s_defer_lost);
+    drv_reset();
+    run_deferred();
+    check("defer: no overdue scan without a dropped call", !s_drv[0]);
+    free(tfbus_master_get(0)->drv_ctx);
+    tfbus_master_get(0)->drv_ctx = NULL;
 
     // ---- empty registry (new CLU, nothing on the bus): one discovery, then the bus idles
     s_parked = true;

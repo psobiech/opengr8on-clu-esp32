@@ -289,6 +289,16 @@ static void deinit(tfbus_module_t *m)
     c->lch = NULL;
 }
 
+/** @brief tfbus_driver_t::overdue: run expired timers whose deferred call was dropped. */
+static void overdue(tfbus_module_t *m)
+{
+    rgbw_t *c = m->drv_ctx;
+    light_timer_overdue(&c->timed);
+    if (c->lch) {
+        ledch_overdue(c->lch);
+    }
+}
+
 /** @brief tfbus_driver_t::io_new: remember the LEDRGB / PowerSupplyVoltage names. */
 static void io_new(tfbus_module_t *m, int cls, int ch, const char *name)
 {
@@ -540,6 +550,7 @@ const tfbus_driver_t tfbus_drv_led_rgbw_din = {
     .name = "LED_RGBW_DIN",
     .init = init,
     .deinit = deinit,
+    .overdue = overdue,
     .on_status = on_status,
     .io_new = io_new,
     .io_set = io_set,

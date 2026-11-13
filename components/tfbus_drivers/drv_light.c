@@ -11,7 +11,8 @@
 static void timer_fire(tfbus_module_t *m, void *arg, uint32_t gen)
 {
     light_timer_t *t = arg;
-    if (gen == t->gen) {
+    if (gen == t->gen && t->due_us) {
+        t->due_us = 0;
         t->fn(m, t->owner);
     }
 }
@@ -37,12 +38,14 @@ void light_timer_start(light_timer_t *t, tfbus_module_t *m, void *owner, light_t
     t->fn = fn;
     esp_timer_stop(t->timer);
     t->gen++;
+    t->due_us = esp_timer_get_time() + (int64_t)ms * 1000;
     esp_timer_start_once(t->timer, (uint64_t)ms * 1000);
 }
 
 void light_timer_cancel(light_timer_t *t)
 {
     t->gen++;
+    t->due_us = 0;
     if (t->timer) {
         esp_timer_stop(t->timer);
     }
@@ -56,6 +59,15 @@ void light_timer_delete(light_timer_t *t)
         t->timer = NULL;
     }
     t->gen++;
+    t->due_us = 0;
+}
+
+void light_timer_overdue(light_timer_t *t)
+{
+    if (t->due_us && esp_timer_get_time() >= t->due_us) {
+        t->due_us = 0; // a deferred call still queued finds it done
+        t->fn(t->m, t->owner);
+    }
 }
 
 int light_hold_dir(light_hold_t *h, int64_t now_us, double cur, double lo, double hi)

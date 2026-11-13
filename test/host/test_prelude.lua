@@ -248,6 +248,12 @@ do
   myvar = 2.5
   clock = clock + 1000; SYSTEM.Loop(); clock = clock + 5000; SYSTEM.Loop()
   check("utilization %", STO99999:get(1) == 0)
+  -- tracked table edited in place: the stored copy must not alias the global
+  mytab = { a = 1 }
+  STO99999:execute(4, "mytab")
+  mytab.a = 2
+  clock = clock + 1000; SYSTEM.Loop(); clock = clock + 5000; SYSTEM.Loop()
+  check("tracked table in-place change written", stored().vars.mytab.a == 2)
   local ES2 = OBJECT:new(43, "EVE0002")
   check("es rules restored", ES2:get(0) == '{{3,0,"0 9 * * *"}}')
   check("es add duplicate -> same id", ES2:execute(2, "0 9 * * *") == 3 and ES2:get(3) == 1)

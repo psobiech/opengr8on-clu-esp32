@@ -552,6 +552,18 @@ void ledch_init(tfbus_module_t *m, ledch_t *s)
     }
 }
 
+void ledch_overdue(ledch_t *s)
+{
+    for (int i = 0; i < 4; i++) {
+        light_timer_overdue(&s->ch[i].timed);
+        light_timer_overdue(&s->ch[i].hold_stop);
+    }
+    for (int i = 0; i < 2; i++) {
+        light_timer_overdue(&s->cct[i].timed);
+        light_timer_overdue(&s->cct[i].hold_stop);
+    }
+}
+
 void ledch_deinit(ledch_t *s)
 {
     for (int i = 0; i < 4; i++) {

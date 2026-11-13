@@ -166,9 +166,10 @@ static struct {
     uint32_t tag;
 } s_defer[32];
 static int s_ndefer;
+static bool s_defer_full; // simulate a full queue: calls are dropped
 bool tfbus_master_defer(tfbus_defer_fn_t fn, tfbus_module_t *m, void *arg, uint32_t tag)
 {
-    if (s_ndefer >= 32) {
+    if (s_defer_full || s_ndefer >= 32) {
         return false;
     }
     s_defer[s_ndefer].fn = fn;
@@ -389,6 +390,29 @@ int main(void)
         frames_reset();
         run_deferred();
         check_frames("DOUT stale deferred revert dropped after newer command", "");
+
+        // Defer queue full when the timer fires: the revert is dropped, the master's overdue
+        // scan runs it by its deadline; a deferred call still queued then finds it done
+        lua_exec(m, 4, 4, 1, 1, 1000);  // SwitchOn(1000) ch4
+        s_defer_full = true;
+        frames_reset();
+        timers_advance(1000000);
+        s_defer_full = false;
+        check_frames("DOUT revert dropped with a full defer queue", "");
+        m->drv->overdue(m);
+        check_frames("DOUT overdue: dropped revert runs by deadline", "aa02f006010901011046 ");
+        frames_reset();
+        m->drv->overdue(m);
+        check_frames("DOUT overdue: runs once", "");
+        lua_exec(m, 4, 4, 1, 1, 1000);
+        timers_fire(500000);
+        frames_reset();
+        m->drv->overdue(m);
+        check_frames("DOUT overdue: timer not yet due untouched", "");
+        timers_fire(500000);            // fire queued normally
+        m->drv->overdue(m);             // overdue scan (other module's drop) runs first
+        run_deferred();
+        check_frames("DOUT overdue then queued fire: revert sent once", "aa02f006010901011046 ");
 
         // Lua reload: deinit stops and deletes pending timers (the master frees the context)
         lua_exec(m, 4, 2, 1, 1, 1500);
@@ -718,6 +742,19 @@ int main(void)
         frames_reset();
         run_deferred();
         check_frames("roller stale deferred stop dropped after newer move", "");
+
+        // stop dropped by a full defer queue: the overdue scan stops the channel by deadline
+        lua_exec(m, 24, 0, 0, 1, 1000); // MoveUp(1000)
+        s_defer_full = true;
+        frames_reset();
+        timers_advance(1000000);
+        s_defer_full = false;
+        check_frames("roller stop dropped with a full defer queue", "");
+        m->drv->overdue(m);
+        check_frames("roller overdue: dropped stop sent by deadline", "aa06f006010901010351 ");
+        frames_reset();
+        m->drv->overdue(m);
+        check_frames("roller overdue: runs once", "");
 
         // moving (status says up on the active channel) -> MoveUp again stops
         status(m, "04 01 01 02 10 16 03 00 01 32 00 16 03 00 02 32 00 16 03 00 03 32 00");
@@ -1062,6 +1099,20 @@ int main(void)
         check_frames("dimmer timed: back to 0 at expiry, level only (no SET_RAMP_TIME)", D_L("00005d"));
         check_posts("dimmer timed: on events, Value posted + off events at expiry",
                     "DIM!0 DIM!3 DIM!1 DIM[0]=0 DIM!0 DIM!4 DIM!2 ");
+
+        // light timer expiry dropped by a full defer queue: the overdue scan runs it by deadline
+        lua_execn(m, 5, 0, 1, 1, (double[]){1500});
+        s_defer_full = true;
+        frames_reset();
+        timers_advance(1500000);
+        s_defer_full = false;
+        check_frames("dimmer timed: expiry dropped with a full defer queue", "");
+        m->drv->overdue(m);
+        check_frames("dimmer overdue: dropped expiry runs by deadline", D_L("00005d"));
+        frames_reset();
+        m->drv->overdue(m);
+        check_frames("dimmer overdue: runs once", "");
+        posts_reset();
 
         // HoldValue(3000): 33/1000 per call, ramp 3000; a pause starts a new hold the other way
         s_now_us += 2000000;

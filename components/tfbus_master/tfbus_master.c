@@ -69,6 +69,10 @@ static QueueHandle_t s_defer;
 // Serialises driver state between the Lua task (io_new/io_set/io_execute) and deferred calls
 // (driver timers) in the bus task.
 static SemaphoreHandle_t s_drv_lock;
+// A deferred call was dropped (queue full): run_deferred() asks the drivers for overdue timers.
+static volatile bool s_defer_lost;
+// Serialises reg_save() (Lua task: new module; bus task: discovery) over snapshot + NVS write.
+static SemaphoreHandle_t s_save_lock;
 static TaskHandle_t s_task;
 static volatile bool s_restart;
 static volatile bool s_discover = true; // run discovery on the next bus-task cycle (boot, refresh)
@@ -152,10 +156,16 @@ typedef struct __attribute__((packed)) {
 } saved_mod_t;
 #define SAVED_GONE 0x80
 
-/** @brief Write the registry (gone entries too) to NVS (any task, not under s_lock). */
+/**
+ * @brief Write the registry (gone entries too) to NVS (any task, not under s_lock).
+ *
+ * Whole save under s_save_lock: the static buffer is shared, and the snapshot taken last must
+ * also be the one written last (else an older registry could win in NVS).
+ */
 static void reg_save(void)
 {
     static saved_mod_t buf[TFBUS_MAX_MODULES];
+    xSemaphoreTake(s_save_lock, portMAX_DELAY);
     xSemaphoreTake(s_lock, portMAX_DELAY);
     int n = 0;
     for (int i = 0; i < s_nmod; i++) {
@@ -169,12 +179,14 @@ static void reg_save(void)
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
         ESP_LOGE(TAG, "registry not saved (NVS)");
+        xSemaphoreGive(s_save_lock);
         return;
     }
     if (nvs_set_blob(h, NVS_KEY, buf, (size_t)n * sizeof *buf) != ESP_OK || nvs_commit(h) != ESP_OK) {
         ESP_LOGE(TAG, "registry not saved (NVS write)");
     }
     nvs_close(h);
+    xSemaphoreGive(s_save_lock);
 }
 
 /** @brief Load the registry saved by reg_save() (tfbus_master_init()). */
@@ -323,7 +335,8 @@ bool tfbus_master_defer(tfbus_defer_fn_t fn, tfbus_module_t *m, void *arg, uint3
 {
     defer_t d = {.fn = fn, .m = m, .arg = arg, .tag = tag};
     if (!s_defer || xQueueSend(s_defer, &d, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "defer queue full, call dropped");
+        s_defer_lost = true; // recovered by deadline: run_deferred() -> tfbus_driver_t::overdue
+        ESP_LOGW(TAG, "defer queue full, call dropped (timers recovered by deadline)");
         return false;
     }
     return true;
@@ -343,6 +356,15 @@ static void run_deferred(void)
             continue; // module dropped by a refresh
         }
         d.fn(d.m, d.arg, d.tag);
+    }
+    if (s_defer_lost) {
+        s_defer_lost = false; // before the scan: a drop during it triggers another one
+        for (int i = 0; i < s_nmod; i++) {
+            tfbus_module_t *m = &s_mod[i];
+            if (live(m) && m->drv_ctx && m->drv && m->drv->overdue) {
+                m->drv->overdue(m);
+            }
+        }
     }
     xSemaphoreGive(s_drv_lock);
 }
@@ -1064,6 +1086,7 @@ void tfbus_master_init(void)
     s_cmds = xQueueCreate(128, sizeof(cmd_t));
     s_defer = xQueueCreate(32, sizeof(defer_t));
     s_drv_lock = xSemaphoreCreateMutex();
+    s_save_lock = xSemaphoreCreateMutex();
     clu_lua_register_class(2, &s_module_ops);
     // Any class may be hosted on a module; virtual-object implementations registered later
     // (e.g. Timer) override these. 0/1 = CLUs, 44 = storage.
@@ -1098,6 +1121,10 @@ bool tfbus_master_reset(uint32_t timeout_ms)
     // Discovery and the first round do not check s_restart: allow for a full one.
     for (uint32_t t = 0; !s_parked; t += 10) {
         if (t >= timeout_ms) {
+            // Driver state untouched: unpark so polling, commands and deferred calls go on (a bus
+            // task that parks meanwhile is woken). Driver init waits for tfbus_master_start().
+            s_park = false;
+            xTaskNotifyGive(s_task);
             ESP_LOGE(TAG, "reset: bus task did not stop");
             return false;
         }

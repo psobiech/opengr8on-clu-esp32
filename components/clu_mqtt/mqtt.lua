@@ -29,6 +29,7 @@ local ROOT = cfg.root
 local NODE = "opengr8on_CLU" .. cfg.sn
 local OUTBOX_MAX = 8 * 1024  -- bytes in esp-mqtt's outbox before we stop feeding it this tick
 local PUBS_PER_TICK = 16
+local EVENTS_MAX = 64         -- pending non-coalesced messages (events, API replies) in the queue
 local RECV_PER_TICK = 8
 
 -- ---------------------------------------------------------------------------------------------
@@ -436,9 +437,12 @@ end
 
 -- ---------------------------------------------------------------------------------------------
 -- Outbound queue: paced into esp-mqtt's outbox. Retained states coalesce per topic (only the
--- latest value of a pending topic is sent); events never do.
+-- latest value of a pending topic is sent), so they are bounded by the topic count. Events (and
+-- API replies) never coalesce: at most EVENTS_MAX of them wait, newer ones are dropped (and
+-- counted) while the queue is full, so a publisher that cannot keep up never exhausts the heap.
 -- ---------------------------------------------------------------------------------------------
-local q, qhead, qidx = {}, 1, {}
+local q, qhead, qtail, qidx = {}, 1, 0, {}
+local qev, dropped = 0, 0 -- pending non-coalesced entries; events dropped in this overflow
 local last = {}       -- topic -> last published retained state
 
 -- Forget what was published: every state goes out again on the next scan (sampled ones too).
@@ -449,32 +453,48 @@ end
 local up, gen = false, nil
 
 local function q_reset()
-  q, qhead, qidx = {}, 1, {}
+  q, qhead, qtail, qidx, qev = {}, 1, 0, {}, 0
 end
 
 local function enqueue(topic, payload, retain, qos, coalesce)
   if coalesce then
     local e = qidx[topic]
     if e then e.p = payload; return end
+  elseif qev >= EVENTS_MAX then
+    if dropped == 0 then C.log(2, "mqtt: event queue full, dropping new events") end
+    dropped = dropped + 1
+    return
+  else
+    qev = qev + 1
+    if dropped > 0 then
+      C.log(2, "mqtt: " .. dropped .. " event(s) dropped")
+      dropped = 0
+    end
   end
-  local e = { t = topic, p = payload, r = retain, qos = qos }
-  q[#q + 1] = e
+  local e = { t = topic, p = payload, r = retain, qos = qos, c = coalesce }
+  qtail = qtail + 1
+  q[qtail] = e
   if coalesce then qidx[topic] = e end
 end
 
 local function flush()
   local n = 0
-  while qhead <= #q and n < PUBS_PER_TICK and C.mqtt_outbox() < OUTBOX_MAX do
+  while qhead <= qtail and n < PUBS_PER_TICK and C.mqtt_outbox() < OUTBOX_MAX do
     local e = q[qhead]
+    q[qhead] = nil -- free sent entries now: under steady load the queue may never fully drain
     qhead = qhead + 1
-    if qidx[e.t] == e then qidx[e.t] = nil end
+    if e.c then
+      if qidx[e.t] == e then qidx[e.t] = nil end
+    else
+      qev = qev - 1
+    end
     if not C.mqtt_publish(e.t, e.p, e.r, e.qos) then
       q_reset() -- link dropped: everything is resent on the next connect
       return
     end
     n = n + 1
   end
-  if qhead > #q then q_reset() end
+  if qhead > qtail then q_reset() end
 end
 
 local function publish_discovery()

@@ -430,6 +430,21 @@ static void exec_request(lua_State *L, req_t *r)
     }
 }
 
+/** @brief lua_pcall body: `__remote_done(id, result)` for the ::remote_res_t (light userdata at 1). */
+static int remote_done_p(lua_State *L)
+{
+    const remote_res_t *r = lua_touserdata(L, 1);
+    lua_getglobal(L, "__remote_done"); // resumes the Lua thread waiting for this call
+    lua_pushinteger(L, r->id);
+    if (r->result) {
+        lua_pushstring(L, r->result);
+    } else {
+        lua_pushnil(L);
+    }
+    lua_call(L, 2, 0);
+    return 0;
+}
+
 /** @brief Deliver queued driver events / values to Lua (__fire / __update). */
 static void drain_events(lua_State *L)
 {
@@ -456,15 +471,13 @@ static void drain_events(lua_State *L)
     }
     remote_res_t r;
     while (xQueueReceive(s_remote_res, &r, 0) == pdTRUE) {
-        lua_getglobal(L, "__remote_done"); // resumes the Lua thread waiting for this call
-        lua_pushinteger(L, r.id);
-        if (r.result) {
-            lua_pushstring(L, r.result);
-        } else {
-            lua_pushnil(L);
-        }
+        // Everything that can raise (pushing the result string too) runs under the pcall, so
+        // r.result is freed even on out of memory.
+        lua_pushcfunction(L, remote_done_p);
+        lua_pushlightuserdata(L, &r);
+        int st = lua_pcall(L, 1, 0, 0);
         free(r.result);
-        if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+        if (st != LUA_OK) {
             ESP_LOGW(TAG, "remote result %lu: %s", (unsigned long)r.id, lua_tostring(L, -1));
             lua_pop(L, 1);
         }

@@ -214,6 +214,14 @@ static void deinit(tfbus_module_t *m)
     save_last(m, c); // Lua reload / reset: do not lose a pending save
 }
 
+/** @brief tfbus_driver_t::overdue: run expired timers whose deferred call was dropped. */
+static void overdue(tfbus_module_t *m)
+{
+    dimm_t *c = m->drv_ctx;
+    light_timer_overdue(&c->timed);
+    light_timer_overdue(&c->save);
+}
+
 /** @brief tfbus_driver_t::io_new: remember the DIMM object's name. */
 static void io_new(tfbus_module_t *m, int cls, int ch, const char *name)
 {
@@ -354,6 +362,7 @@ const tfbus_driver_t tfbus_drv_dimmer_mosfet_din = {
     .name = "DIMMER_MOSFET_DIN",
     .init = init,
     .deinit = deinit,
+    .overdue = overdue,
     .on_status = on_status,
     .io_new = io_new,
     .io_set = io_set,

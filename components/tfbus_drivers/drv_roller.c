@@ -70,6 +70,7 @@ typedef struct {
     roller_t *r;
     int ch;
     volatile uint32_t gen; // bumped on every move/stop: a fire queued before is stale
+    int64_t due_us;        // stop deadline [esp_timer us], 0 = none (driver lock)
     esp_timer_handle_t timer;
 } chan_timer_t;
 
@@ -203,6 +204,7 @@ static void init(tfbus_module_t *m)
 static void cmd_stop(roller_t *r, int c)
 {
     r->stop_timer[c].gen++;
+    r->stop_timer[c].due_us = 0;
     esp_timer_stop(r->stop_timer[c].timer);
     drv_queue_record(r->m, 0x09, 0x01, (uint8_t[]){(uint8_t)(3 << (2 * c))}, 1);
 }
@@ -215,8 +217,20 @@ static void cmd_stop(roller_t *r, int c)
 static void stop_timer_fire(tfbus_module_t *m, void *arg, uint32_t gen)
 {
     chan_timer_t *t = arg;
-    if (gen == t->gen) {
+    if (gen == t->gen && t->due_us) {
         cmd_stop(t->r, t->ch);
+    }
+}
+
+/** @brief tfbus_driver_t::overdue: stop channels whose timed move expired but whose deferred stop was dropped. */
+static void overdue(tfbus_module_t *m)
+{
+    roller_t *r = m->drv_ctx;
+    int64_t now = esp_timer_get_time();
+    for (int c = 0; c < CH; c++) {
+        if (r->stop_timer[c].due_us && now >= r->stop_timer[c].due_us) {
+            cmd_stop(r, c);
+        }
     }
 }
 
@@ -253,8 +267,10 @@ static void cmd_move(roller_t *r, int c, int dir, uint32_t time_ms)
     uint8_t bit = (uint8_t)(1 << (2 * c + (dir == ST_DOWN ? 1 : 0)));
     drv_queue_record(r->m, 0x08, 0x01, &bit, 1);
     r->stop_timer[c].gen++;
+    r->stop_timer[c].due_us = 0;
     esp_timer_stop(r->stop_timer[c].timer);
-    if (time_ms > 0) {
+    if (time_ms > 0 && r->stop_timer[c].timer) {
+        r->stop_timer[c].due_us = esp_timer_get_time() + (int64_t)time_ms * 1000;
         esp_timer_start_once(r->stop_timer[c].timer, (uint64_t)time_ms * 1000);
     }
 }
@@ -452,6 +468,7 @@ const tfbus_driver_t tfbus_drv_roller_sh_din = {
     .cfg = &CFG_DIN1,
     .init = init,
     .deinit = deinit,
+    .overdue = overdue,
     .on_status = on_status,
     .io_new = io_new,
     .io_set = io_set,
@@ -464,6 +481,7 @@ const tfbus_driver_t tfbus_drv_roller_sh_din3 = {
     .cfg = &CFG_DIN3,
     .init = init,
     .deinit = deinit,
+    .overdue = overdue,
     .on_status = on_status,
     .io_new = io_new,
     .io_set = io_set,

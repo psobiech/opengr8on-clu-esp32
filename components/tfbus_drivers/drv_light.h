@@ -29,6 +29,7 @@ typedef struct {
     void *owner;
     light_timer_fn_t fn;
     volatile uint32_t gen;
+    int64_t due_us;   /**< Deadline [esp_timer us], 0 = not running (driver lock). */
     esp_timer_handle_t timer;
 } light_timer_t;
 
@@ -48,6 +49,9 @@ void light_timer_cancel(light_timer_t *t);
 
 /** @brief Stop and delete the timer (driver deinit). */
 void light_timer_delete(light_timer_t *t);
+
+/** @brief tfbus_driver_t::overdue helper: run the callback now if the deadline has passed. */
+void light_timer_overdue(light_timer_t *t);
 
 /**
  * @brief Hold* state: repeated calls (from a button's OnHold) step the value.

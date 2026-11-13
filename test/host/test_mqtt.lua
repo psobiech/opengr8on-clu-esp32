@@ -15,6 +15,7 @@ sys_fails, restarts = 3, 0
 local storage = os.tmpname()
 os.remove(storage)
 
+local outbox, logs = 0, {} -- fake esp-mqtt outbox bytes; C.log messages
 __clu = {
   root = here .. "fixtures",
   storage = storage,
@@ -25,7 +26,7 @@ __clu = {
     local a = { ... }
     executed[#executed + 1] = o._name .. ":" .. idx .. (a[1] ~= nil and ("(" .. tostring(a[1]) .. ")") or "")
   end,
-  log = function() end,
+  log = function(_, m) logs[#logs + 1] = m end,
   loop = function() end,
   init = function() end,
   wait = function() end,
@@ -53,7 +54,7 @@ __clu = {
     pubs[#pubs + 1] = { t = t, p = p, r = r, q = q }
     return true
   end,
-  mqtt_outbox = function() return 0 end,
+  mqtt_outbox = function() return outbox end,
   mqtt_recv = function()
     local m = table.remove(inbox, 1)
     if m then return m[1], m[2] end
@@ -238,6 +239,22 @@ run(1)
 local n_ev = 0
 for _, m in ipairs(pubs) do if m.t == "grenton/CLU100000001/DIN0001/event" then n_ev = n_ev + 1 end end
 check("events are not coalesced", n_ev == 3)
+
+-- publisher stalled (outbox full): pending events are capped, the newest dropped and counted
+outbox = 1 << 20
+pubs, logs = {}, {}
+for _ = 1, 200 do __fire("DIN0001", 4) end
+run(1)
+check("stalled: nothing sent", #pubs == 0)
+check("stalled: overflow logged once", #logs == 1 and logs[1]:find("queue full", 1, true) ~= nil)
+outbox = 0
+run(10)
+n_ev = 0
+for _, m in ipairs(pubs) do if m.t == "grenton/CLU100000001/DIN0001/event" then n_ev = n_ev + 1 end end
+check("stalled: queue capped at 64 events", n_ev == 64)
+__fire("DIN0001", 4)
+run(1)
+check("drop count logged when events flow again", logs[#logs] == "mqtt: 136 event(s) dropped" and pubs[#pubs].t == "grenton/CLU100000001/DIN0001/event")
 
 -- ---- HA restart -------------------------------------------------------------------
 local before = count(CFG)

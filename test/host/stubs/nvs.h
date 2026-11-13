@@ -7,6 +7,7 @@ typedef uint32_t nvs_handle_t;
 typedef enum { NVS_READONLY, NVS_READWRITE } nvs_open_mode_t;
 #define ESP_ERR_NVS_NOT_FOUND 0x1102
 esp_err_t nvs_open(const char *ns, nvs_open_mode_t mode, nvs_handle_t *h);
+esp_err_t nvs_open_from_partition(const char *part, const char *ns, nvs_open_mode_t mode, nvs_handle_t *h);
 void nvs_close(nvs_handle_t h);
 esp_err_t nvs_commit(nvs_handle_t h);
 esp_err_t nvs_set_u32(nvs_handle_t h, const char *k, uint32_t v);

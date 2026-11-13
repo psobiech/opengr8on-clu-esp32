@@ -64,7 +64,7 @@ static bool s_enabled = true; // UseCloud interface default
 static bool s_started;
 static SemaphoreHandle_t s_lock; // apply(): Lua task (UseCloud, SYSTEM.Init) vs IP event
 
-/** @brief Broker URI / credentials: clu_mqtt_cfg_t (NVS settings) when set, else menuconfig. */
+/** @brief Broker URI / credentials: clu_mqtt_cfg_t (cfg partition settings) when set, else menuconfig. */
 static const char *broker_uri(void) { return s_cfg.broker_uri ? s_cfg.broker_uri : CONFIG_CLU_MQTT_BROKER_URI; }
 static const char *username(void) { return s_cfg.username ? s_cfg.username : CONFIG_CLU_MQTT_USERNAME; }
 static const char *password(void) { return s_cfg.password ? s_cfg.password : CONFIG_CLU_MQTT_PASSWORD; }
@@ -275,7 +275,7 @@ void clu_mqtt_start(void)
     bool first = !s_started;
     s_started = true;
     if (first && !broker_uri()[0]) {
-        ESP_LOGI(TAG, "no broker configured (NVS cfg/mqtt_uri or menuconfig CLU_MQTT_BROKER_URI), MQTT off");
+        ESP_LOGI(TAG, "no broker configured (cfg partition mqtt_uri or menuconfig CLU_MQTT_BROKER_URI), MQTT off");
     }
     apply();
 }

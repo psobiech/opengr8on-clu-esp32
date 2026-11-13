@@ -61,10 +61,11 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 | `components/clu_rtc` | zegar RTC PCF85063 albo DS3231 na I2C (podtrzymywany bateryjnie) |
 | `components/clu_i2c` | wspólne magistrale I2C (jedna na parę pinów: RTC + ekspander IO) |
 | `components/clu_localio` | IO płytki (PCF8575) jako moduł IO_MODULE_DIN_8 odpowiadający na ramki TF-Bus |
-| `tools/mknvs.py` | obraz NVS z ustawieniami dla gotowych obrazów (seryjny, PIN, WiFi, MQTT) |
+| `tools/mknvs.py` | obraz partycji `cfg` z ustawieniami dla gotowych obrazów (seryjny, PIN, WiFi, MQTT) |
 
-Partycje (`partitions.csv`): NVS (klucze, PIN, sieć, czas), dwie partycje aplikacji po 4 MB, FAT
-6 MB jako `a:\` (projekt, CONFIG.JSON, STORAGE.DAT, certyfikaty).
+Partycje (`partitions.csv`): NVS (klucze, PIN, sieć, czas), `cfg` (12 KB pod `0x12000`, ustawienia
+z `mknvs.py`, firmware tylko je czyta), dwie partycje aplikacji po 4 MB, FAT 6 MB jako `a:\`
+(projekt, CONFIG.JSON, STORAGE.DAT, certyfikaty).
 
 ## Zgodność z CLU_ZWAVE_2
 
@@ -217,40 +218,44 @@ esptool --chip esp32s3 --port /dev/ttyUSB0 erase-flash
 esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash 0x0 opengr8on-clu-waveshare-full.bin
 ```
 
-**2. Ustawienia** (obraz NVS, opcjonalnie): numer seryjny i PIN emulowanej CLU, WiFi, MQTT.
-Wartości z obrazu mają pierwszeństwo przed wkompilowanymi; pominięte opcje zostają domyślne
-(seryjny i PIN losowane przy pierwszym starcie, widoczne w logu UART).
+**2. Ustawienia** (opcjonalnie): numer seryjny i PIN emulowanej CLU, WiFi, MQTT, w osobnej
+partycji `cfg` (`0x12000`, 12 KB). Wartości z niej mają pierwszeństwo przed wkompilowanymi
+domyślnymi; pominięte opcje zostają domyślne (seryjny i PIN losowane przy pierwszym starcie,
+widoczne w logu UART).
 
 ```bash
 python mknvs.py --serial 221010155 --pin ABCD1234 \
     --wifi-ssid MojaSiec --wifi-pass 'haslo-wifi' \
     --mqtt-uri mqtt://192.168.1.10:1883 --mqtt-user clu --mqtt-pass 'haslo-mqtt' \
-    -o nvs.bin
-esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash 0x9000 nvs.bin
+    -o cfg.bin
+esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash 0x12000 cfg.bin
 ```
 
-| Opcja | Klucz NVS | Opis |
+| Opcja | Klucz (partycja `cfg`) | Opis |
 |---|---|---|
-| `--serial` | `clu/sn` (u32) | numer seryjny CLU, dziesiętnie (jak `CLU_SERIAL`) |
-| `--pin` | `clu/pin` | PIN / klucz prywatny, 8 znaków (jak `CLU_PRIVATE_KEY`) |
+| `--serial` | `cfg/sn` (u32) | numer seryjny CLU, dziesiętnie (jak `CLU_SERIAL`) |
+| `--pin` | `cfg/pin` | PIN / klucz prywatny, 8 znaków (jak `CLU_PRIVATE_KEY`) |
 | `--wifi-ssid`, `--wifi-pass` | `cfg/wifi_ssid`, `cfg/wifi_pass` | sieć WiFi; tylko obraz `waveshare` (płytki z Ethernetem są budowane bez WiFi) |
 | `--mqtt-uri` | `cfg/mqtt_uri` | broker, np. `mqtt://192.168.1.10:1883`, `mqtts://host:8883`; puste = MQTT wyłączone |
 | `--mqtt-user`, `--mqtt-pass` | `cfg/mqtt_user`, `cfg/mqtt_pass` | dane logowania do brokera |
 
-Obraz NVS zastępuje całą partycję `nvs` (`0x9000`, 24 KB): klucze projektu z OM, statyczne IP,
-lista modułów TF-Bus i inne zapisane stany wracają do domyślnych. Wgrywaj go przy instalacji albo
-gdy chcesz zmienić ustawienia; po zmianie numeru seryjnego lub PIN-u OM wymaga ponownego
-`req_set_key`. `--csv plik.csv` zapisuje też źródłowy CSV (z hasłami jawnym tekstem).
+Obraz zastępuje tylko partycję `cfg`: stan zapisywany w czasie pracy (partycja `nvs`: klucze
+projektu z OM, statyczne IP, lista modułów TF-Bus, czas) zostaje, więc ustawienia można zmieniać w
+dowolnym momencie — wgraj nowy obraz i zrestartuj. Gdy numer seryjny albo PIN różni się od
+obecnego, CLU go przyjmuje, a klucze projektu wracają do fabrycznych (OM wymaga ponownego
+`req_set_key`). Pełny obraz z kroku 1 czyści też `cfg`, więc ustawienia wgrywa się po nim.
+`--csv plik.csv` zapisuje też źródłowy CSV (z hasłami jawnym tekstem).
 
-**3. Aktualizacja** z zachowaniem ustawień i dysku `a:\` (z rozpakowanego katalogu artefaktu):
+**3. Aktualizacja** z zachowaniem ustawień, stanu i dysku `a:\` (z rozpakowanego katalogu
+artefaktu; wgrywa też aktualną tablicę partycji, adresy aplikacji się nie zmieniają):
 
 ```bash
 esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash @flash_args
 ```
 
 Bez Pythona: [ESP Web Tool](https://espressif.github.io/esptool-js/) w Chrome / Edge — **Connect**,
-plik `…-full.bin` pod adres `0x0` (pierwsza instalacja), `nvs.bin` pod `0x9000`. Obraz NVS i tak
-trzeba wygenerować `mknvs.py`.
+plik `…-full.bin` pod adres `0x0` (pierwsza instalacja), `cfg.bin` pod `0x12000`. Obraz ustawień
+i tak trzeba wygenerować `mknvs.py`.
 
 Grenton GATE: `--chip esp32`, w pozostałych przykładach bez zmian.
 
@@ -274,7 +279,7 @@ Wszystko w `idf.py menuconfig` → **OpenGr8on ESP32 CLU** (na górze menu).
 | `CLU_ETH_SPI_*_GPIO` | piny F8 | W5500: SCLK / MOSI / MISO / CS / INT (`-1` = odpytywanie co 10 ms) / RST (`-1` = brak) |
 | `CLU_ETH_SPI_CLOCK_MHZ` | 20 | W5500: zegar SPI |
 | `CLU_WIFI` | y bez Ethernetu, n z nim | WiFi STA; z Ethernetem opcjonalne (oba równolegle) |
-| `CLU_WIFI_SSID` / `CLU_WIFI_PASSWORD` | — | sieć WiFi; `cfg/wifi_ssid` / `cfg/wifi_pass` w NVS mają pierwszeństwo ([`mknvs.py`](#gotowe-obrazy-github-actions)); bez SSID WiFi jest wyłączone |
+| `CLU_WIFI_SSID` / `CLU_WIFI_PASSWORD` | — | sieć WiFi; `cfg/wifi_ssid` / `cfg/wifi_pass` z partycji `cfg` mają pierwszeństwo ([`mknvs.py`](#gotowe-obrazy-github-actions)); bez SSID WiFi jest wyłączone |
 | `CLU_WIFI_BSSID` | puste | przypięcie do konkretnego AP (`aa:bb:cc:dd:ee:ff`) |
 | `CLU_WIFI_WPA3_ONLY` | n | odrzucaj AP z WPA2 |
 | `CLU_WIFI_MAX_TX_POWER` | 0 | moc nadawania w 0,25 dBm, 0 = domyślna sterownika |
@@ -295,9 +300,9 @@ interfejsu, przez który widzi rozmówcę. Przy obu interfejsach trasa domyślna
 | `CLU_FW_API_VER` | `0x203` | wersja interfejsu CLU w OM (0x201 = firmware 5.13.x) |
 | `CLU_FW_VERSION` | `5.15.24-2635` | wersja raportowana do OM |
 
-Numer seryjny i PIN ustawione w menuconfig zastępują zapisane w NVS; puste = wartości z NVS (w
-gotowych obrazach z `mknvs.py`, zob. [Gotowe obrazy](#gotowe-obrazy-github-actions)), a bez nich
-losowe przy pierwszym starcie.
+Numer seryjny i PIN ustawione w menuconfig zastępują zapisane w NVS; puste = wartości z partycji
+`cfg` (gotowe obrazy, `mknvs.py`, zob. [Gotowe obrazy](#gotowe-obrazy-github-actions)), a bez nich
+zapisane w NVS albo losowe przy pierwszym starcie.
 
 ### TF-Bus / RS485
 
@@ -360,8 +365,8 @@ wykrywa CLU, pokazuje moduły, wartości na żywo i logi (telnet).
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|
-| `CLU_MQTT_BROKER_URI` | puste = wyłączone | np. `mqtt://192.168.1.10`, `mqtts://broker:8883`; `cfg/mqtt_uri` w NVS ma pierwszeństwo ([`mknvs.py`](#gotowe-obrazy-github-actions)) |
-| `CLU_MQTT_USERNAME` / `PASSWORD` | anonimowo | `cfg/mqtt_user` / `cfg/mqtt_pass` w NVS mają pierwszeństwo |
+| `CLU_MQTT_BROKER_URI` | puste = wyłączone | np. `mqtt://192.168.1.10`, `mqtts://broker:8883`; `cfg/mqtt_uri` z partycji `cfg` ma pierwszeństwo ([`mknvs.py`](#gotowe-obrazy-github-actions)) |
+| `CLU_MQTT_USERNAME` / `PASSWORD` | anonimowo | `cfg/mqtt_user` / `cfg/mqtt_pass` z partycji `cfg` mają pierwszeństwo |
 | `CLU_MQTT_CLIENT_ID` | `opengr8on-CLU<serial>` | |
 | `CLU_MQTT_TOPIC_BASE` | `grenton` | |
 | `CLU_MQTT_KEEPALIVE` | 30 s | |

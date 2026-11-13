@@ -13,10 +13,12 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "nvs.h"
+#include "nvs_flash.h"
 #include "tfbus_master.h"
 
 static const char *TAG = "clu_state";
 static const char *NS = "clu";
+#define CFG_PART "cfg" // provisioning partition and its namespace (tools/mknvs.py)
 
 clu_state_t g_clu;
 
@@ -42,11 +44,30 @@ static bool config_iv(uint8_t out[16])
     return true;
 }
 
+/**
+ * @brief Open the provisioning partition "cfg" (tools/mknvs.py image), read-only.
+ *
+ * Separate from the runtime NVS: flashing settings never touches project keys, static IP, the
+ * TF-Bus registry... Initialised on first use; a missing or blank partition = nothing set.
+ */
+static bool cfg_open(nvs_handle_t *h)
+{
+    static bool ready; // failures are not cached: only boot-time calls, nothing to save
+    if (!ready) {
+        esp_err_t err = nvs_flash_init_partition(CFG_PART);
+        ready = err == ESP_OK;
+        if (!ready) {
+            ESP_LOGI(TAG, "no settings partition \"%s\" (%s)", CFG_PART, esp_err_to_name(err));
+        }
+    }
+    return ready && nvs_open_from_partition(CFG_PART, CFG_PART, NVS_READONLY, h) == ESP_OK;
+}
+
 const char *clu_state_setting(const char *key, const char *fallback)
 {
     nvs_handle_t h;
-    if (nvs_open("cfg", NVS_READONLY, &h) != ESP_OK) {
-        return fallback; // namespace never written: nothing provisioned
+    if (!cfg_open(&h)) {
+        return fallback; // nothing provisioned
     }
     size_t len = 0;
     char *v = NULL;
@@ -57,7 +78,7 @@ const char *clu_state_setting(const char *key, const char *fallback)
     }
     nvs_close(h);
     if (v) {
-        ESP_LOGI(TAG, "setting %s from NVS", key); // never the value: may be a password
+        ESP_LOGI(TAG, "setting %s from the cfg partition", key); // never the value: may be a password
     }
     return v ? v : fallback;
 }
@@ -93,12 +114,34 @@ void clu_state_load(void)
     nvs_handle_t h;
     ESP_ERROR_CHECK(nvs_open(NS, NVS_READWRITE, &h));
 
+    // Serial / PIN to adopt: menuconfig, else the provisioning partition (prebuilt firmware).
+    uint32_t want_sn = 0;
+    char want_pin[CLU_PIN_BYTES + 1] = "";
+    if (CONFIG_CLU_SERIAL[0]) {
+        want_sn = (uint32_t)strtoul(CONFIG_CLU_SERIAL, NULL, 10);
+    }
+    if (strlen(CONFIG_CLU_PRIVATE_KEY) == CLU_PIN_BYTES) {
+        strlcpy(want_pin, CONFIG_CLU_PRIVATE_KEY, sizeof want_pin);
+    }
+    nvs_handle_t ch;
+    if ((!want_sn || !want_pin[0]) && cfg_open(&ch)) {
+        if (!want_sn && nvs_get_u32(ch, "sn", &want_sn) != ESP_OK) {
+            want_sn = 0;
+        }
+        char p[16];
+        size_t pl = sizeof p;
+        if (!want_pin[0] && nvs_get_str(ch, "pin", p, &pl) == ESP_OK && strlen(p) == CLU_PIN_BYTES) {
+            strlcpy(want_pin, p, sizeof want_pin);
+        }
+        nvs_close(ch);
+    }
+
     bool dirty = false;
     bool identity_changed = false;
     uint32_t old_sn = 0;
     bool have_sn = nvs_get_u32(h, "sn", &old_sn) == ESP_OK;
-    if (CONFIG_CLU_SERIAL[0]) {
-        g_clu.sn = (uint32_t)strtoul(CONFIG_CLU_SERIAL, NULL, 10);
+    if (want_sn) {
+        g_clu.sn = want_sn;
         if (!have_sn || old_sn != g_clu.sn) {
             nvs_set_u32(h, "sn", g_clu.sn);
             identity_changed = have_sn;
@@ -117,9 +160,9 @@ void clu_state_load(void)
 
     size_t len = sizeof g_clu.pin;
     bool have_pin = nvs_get_str(h, "pin", g_clu.pin, &len) == ESP_OK;
-    if (strlen(CONFIG_CLU_PRIVATE_KEY) == CLU_PIN_BYTES) {
-        if (!have_pin || strcmp(g_clu.pin, CONFIG_CLU_PRIVATE_KEY) != 0) {
-            strlcpy(g_clu.pin, CONFIG_CLU_PRIVATE_KEY, sizeof g_clu.pin);
+    if (want_pin[0]) {
+        if (!have_pin || strcmp(g_clu.pin, want_pin) != 0) {
+            strlcpy(g_clu.pin, want_pin, sizeof g_clu.pin);
             nvs_set_str(h, "pin", g_clu.pin);
             identity_changed |= have_pin;
             dirty = true;

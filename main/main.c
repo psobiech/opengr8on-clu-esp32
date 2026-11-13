@@ -65,7 +65,7 @@ static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 }
 
 #if CONFIG_CLU_WIFI
-// SSID / password: NVS cfg/wifi_ssid, cfg/wifi_pass (prebuilt firmware), else menuconfig.
+// SSID / password: cfg partition wifi_ssid / wifi_pass (prebuilt firmware), else menuconfig.
 static const char *s_wifi_ssid = CONFIG_CLU_WIFI_SSID;
 
 /**
@@ -105,7 +105,7 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 }
 
 /**
- * @brief Initialise the WiFi STA netif + driver (SSID / password from NVS or menuconfig, WPA2-PSK
+ * @brief Initialise the WiFi STA netif + driver (SSID / password from the cfg partition or menuconfig, WPA2-PSK
  * minimum, optional BSSID lock) and start it. Without an SSID WiFi stays off.
  */
 static void wifi_start(void)
@@ -113,7 +113,7 @@ static void wifi_start(void)
     s_wifi_ssid = clu_state_setting("wifi_ssid", CONFIG_CLU_WIFI_SSID);
     const char *pass = clu_state_setting("wifi_pass", CONFIG_CLU_WIFI_PASSWORD);
     if (!s_wifi_ssid[0]) {
-        ESP_LOGE(TAG, "no WiFi SSID (NVS cfg/wifi_ssid or menuconfig CLU_WIFI_SSID): WiFi off");
+        ESP_LOGE(TAG, "no WiFi SSID (cfg partition wifi_ssid or menuconfig CLU_WIFI_SSID): WiFi off");
         return;
     }
     clu_net_init(CLU_NET_WIFI, esp_netif_create_default_wifi_sta());
@@ -306,7 +306,7 @@ void app_main(void)
         .sn = g_clu.sn,
         .fw_version = CONFIG_CLU_FW_VERSION,
         .ca_path = CLU_FS_ROOT "/a/MQTT_CA.PEM",
-        // NVS (prebuilt firmware) over menuconfig; NULL = the menuconfig value
+        // cfg partition (prebuilt firmware) over menuconfig; NULL = the menuconfig value
         .broker_uri = clu_state_setting("mqtt_uri", NULL),
         .username = clu_state_setting("mqtt_user", NULL),
         .password = clu_state_setting("mqtt_pass", NULL),

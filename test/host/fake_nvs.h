@@ -1,8 +1,11 @@
 // In-memory NVS for host tests (include once per test binary). Entries are keyed by
-// namespace + key; nvs_fail_open makes nvs_open() fail.
+// namespace + key ("<partition>:<namespace>" outside the default "nvs" partition);
+// nvs_fail_open makes nvs_open() fail, nvs_fail_part nvs_flash_init_partition().
 #pragma once
 #include <string.h>
+#include <stdio.h>
 #include "nvs.h"
+#include "nvs_flash.h"
 
 typedef struct {
     char ns[16], key[16];
@@ -11,13 +14,13 @@ typedef struct {
     size_t len;
 } nvs_entry_t;
 static nvs_entry_t nvs_db[64];
-static int nvs_n, nvs_commits, nvs_fail_open;
+static int nvs_n, nvs_commits, nvs_fail_open, nvs_fail_part, nvs_part_inits;
 static char nvs_open_ns[8][16]; // namespace per handle (1-based)
 static int nvs_nopen;
 
 static void nvs_reset(void)
 {
-    nvs_n = nvs_commits = nvs_fail_open = nvs_nopen = 0;
+    nvs_n = nvs_commits = nvs_fail_open = nvs_nopen = nvs_fail_part = nvs_part_inits = 0;
 }
 
 esp_err_t nvs_open(const char *ns, nvs_open_mode_t mode, nvs_handle_t *h)
@@ -30,6 +33,21 @@ esp_err_t nvs_open(const char *ns, nvs_open_mode_t mode, nvs_handle_t *h)
     strncpy(nvs_open_ns[i], ns, sizeof nvs_open_ns[i] - 1);
     *h = (nvs_handle_t)(i + 1);
     return ESP_OK;
+}
+esp_err_t nvs_open_from_partition(const char *part, const char *ns, nvs_open_mode_t mode, nvs_handle_t *h)
+{
+    if (!strcmp(part, "nvs")) {
+        return nvs_open(ns, mode, h);
+    }
+    char q[16];
+    snprintf(q, sizeof q, "%s:%s", part, ns);
+    return nvs_open(q, mode, h);
+}
+esp_err_t nvs_flash_init_partition(const char *part)
+{
+    (void)part;
+    nvs_part_inits++;
+    return nvs_fail_part ? ESP_FAIL : ESP_OK;
 }
 void nvs_close(nvs_handle_t h) { (void)h; }
 esp_err_t nvs_commit(nvs_handle_t h) { (void)h; nvs_commits++; return ESP_OK; }

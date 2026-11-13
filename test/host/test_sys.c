@@ -453,32 +453,73 @@ static const char *nvs_str(const char *ns, const char *k)
     return e && e->type == 's' ? (const char *)e->val : NULL;
 }
 
-/** @brief Prebuilt firmware provisioned with an NVS image (tools/mknvs.py): identity + cfg settings. */
+/** @brief Prebuilt firmware with a settings image in the "cfg" partition (tools/mknvs.py). */
+static void cfg_put(const char *pin, uint32_t sn)
+{
+    nvs_handle_t h;
+    nvs_open_from_partition("cfg", "cfg", NVS_READWRITE, &h);
+    if (sn) {
+        nvs_set_u32(h, "sn", sn);
+    }
+    if (pin) {
+        nvs_set_str(h, "pin", pin);
+    }
+}
+
 static void test_provisioned(void)
 {
     const char *sv_serial = host_cfg_serial, *sv_pin = host_cfg_pin, *sv_iv = host_cfg_iv;
     host_cfg_serial = host_cfg_pin = host_cfg_iv = ""; // prebuilt: nothing in menuconfig
     nvs_reset();
-    check("setting: nothing provisioned -> fallback (also NULL)",
-          !strcmp(clu_state_setting("wifi_ssid", "dflt"), "dflt") && !clu_state_setting("mqtt_uri", NULL));
+    nvs_fail_part = 1;
+    check("setting: no cfg partition (old partition table) -> fallback",
+          !strcmp(clu_state_setting("wifi_ssid", "dflt"), "dflt") && nvs_part_inits == 1);
+    nvs_fail_part = 0;
+    check("setting: blank cfg partition -> fallback (also NULL)",
+          !strcmp(clu_state_setting("wifi_ssid", "dflt"), "dflt") && !clu_state_setting("mqtt_uri", NULL) &&
+              nvs_part_inits == 2);
+
+    // first boot with a settings image: serial and PIN adopted, stored in the runtime NVS
+    cfg_put("QWER5678", 221010155);
     nvs_handle_t h;
-    nvs_open("clu", NVS_READWRITE, &h);
-    nvs_set_u32(h, "sn", 221010155);
-    nvs_set_str(h, "pin", "QWER5678");
-    nvs_open("cfg", NVS_READWRITE, &h);
+    nvs_open_from_partition("cfg", "cfg", NVS_READWRITE, &h);
     nvs_set_str(h, "wifi_ssid", "NvsNet");
     nvs_set_str(h, "mqtt_uri", "mqtts://broker.lan:8883");
     memset(&g_clu, 0, sizeof g_clu);
     clu_state_load();
     uint8_t k[16];
     clu_default_key((const uint8_t *)"QWER5678", k);
-    check("provisioned: serial and PIN from the NVS image, factory key derived from the PIN",
-          g_clu.sn == 221010155u && !strcmp(g_clu.pin, "QWER5678") && !memcmp(g_clu.project.key, k, 16) &&
-              nvs_peek("clu", "key"));
+    check("provisioned: serial and PIN from the cfg partition, stored in nvs, factory key from the PIN",
+          g_clu.sn == 221010155u && !strcmp(g_clu.pin, "QWER5678") && nvs_u32("clu", "sn") == 221010155u &&
+              !strcmp(nvs_str("clu", "pin"), "QWER5678") && !memcmp(g_clu.project.key, k, 16) && nvs_part_inits == 2);
     check("setting: provisioned values win, other keys fall back",
           !strcmp(clu_state_setting("wifi_ssid", "dflt"), "NvsNet") &&
               !strcmp(clu_state_setting("mqtt_uri", NULL), "mqtts://broker.lan:8883") &&
               !strcmp(clu_state_setting("wifi_pass", "pw"), "pw") && !clu_state_setting("mqtt_user", NULL));
+    int in_cfg = 0;
+    for (int i = 0; i < nvs_n; i++) {
+        in_cfg += !strncmp(nvs_db[i].ns, "cfg:", 4);
+    }
+    check("cfg partition only read: still just the 4 provisioned entries", in_cfg == 4);
+
+    // OM sets a project key; reboot with the same settings image: key kept
+    memset(g_clu.project.key, 0x5a, 16);
+    clu_state_save_keys();
+    memset(&g_clu, 0, sizeof g_clu);
+    clu_state_load();
+    check("provisioned: same serial / PIN on reboot -> OM's project key kept", g_clu.project.key[0] == 0x5a);
+
+    // new settings image with another PIN: adopted, keys back to factory
+    cfg_put("ZXCV9012", 0);
+    clu_state_load();
+    clu_default_key((const uint8_t *)"ZXCV9012", k);
+    check("provisioned: changed PIN adopted, project key back to factory",
+          !strcmp(g_clu.pin, "ZXCV9012") && g_clu.sn == 221010155u && !memcmp(g_clu.project.key, k, 16));
+
+    // menuconfig wins over the cfg partition
+    host_cfg_serial = "330017203";
+    clu_state_load();
+    check("provisioned: menuconfig serial wins over the cfg partition", g_clu.sn == 330017203u);
     host_cfg_serial = sv_serial, host_cfg_pin = sv_pin, host_cfg_iv = sv_iv;
 }
 

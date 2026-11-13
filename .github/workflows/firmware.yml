@@ -1,15 +1,15 @@
 # Prebuilt firmware for every supported device (CMakePresets.json), built with the ESP-IDF
 # version the project is developed on. Each artifact holds a full image for a first install,
-# the separate images for updates that keep the settings (NVS), and tools/mknvs.py to make
-# the settings image. Flashing: README, "Gotowe obrazy (GitHub Actions)".
+# the separate images for updates that keep the state (nvs) and settings (cfg partition), and
+# tools/mknvs.py to make the cfg settings image. Flashing: README, "Gotowe obrazy (GitHub Actions)".
 name: Firmware
 
 on:
   push:
-    branches: [ "develop", "main" ]
+    branches: [ "develop" ]
     tags: [ "v*" ]
   pull_request:
-    branches: [ "develop", "main" ]
+    branches: [ "develop" ]
   workflow_dispatch:
 
 permissions:

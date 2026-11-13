@@ -45,8 +45,9 @@ extern clu_state_t g_clu;
 /**
  * @brief Load the state from NVS or generate it.
  *
- * sn/pin/iv are random unless CLU_SERIAL/CLU_PRIVATE_KEY/CLU_IV are set;
- * project key = default_key(pin).
+ * sn/pin/iv are random unless CLU_SERIAL/CLU_PRIVATE_KEY/CLU_IV are set, or sn/pin are in the
+ * provisioning partition "cfg" (menuconfig wins). An adopted serial / PIN that differs from the
+ * stored one resets the project keys to the factory key; project key = default_key(pin).
  */
 void clu_state_load(void);
 
@@ -65,10 +66,12 @@ void clu_state_factory_keys(void);
 void clu_state_write_config_files(void);
 
 /**
- * @brief Device setting from NVS (namespace "cfg", string key), for prebuilt firmware.
+ * @brief Device setting from the provisioning partition "cfg" (string key), for prebuilt firmware.
  *
- * Keys: wifi_ssid, wifi_pass, mqtt_uri, mqtt_user, mqtt_pass (see tools/mknvs.py). A value
- * present in NVS wins over the menuconfig default. Call after nvs_flash_init().
+ * Keys: wifi_ssid, wifi_pass, mqtt_uri, mqtt_user, mqtt_pass (see tools/mknvs.py; the same
+ * partition also carries sn / pin, adopted by clu_state_load()). A value present there wins over
+ * the menuconfig default. The partition is separate from the runtime NVS; the firmware only reads
+ * it (NVS formats it once if blank).
  *
  * @param key      NVS key.
  * @param fallback Returned when the key is not set (may be NULL).

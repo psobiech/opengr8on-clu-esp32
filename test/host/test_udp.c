@@ -231,6 +231,10 @@ int clu_diag_write(const char *ip)
     return s_diag_err;
 }
 
+// TF-Bus master built in (default) or not (test_udp_nobus: CLU_BUS_NONE / GATE): no bus rescans.
+#define BUS (CONFIG_CLU_TFBUS_MASTER ? 1 : 0)
+static int s_cfg_writes;
+void clu_state_write_config_files(void) { s_cfg_writes++; }
 static bool s_refresh_ok = true;
 static int s_refreshes;
 static uint32_t s_refresh_timeout;
@@ -566,8 +570,9 @@ static void test_discovery(void)
     sent_reset();
     s_delayed = 0;
     run_task(discovery_task);
-    check("discovery task: bus rescanned once (20 s timeout), 3 replies 0/50/100 ms apart",
-          s_refreshes == 1 && s_refresh_timeout == 20000 && s_nsent == 3 && s_delayed == 150);
+    check(BUS ? "discovery task: bus rescanned once (20 s timeout), 3 replies 0/50/100 ms apart"
+              : "discovery task without a bus: no rescan, 3 replies 0/50/100 ms apart",
+          s_refreshes == BUS && (!BUS || s_refresh_timeout == 20000) && s_nsent == 3 && s_delayed == 150);
 
     clu_cipher_t reply_key = bcast_with_iv(om_iv);
     char got[256];
@@ -606,7 +611,7 @@ static void test_discovery(void)
     sent_reset();
     run_task(discovery_task);
     check("discovery within 30 s of a scan: no rescan; after 30 s: rescan; failed rescans still answered",
-          s_refreshes == 2 && s_nsent == 9);
+          s_refreshes == 2 * BUS && s_nsent == 9);
     check("discovery: temp IV kept across requests", memcmp(iv_before, g_clu.temp.iv, 16) == 0);
     s_refresh_ok = true;
     memset(s_wait, 0, sizeof s_wait);
@@ -836,7 +841,11 @@ static void test_project_commands(void)
     rx_reset();
     rx_add_str(prj, "req_refresh_modules:192.168.1.20", "192.168.1.50");
     run_task(udp_task);
+#if CONFIG_CLU_TFBUS_MASTER
     check("req_refresh_modules: bus rescanned (25 s timeout)", s_refreshes == 1 && s_refresh_timeout == 25000);
+#else
+    check("req_refresh_modules without a bus: no rescan, CONFIG.JSON rewritten", s_refreshes == 0 && s_cfg_writes == 1);
+#endif
     check_str("req_refresh_modules -> resp_refresh_modules:<ip>", sent_str(0, prj),
               "resp_refresh_modules:192.168.1.20");
     s_refresh_ok = false;

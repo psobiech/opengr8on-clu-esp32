@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "clu_keys.h"
+#include "http_proto.h"
 #include "tfbus_frame.h"
 #include "tftp_proto.h"
 
@@ -329,6 +330,54 @@ int main(void)
         pcr = false;
         nl = tftp_netascii_decode((const uint8_t *)"z\r", 2, na_out, &pcr);
         check("netascii trailing CR pending", nl == 1 && pcr);
+    }
+
+    // ---- HTTP request head (GATE HttpListener) ----
+    {
+        char b[512];
+        http_req_head_t h;
+        strcpy(b, "GET /api/x?a=1&b=2 HTTP/1.1\r\nHost: gate\r\nX-A:  v  \r\n\r\nrest");
+        int n = http_parse_head(b, strlen(b), &h);
+        check("http head length", n == (int)strlen("GET /api/x?a=1&b=2 HTTP/1.1\r\nHost: gate\r\nX-A:  v  \r\n\r\n"));
+        check("http method / path / query", strcmp(h.method, "GET") == 0 && strcmp(h.path, "/api/x") == 0 &&
+                                                strcmp(h.query, "a=1&b=2") == 0);
+        check("http headers block", strcmp(h.headers, "Host: gate\r\nX-A:  v  \r\n") == 0);
+        check("http no body", h.content_length == 0 && !h.chunked);
+        check("http body after head", strcmp(b + n, "rest") == 0);
+
+        strcpy(b, "POST /p HTTP/1.0\r\ncontent-length: 12\r\nTransfer-Encoding: gzip, chunked\r\n\r\n");
+        n = http_parse_head(b, strlen(b), &h);
+        check("http content-length (any case) / chunked", n > 0 && h.content_length == 12 && h.chunked &&
+                                                              strcmp(h.query, "") == 0);
+        strcpy(b, "GET / HTTP/1.1\r\n\r\n");
+        n = http_parse_head(b, strlen(b), &h);
+        check("http no headers", n == 18 && strcmp(h.path, "/") == 0 && h.headers[0] == 0);
+        strcpy(b, "GET http://gate:80/x/y?q HTTP/1.1\r\n\r\n");
+        check("http absolute-form target", http_parse_head(b, strlen(b), &h) > 0 && strcmp(h.path, "/x/y") == 0 &&
+                                               strcmp(h.query, "q") == 0);
+        strcpy(b, "GET / HTTP/1.1\r\nHost: x\r\n");
+        check("http incomplete head", http_parse_head(b, strlen(b), &h) == 0);
+        strcpy(b, "get / HTTP/1.1\r\n\r\n");
+        check("http lowercase method rejected", http_parse_head(b, strlen(b), &h) == -1);
+        strcpy(b, "GET / FTP/1.1\r\n\r\n");
+        check("http bad version rejected", http_parse_head(b, strlen(b), &h) == -1);
+        strcpy(b, "GET /\r\n\r\n");
+        check("http missing version rejected", http_parse_head(b, strlen(b), &h) == -1);
+        strcpy(b, "POST / HTTP/1.1\r\nContent-Length: 1x\r\n\r\n");
+        check("http bad content-length rejected", http_parse_head(b, strlen(b), &h) == -1);
+        strcpy(b, "POST / HTTP/1.1\r\nContent-Length: -1\r\n\r\n");
+        check("http negative content-length rejected", http_parse_head(b, strlen(b), &h) == -1);
+        memcpy(b, "GET /\0x HTTP/1.1\r\n", 18);
+        check("http NUL in head rejected", http_parse_head(b, 18, &h) == -1);
+
+        char out[256];
+        n = http_format_head(out, sizeof out, 404, "Content-Type: text/plain\r\n", 9);
+        check("http response head", n > 0 && strcmp(out, "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\n"
+                                                          "Content-Length: 9\r\nConnection: close\r\n\r\n") == 0);
+        n = http_format_head(out, sizeof out, 42, NULL, 0);
+        check("http bad status -> 500", n > 0 && strncmp(out, "HTTP/1.1 500 Internal Server Error\r\n", 36) == 0);
+        check("http head too small", http_format_head(out, 20, 200, NULL, 0) == -1);
+        check("http reason unknown", strcmp(http_reason(299), "Status") == 0);
     }
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

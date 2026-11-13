@@ -3,6 +3,16 @@
 Płytki, na których działa opengr8on-clu-esp32: piny, profile `sdkconfig` i uwagi sprzętowe.
 Budowanie i opcje menuconfig: [README](README.md).
 
+## Wymagania pamięci
+
+**PSRAM jest wymagany.** Sam runtime Lua, zanim wczyta się projekt OM, zajmuje ok. 170 KB
+(biblioteki standardowe, `prelude.lua`, obiekty wirtualne z `objects.lua`, `mqtt.lua`,
+`http.lua`), a projekt OM, skrypty i treści HTTP / MQTT dochodzą do tego. ESP32 bez PSRAM (np.
+moduły ESP32-WROOM-32) ma po starcie WiFi i usług ok. 65 KB wolnego wewnętrznego RAM, więc Lua się
+na nim nie uruchomi (w logu `Lua VM setup: not enough memory`; sieć, OTA i telnet działają dalej).
+Obsługiwane płytki mają 8 MB PSRAM (ESP32-S3) albo PSRAM modułu WROVER (ESP32). Flash: 4 MB
+wystarcza (`partitions_4mb.csv`), na ESP32-S3 profile zakładają 16 MB.
+
 - [Waveshare ESP32-S3-RS485-CAN](#waveshare-esp32-s3-rs485-can) — zalecana płytka (z zewnętrzną anteną)
 - [Inne płytki ESP32-S3](#inne-płytki-esp32-s3) — własny transceiver RS485
 - [KinCony F8 i KC868-A8v3](#kincony-f8-i-kc868-a8v3) — ESP32-S3, W5500, 8 przekaźników / 8 wejść

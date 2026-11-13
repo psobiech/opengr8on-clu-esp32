@@ -12,7 +12,7 @@ CFLAGS := -std=c11 -Wall -Wextra -Werror -O1 -g $(SAN) -I$(PROTO)/include
 STUBS := $(wildcard stubs/*.h stubs/*/*.h)
 HDRS := $(wildcard $(COMP)/*/include/*.h $(COMP)/tfbus_drivers/*.h $(MAIN)/*.h)
 
-test_proto: test_proto.c $(PROTO)/tfbus_frame.c $(PROTO)/clu_keys.c $(PROTO)/tftp_proto.c $(HDRS)
+test_proto: test_proto.c $(PROTO)/tfbus_frame.c $(PROTO)/clu_keys.c $(PROTO)/tftp_proto.c $(PROTO)/http_proto.c $(HDRS)
 	$(TCC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
 # Lua version under test: make LUA=5.5 clean test
@@ -68,6 +68,11 @@ UDP_INC := -Istubs -I$(MAIN) -I$(PROTO)/include -I$(COMP)/clu_crypto/include -I$
 test_udp: test_udp.c $(MAIN)/udp_server.c $(PROTO)/clu_keys.c $(STUBS) $(HDRS)
 	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
 	    $(UDP_INC) -o $@ test_udp.c $(PROTO)/clu_keys.c
+
+# The same without a TF-Bus master (CLU_BUS_NONE / GATE): discovery and "Clear CLU" do not rescan.
+test_udp_nobus: test_udp.c $(MAIN)/udp_server.c $(PROTO)/clu_keys.c $(STUBS) $(HDRS)
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
+	    $(UDP_INC) -DCONFIG_CLU_TFBUS=0 -o $@ test_udp.c $(PROTO)/clu_keys.c
 
 # RS485 transport (tfbus_uart.c) against a fake ESP-IDF UART driver.
 test_uart: test_uart.c $(COMP)/tfbus_uart/tfbus_uart.c $(PROTO)/tfbus_frame.c $(STUBS) $(HDRS)
@@ -151,6 +156,11 @@ test_main_mysensors: test_main.c $(MAIN)/main.c $(STUBS) $(HDRS)
 	$(TCC) $(HOST_CFLAGS) $(MAIN_INC) -I$(COMP)/clu_mysensors/include -DCONFIG_CLU_TFBUS=0 -DCONFIG_CLU_MYSENSORS=1 \
 	    -DCONFIG_CLU_MYSENSORS_MODULES_MAX=2 -o $@ test_main.c -lm
 
+# The same as a GATE HTTP: no bus, GATE feature indices, HTTP objects.
+test_main_gate: test_main.c $(MAIN)/main.c $(STUBS) $(HDRS)
+	$(TCC) $(HOST_CFLAGS) $(MAIN_INC) -I$(COMP)/clu_http/include -DCONFIG_CLU_TFBUS=0 -DCONFIG_CLU_DEVICE_GATE_HTTP=1 \
+	    -DCONFIG_CLU_HTTP=1 -o $@ test_main.c -lm
+
 # AES (clu_crypto.c) against the host's mbedtls 3.6 PSA API (Arch: mbedtls3; elsewhere set
 # MBEDTLS3_INC / MBEDTLS3_LIB). Skipped by `make test` when the headers are missing.
 MBEDTLS3_INC ?= /usr/include/mbedtls3
@@ -162,7 +172,7 @@ test_crypto: test_crypto.c $(COMP)/clu_crypto/clu_crypto.c $(PROTO)/clu_keys.c
 
 HAVE_MBEDTLS3 := $(wildcard $(MBEDTLS3_INC)/psa/crypto.h)
 
-C_TESTS := test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_time_nortc test_rtc $(if $(HAVE_MBEDTLS3),test_crypto)
+C_TESTS := test_proto test_drivers test_master test_udp test_udp_nobus test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_main_gate test_time_nortc test_rtc $(if $(HAVE_MBEDTLS3),test_crypto)
 
 .PHONY: test test-c clean coverage
 test: test-c test-lua
@@ -172,6 +182,7 @@ test-c: $(C_TESTS)
 	ASAN_OPTIONS=detect_leaks=0 ./test_drivers
 	ASAN_OPTIONS=detect_leaks=0 ./test_master 2>/dev/null
 	./test_udp 2>/dev/null
+	./test_udp_nobus 2>/dev/null
 	./test_rtc 2>/dev/null
 	./test_uart 2>/dev/null
 	./test_localio
@@ -187,11 +198,12 @@ test-c: $(C_TESTS)
 	./test_main 2>/dev/null
 	./test_main_nobus 2>/dev/null
 	./test_main_mysensors 2>/dev/null
+	./test_main_gate 2>/dev/null
 	./test_time_nortc 2>/dev/null
 	$(if $(HAVE_MBEDTLS3),./test_crypto,@echo "skip test_crypto: no $(MBEDTLS3_INC)/psa/crypto.h")
 
 clean:
-	rm -f test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_time_nortc test_rtc test_crypto liblua_host.a *.o
+	rm -f test_proto test_drivers test_master test_udp test_udp_nobus test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_main_gate test_time_nortc test_rtc test_crypto liblua_host.a *.o
 	rm -rf *.gcda *.gcno coverage
 
 # Prelude (Lua object model) + MQTT/Home Assistant (clu_mqtt/mqtt.lua) tests; needs lua$(LUA) on the host. Pass OM=<path> to also load a real OM.LUA.
@@ -203,6 +215,7 @@ test-lua:
 	$(LUA_RUN) test_prelude.lua
 	$(LUA_RUN) test_mqtt.lua
 	$(LUA_RUN) test_mysensors.lua
+	$(LUA_RUN) test_http.lua
 	$(if $(OM),$(LUA_RUN) test_prelude.lua "$(OM)")
 
 # Line/branch coverage of C (gcov) and Lua (lua_cov.lua) code under test: summary on stdout,

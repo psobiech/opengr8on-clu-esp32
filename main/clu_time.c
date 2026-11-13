@@ -62,6 +62,7 @@ static const char *const TZ[] = {
 static char s_ntp[64] = DEFAULT_NTP; // esp_sntp keeps the pointer
 static int s_zone;
 static bool s_sntp_started;
+static bool s_sntp_off; // GATE UseNTP = 0
 
 /** @brief Persist a string (@p s != NULL) or an i32 (@p n) under @p key. */
 static void nvs_put(const char *key, const char *s, int32_t n)
@@ -168,7 +169,24 @@ void clu_time_store(void)
 
 void clu_time_start_sntp(void)
 {
-    ntp_restart();
+    if (!s_sntp_off) {
+        ntp_restart();
+    }
+}
+
+void clu_time_set_ntp_enabled(bool on)
+{
+    if (on == !s_sntp_off) {
+        return;
+    }
+    s_sntp_off = !on;
+    ESP_LOGI(TAG, "SNTP %s", on ? "on" : "off");
+    if (on) {
+        ntp_restart();
+    } else if (s_sntp_started) {
+        esp_sntp_stop();
+        s_sntp_started = false;
+    }
 }
 
 void clu_time_set_ntp_server(const char *server)

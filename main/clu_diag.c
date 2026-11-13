@@ -49,7 +49,7 @@ int clu_diag_write(const char *ip)
             "\t\"cloudConn\":\t%s,\n\t\"voltage\":\t0,\n\t\"hwType\":\t%d,\n\t\"hwVer\":\t%d,\n\t\"fwType\":\t%d,\n"
             "\t\"fwApiVer\":\t%d,\n\t\"fwVer\":\t\"%s\",\n\t\"tfbusDiagnostic\":\t[",
             (unsigned long)g_clu.sn, ip, clu_mqtt_connected() ? "true" : "false", CLU_HW_TYPE,
-            CLU_HW_VERSION, CLU_FW_TYPE, CLU_FW_API_VER, CONFIG_CLU_FW_VERSION);
+            CLU_HW_VERSION, CLU_FW_TYPE, CLU_FW_API_VER, CLU_FW_VERSION);
     tfbus_device_t *dev = calloc(TFBUS_MAX_MODULES, sizeof *dev);
     int ndev = dev ? tfbus_master_devices(dev, TFBUS_MAX_MODULES) : 0;
     int n = tfbus_master_count(), out = 0;

@@ -32,35 +32,7 @@ local PUBS_PER_TICK = 16
 local EVENTS_MAX = 64         -- pending non-coalesced messages (events, API replies) in the queue
 local RECV_PER_TICK = 8
 
--- ---------------------------------------------------------------------------------------------
--- JSON (discovery payloads only: strings, numbers, booleans, arrays, objects with string keys)
--- ---------------------------------------------------------------------------------------------
-local JESC = { ['"'] = '\\"', ["\\"] = "\\\\", ["\n"] = "\\n", ["\r"] = "\\r", ["\t"] = "\\t" }
-
-local function json(v)
-  local t = type(v)
-  if t == "string" then
-    return '"' .. v:gsub('[%c"\\]', function(c) return JESC[c] or string.format("\\u%04x", c:byte()) end) .. '"'
-  elseif t == "number" then
-    if math.type(v) == "integer" then return string.format("%d", v) end
-    if v ~= v or v == math.huge or v == -math.huge then return "null" end
-    return string.format("%.10g", v)
-  elseif t == "boolean" then
-    return v and "true" or "false"
-  elseif t == "table" then
-    local parts = {}
-    if #v > 0 then
-      for _, x in ipairs(v) do parts[#parts + 1] = json(x) end
-      return "[" .. table.concat(parts, ",") .. "]"
-    end
-    local keys = {}
-    for k in pairs(v) do keys[#keys + 1] = k end
-    table.sort(keys)
-    for _, k in ipairs(keys) do parts[#parts + 1] = json(tostring(k)) .. ":" .. json(v[k]) end
-    return "{" .. table.concat(parts, ",") .. "}"
-  end
-  return "null"
-end
+local json = __json.encode -- objects.lua
 
 -- ---------------------------------------------------------------------------------------------
 -- Value helpers
@@ -315,6 +287,7 @@ if cfg.diag_ms then
     { kind = "event", base = "system/clu", name = "CLU", events = { [13] = "time_change" },
       device_class = false, entity_category = DIAG },                               -- system/clu/event
   }
+  if C.gate then table.remove(DEFAULTS[0], 2) end -- GATE: feature 2 is PrimaryDNS, there is no State
   DEFAULTS[2] = { { kind = "module", group = "system/tfbus/modules", leaf = true,   -- TFBUS module
                     entity_category = DIAG } }
 end
@@ -565,100 +538,7 @@ end
 --   <root>/<OBJ>/execute/<idx>       [args] | v | "" -> <root>/<OBJ>/execute/<idx>/result
 -- Remote-CLU proxies (class 1) are refused: their execute(0, s) runs s as Lua on the peer.
 -- ---------------------------------------------------------------------------------------------
-local JUNESC = { b = "\b", f = "\f", n = "\n", r = "\r", t = "\t", ['"'] = '"', ["\\"] = "\\", ["/"] = "/" }
-
--- JSON text -> value, or nil, err. null decodes to nil (in arrays: holes, n kept in .n).
-local function jdecode(s)
-  local pos = 1
-  local function ws() pos = s:find("[^ \t\r\n]", pos) or #s + 1 end
-  local value
-  local function str()
-    local out = {}
-    pos = pos + 1
-    while true do
-      local c = s:sub(pos, pos)
-      if c == "" then error("unterminated string") end
-      if c == '"' then pos = pos + 1; return table.concat(out) end
-      if c == "\\" then
-        local e = s:sub(pos + 1, pos + 1)
-        if e == "u" then
-          local h = s:sub(pos + 2, pos + 5)
-          if not h:match("^%x%x%x%x$") then error("bad \\u escape") end
-          out[#out + 1] = utf8.char(tonumber(h, 16))
-          pos = pos + 6
-        elseif JUNESC[e] then
-          out[#out + 1] = JUNESC[e]
-          pos = pos + 2
-        else
-          error("bad escape")
-        end
-      elseif c:byte() < 32 then
-        error("control character in string")
-      else
-        local run = s:match('^[^"\\%c]+', pos)
-        out[#out + 1] = run
-        pos = pos + #run
-      end
-    end
-  end
-  function value(depth)
-    if depth > 8 then error("too deep") end
-    ws()
-    local c = s:sub(pos, pos)
-    if c == '"' then return str() end
-    if c == "[" then
-      local a, n = {}, 0
-      pos = pos + 1
-      ws()
-      if s:sub(pos, pos) == "]" then pos = pos + 1; a.n = 0; return a end
-      while true do
-        n = n + 1
-        a[n] = value(depth + 1)
-        ws()
-        c = s:sub(pos, pos)
-        pos = pos + 1
-        if c == "]" then a.n = n; return a end
-        if c ~= "," then error("expected , or ]") end
-      end
-    end
-    if c == "{" then
-      local o = {}
-      pos = pos + 1
-      ws()
-      if s:sub(pos, pos) == "}" then pos = pos + 1; return o end
-      while true do
-        ws()
-        if s:sub(pos, pos) ~= '"' then error("expected key") end
-        local k = str()
-        ws()
-        if s:sub(pos, pos) ~= ":" then error("expected :") end
-        pos = pos + 1
-        o[k] = value(depth + 1)
-        ws()
-        c = s:sub(pos, pos)
-        pos = pos + 1
-        if c == "}" then return o end
-        if c ~= "," then error("expected , or }") end
-      end
-    end
-    if s:sub(pos, pos + 3) == "true" then pos = pos + 4; return true end
-    if s:sub(pos, pos + 4) == "false" then pos = pos + 5; return false end
-    if s:sub(pos, pos + 3) == "null" then pos = pos + 4; return nil end
-    local numtxt = s:match("^-?%d+%.?%d*[eE]?[-+]?%d*", pos)
-    local n = numtxt and tonumber(numtxt)
-    if not n then error("unexpected input at " .. pos) end
-    pos = pos + #numtxt
-    return n
-  end
-  local ok, v = pcall(function()
-    local r = value(0)
-    ws()
-    if pos <= #s then error("trailing data") end
-    return r
-  end)
-  if not ok then return nil, tostring(v):gsub("^.-:%d+: ", "") end
-  return v
-end
+local jdecode = __json.decode -- objects.lua
 
 local function api_reply(topic, ok, v)
   local body = ok and ('{"ok":true,"value":' .. json(v) .. "}") or ('{"ok":false,"error":' .. json(tostring(v)) .. "}")

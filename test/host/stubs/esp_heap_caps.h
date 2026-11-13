@@ -30,3 +30,5 @@ static inline size_t heap_caps_get_free_size(uint32_t caps)
 {
     return caps & MALLOC_CAP_SPIRAM ? host_psram_free : 200000;
 }
+static inline size_t heap_caps_get_largest_free_block(uint32_t caps) { return heap_caps_get_free_size(caps); }
+static inline size_t heap_caps_get_total_size(uint32_t caps) { return caps & MALLOC_CAP_SPIRAM ? 8u << 20 : 300000; }

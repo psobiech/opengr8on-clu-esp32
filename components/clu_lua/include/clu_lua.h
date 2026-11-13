@@ -43,6 +43,12 @@ typedef struct {
     const char *root;    /**< Drive a:\\ directory, e.g. "/fs/a". */
     unsigned    sn;      /**< For built-in checkAlive(). */
     const char *fw_version;  /**< Firmware version string. */
+    /** The local object is a GATE (clu_GATE_HTTP interface, OM.LUA `GATE:new(5000, ip, ...)`):
+     *  class 0 serves the GATE feature indices instead of the CLU_ZWAVE_2 ones. */
+    bool        gate;
+    /** GATE ResetReason (26) after a chip boot: 0 power-on, 1 external, 2 software, 3 exception.
+     *  A soft reset (clu_lua_reload) reports 2 (configuration reload). */
+    int         reset_reason;
     /** Send an unsolicited clientReport (body after "resp:0.0.0.0:00000000:"). */
     void (*report)(const char *addr, int port, const char *body);
     /** Called from SYSTEM.Init(), after OM.LUA declared all objects and before OnInit fires. */
@@ -65,7 +71,7 @@ typedef struct {
  * @brief Register an extension.
  *
  * C functions are merged into the private __clu table; the embedded Lua chunk runs after
- * objects.lua (and so can capture __clu). Call before clu_lua_start(); up to 4 extensions.
+ * objects.lua (and so can capture __clu). Call before clu_lua_start(); up to 6 extensions.
  *
  * @param fns  NULL-terminated C functions.
  * @param src  Lua source; must stay valid for the program's lifetime.

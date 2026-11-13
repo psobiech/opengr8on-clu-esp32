@@ -384,7 +384,9 @@ static void test_unit(void)
     clu_lua_register_ext(ext_fns, NULL, 0, "=fns_only");
     clu_lua_register_ext(NULL, "EXT4 = true", 11, "=ext4");
     clu_lua_register_ext(NULL, "EXT5 = true", 11, "=ext5");
-    check("at most 4 extensions", s_n_exts == MAX_EXTS);
+    clu_lua_register_ext(NULL, "EXT6 = true", 11, "=ext6");
+    clu_lua_register_ext(NULL, "EXT7 = true", 11, "=ext7");
+    check("at most 6 extensions", s_n_exts == MAX_EXTS && MAX_EXTS == 6);
     clu_lua_register_class(-1, &s_test_ops);
     clu_lua_register_class(MAX_CLASSES, &s_test_ops);
     clu_lua_register_class(50, &s_test_ops);
@@ -400,7 +402,7 @@ static void test_unit(void)
     check_str("vm: default checkAlive() returns the serial", run_req(L, "checkAlive()"), "13aba9b3");
     check_str("vm: __clu hidden from scripts", run_req(L, "type(__clu)"), "nil");
     check_str("vm: extension functions + source loaded, broken one skipped", run_req(L, "EXT_LOADED and EXT4"), "true");
-    check_str("vm: 5th extension ignored", run_req(L, "EXT5"), "nil");
+    check_str("vm: 7th extension ignored", run_req(L, "EXT7"), "nil");
 
     // ---- req: execution
     check_str("req: expression", run_req(L, "1 + 1\r\n"), "2");
@@ -635,6 +637,35 @@ static void test_unit(void)
           clu0_get(L, clu, 35) && !strcmp(lua_tostring(L, -1), "") && !clu0_get(L, clu, 34));
     lua_settop(L, clu);
 
+    // GATE (clu_GATE_HTTP interface): other feature indices
+    s_cfg.gate = true;
+    s_cfg.reset_reason = 3;
+    lua_getfield(L, clu, "_f");
+    lua_pushnil(L);
+    lua_rawseti(L, -2, 18);
+    lua_settop(L, clu);
+    s_cloud = 1;
+    bool g_ok = clu0_get(L, clu, 0) && lua_tointeger(L, -1) == 5;
+    g_ok = g_ok && clu0_get(L, clu, 5) && !strcmp(lua_tostring(L, -1), date);
+    g_ok = g_ok && clu0_get(L, clu, 6) && strlen(lua_tostring(L, -1)) == 8;
+    g_ok = g_ok && clu0_get(L, clu, 13) && lua_tointeger(L, -1) >= now;
+    g_ok = g_ok && clu0_get(L, clu, 15) && lua_tointeger(L, -1) >= now;
+    g_ok = g_ok && clu0_get(L, clu, 17) && !strcmp(lua_tostring(L, -1), "1.2.3");
+    g_ok = g_ok && clu0_get(L, clu, 18) && lua_tointeger(L, -1) == 1;
+    g_ok = g_ok && clu0_get(L, clu, 19) && lua_tointeger(L, -1) == 1;
+    g_ok = g_ok && clu0_get(L, clu, 26) && lua_tointeger(L, -1) == 3;
+    check("GATE get: Uptime, Date, Time, LocalTime, UnixTime, FirmwareVersion, UseCloud, CloudConnection, ResetReason", g_ok);
+    lua_settop(L, clu);
+    check("GATE get: CLU-only and settable features stored generically (State 2 = PrimaryDNS, 14 TimeZone, 35)",
+          !clu0_get(L, clu, 2) && !clu0_get(L, clu, 3) && !clu0_get(L, clu, 14) && !clu0_get(L, clu, 35) &&
+              !clu0_get(L, clu, 1));
+    s_soft_reloaded = true;
+    check("GATE ResetReason after a soft reset: 2", clu0_get(L, clu, 26) && lua_tointeger(L, -1) == 2);
+    s_soft_reloaded = false;
+    s_cfg.gate = false;
+    s_cfg.reset_reason = 0;
+    lua_settop(L, clu);
+
     lua_pushstring(L, "hello");
     check("CLU AddToLog(msg)", clu0_execute(L, clu, 0, clu + 1, 1) == 0);
     check("CLU AddToLog() / ClearLog", clu0_execute(L, clu, 0, clu + 1, 0) == 0 && clu0_execute(L, clu, 1, clu + 1, 0) == 0);
@@ -663,6 +694,26 @@ static void test_unit(void)
     s_cfg.clu_feature = NULL;
     clu0_set(L, clu, 15, clu + 1);
     s_cfg.clu_feature = cb_feature;
+    // GATE: UseCloud = 1 / true also switches UseNTP (21) on; UseCloud = 0 leaves it alone
+    s_cfg.gate = true;
+    lua_settop(L, clu);
+    lua_getfield(L, clu, "_f");
+    lua_pushinteger(L, 0);
+    lua_rawseti(L, -2, 21);
+    lua_settop(L, clu);
+    lua_pushinteger(L, 0);
+    clu0_set(L, clu, 18, clu + 1);
+    lua_getfield(L, clu, "_f");
+    lua_rawgeti(L, -1, 21);
+    bool ntp_kept = lua_tointeger(L, -1) == 0 && !strcmp(s_feature, "18:-:0");
+    lua_settop(L, clu);
+    lua_pushboolean(L, 1);
+    clu0_set(L, clu, 18, clu + 1);
+    lua_getfield(L, clu, "_f");
+    lua_rawgeti(L, -1, 21);
+    check("GATE UseCloud on -> UseNTP stored 1 and applied; off -> UseNTP untouched",
+          ntp_kept && lua_tointeger(L, -1) == 1 && !strcmp(s_feature, "21:-:1"));
+    s_cfg.gate = false;
     lua_close(L);
 
     // ---- shutdown hooks
@@ -747,6 +798,16 @@ static void test_task(void)
     put("MAIN.LUA", "function checkAlive() return 'main3' end\n");
     check("reload 2", clu_lua_reload(5000));
     check_str("MAIN.LUA returned: requests still served by the idle loop", call("checkAlive()", 3000, NULL), "main3");
+
+    // ---- GATE MAIN.LUA (as uploaded by OM): no loop, checkAlive() only prints
+    s_cfg.gate = true;
+    put("MAIN.LUA", "\ncollectgarbage(\"collect\")\nfunction checkAlive()\n\tprint(\"true\")\nend\n\n"
+                    "SYSTEM.Init()\nGATE_UP = 1\n");
+    check("reload to a GATE MAIN.LUA", clu_lua_reload(5000));
+    check_str("GATE: checkAlive() answered by the firmware with the serial in hex", call("checkAlive()", 3000, NULL),
+              "13aba9b3");
+    check_str("GATE: script ran, other requests still evaluated", call("GATE_UP", 3000, NULL), "1");
+    s_cfg.gate = false;
 
     // ---- SYSTEM.Loop failing in the idle loop: reload still gets through
     put("MAIN.LUA", "SYSTEM.Loop = function() error('loop broken') end\n");

@@ -8,23 +8,47 @@
 #include <stdint.h>
 #include "clu_crypto.h"
 
+#include "sdkconfig.h"
+
 /**
- * @name Identity reported to OM
+ * @name Identity reported to OM (menuconfig "Device type")
  *
- * Real CLU_ZWAVE_2 (diagnostic pack of a production CLU: hwType 19, hwVer 1, fwType 3,
- * fwApiVer 513, fwVer "5.13.8-2442"). Reported by default: latest firmware 5.15.24 (build 2635),
- * fwApiVer 0x203 (515), fwVer "5.15.24-2635". OM selects
- * `docs/device-interfaces/clu_ZWAVE_2_ft00000003_fv<fwApiVer>_ht00000013_hv00000001.xml`
- * and generates OM.LUA with `-- FwVersion <fwApiVer>`.
+ * CLU_ZWAVE_2 (diagnostic pack of a production CLU: hwType 19, hwVer 1, fwType 3, fwApiVer 513,
+ * fwVer "5.13.8-2442"). Reported: latest firmware 5.15.24 (build 2635), fwApiVer 0x203 (515).
+ * OM selects `clu_ZWAVE_2_ft00000003_fv<fwApiVer>_ht00000013_hv00000001.xml` and generates OM.LUA
+ * with `-- FwVersion <fwApiVer>`.
+ *
+ * GATE HTTP (firmware files CLU_GATE_HTTP-18-2-3-<fwVer>.fw): hwType 18, hwVer 2, fwType 3, latest
+ * 1.4.2-2346 with fwApiVer 0x578 (1400):
+ * `clu_GATE_HTTP_ft00000003_fv00000578_ht00000012_hv00000002.xml`.
+ *
+ * CLU_FW_API_VER / CLU_FW_VERSION may be predefined (host tests).
  * @{
  */
+#if CONFIG_CLU_DEVICE_GATE_HTTP
+#define CLU_IS_GATE    1
+#define CLU_HW_TYPE    0x12
+#define CLU_HW_VERSION 0x02
+#define CLU_FW_TYPE    0x03
+#ifndef CLU_FW_API_VER
+#define CLU_FW_API_VER 0x578
+#endif
+#ifndef CLU_FW_VERSION
+#define CLU_FW_VERSION "1.4.2-2346"
+#endif
+#else
+#define CLU_IS_GATE    0
 #define CLU_HW_TYPE    0x13
 #define CLU_HW_VERSION 0x01
 #define CLU_FW_TYPE    0x03
-#define CLU_FW_API_VER CONFIG_CLU_FW_API_VER
+#ifndef CLU_FW_API_VER
+#define CLU_FW_API_VER 0x203
+#endif
+#ifndef CLU_FW_VERSION
+#define CLU_FW_VERSION "5.15.24-2635"
+#endif
+#endif
 /** @} */
-
-#include "sdkconfig.h"
 
 /** @brief VFS mount point holding the drive directories (a, p, ...). */
 #define CLU_FS_ROOT "/fs"

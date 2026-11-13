@@ -323,6 +323,7 @@ static void discovery_task(void *arg)
     discovery_reply_t r;
     for (;;) {
         xQueueReceive(s_discovery_q, &r, portMAX_DELAY);
+#if CONFIG_CLU_TFBUS_MASTER
         if (!scanned || xTaskGetTickCount() - last_scan > pdMS_TO_TICKS(DISCOVERY_RESCAN_FRESH_MS)) {
             ESP_LOGI(TAG, "discovery from %s: re-reading TFBUS modules", inet_ntoa(r.to.sin_addr));
             if (!tfbus_master_refresh(DISCOVERY_RESCAN_TIMEOUT_MS)) {
@@ -331,6 +332,12 @@ static void discovery_task(void *arg)
             last_scan = xTaskGetTickCount();
             scanned = true;
         }
+#else
+        // No bus (CLU_BUS_NONE, GATE): nothing to rescan, CONFIG.JSON lists no modules.
+        (void)last_scan;
+        (void)scanned;
+        ESP_LOGI(TAG, "discovery from %s", inet_ntoa(r.to.sin_addr));
+#endif
         // UDP has no delivery feedback (sendto only means "queued"), and on a lossy WiFi link the
         // single reply is often lost. The reply is idempotent (same temp IV, same hash), so send
         // a few copies spread over ~150 ms; clients key devices by serial number.
@@ -582,10 +589,14 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
     // OM "Clear CLU": req_refresh_modules, then it downloads a:\CONFIG.JSON and imports
     // tfbusDevices (OM waits 30 s and only checks the "resp_refresh_modules" prefix).
     if (used_project && strncmp(s, "req_refresh_modules", 19) == 0) {
+#if CONFIG_CLU_TFBUS_MASTER
         bool done = tfbus_master_refresh(25000); // bus task rewrites CONFIG.JSON when done
         if (!done) {
             ESP_LOGW(TAG, "module refresh timed out");
         }
+#else
+        clu_state_write_config_files(); // no bus: CONFIG.JSON with an empty module list
+#endif
         char r[48], me[16];
         snprintf(r, sizeof r, "resp_refresh_modules:%s", local_ip(from->sin_addr.s_addr, me));
         send_str(used, r, from);

@@ -13,6 +13,7 @@ const BOARDS = {
   gate: "Grenton GATE",
   f8: "KinCony F8",
   a8v3: "KinCony KC868-A8v3",
+  "gate-http-esp32s3": "GATE HTTP (ESP32-S3)",
 };
 const STORE = "opengr8on-flasher"; // non-secret form fields, per browser
 
@@ -99,7 +100,8 @@ $("fw").addEventListener("change", async (ev) => {
     try {
       const bytes = new Uint8Array(await f.arrayBuffer());
       const { chip, parts, appOnly } = parseImage(bytes);
-      const board = (f.name.match(/opengr8on-clu-([a-z0-9]+)/) || [])[1];
+      const board = /opengr8on-gate-http-esp32s3/.test(f.name) ? "gate-http-esp32s3"
+        : (f.name.match(/opengr8on-clu-([a-z0-9]+)/) || [])[1];
       const cfg = parts.some((p) => p.label === "cfg");
       image = { bytes, chip, parts, name: f.name, appOnly: !!appOnly };
       fwInfo = { ok: true, render: () => `${BOARDS[board] || t("unknown_board")} · ${chip} · ` +

@@ -13,6 +13,7 @@ test/host/test_master
 test/host/liblua_host.a
 test/host/test_crypto
 test/host/test_udp
+test/host/test_udp_nobus
 test/host/test_uart
 test/host/test_localio
 test/host/test_localio_f8
@@ -28,6 +29,7 @@ test/host/test_main
 test/host/test_rtc
 test/host/test_main_nobus
 test/host/test_main_mysensors
+test/host/test_main_gate
 test/host/test_time_nortc
 test/host/*.o
 test/host/*.gcda

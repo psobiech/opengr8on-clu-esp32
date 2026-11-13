@@ -1,0 +1,8 @@
+# GATE HTTP on an ESP32-S3 (16 MB flash, 8 MB octal PSRAM, e.g. Waveshare ESP32-S3-RS485-CAN or any
+# ESP32-S3 N16R8 board): Object Manager sees a Grenton GATE HTTP (HttpRequest / HttpListener, see
+# GATE_HTTP.md). WiFi, no TF-Bus (RS485 unused). Applied on top of sdkconfig.defaults
+# (+ sdkconfig.defaults.esp32s3) by the "gate-http" preset (CMakePresets.json). Release images:
+# opengr8on-gate-http-esp32s3-<version>.bin / -ota.bin.
+CONFIG_CLU_DEVICE_GATE_HTTP=y
+CONFIG_CLU_BUS_NONE=y
+CONFIG_CLU_HTTP=y

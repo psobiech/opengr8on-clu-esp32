@@ -29,6 +29,9 @@ static const char *cfg_bssid = "";
 #define CONFIG_CLU_RS485_DE_GPIO      8
 #define CONFIG_CLU_TFBUS_BAUD         115200
 #define CONFIG_CLU_MYSENSORS_BAUD     57600
+#define CONFIG_CLU_HTTP_PORT          80
+#define CONFIG_CLU_HTTP_MAX_BODY      16384
+#define CONFIG_CLU_HTTP_LISTENER_TIMEOUT_MS 10000
 
 // storage_mount() creates the drive directories under /fs: never on the host
 static char s_mkdirs[128];
@@ -101,6 +104,14 @@ void clu_time_store(void) {}
 void clu_time_start_sntp(void) { L("sntp"); }
 void clu_time_set_ntp_server(const char *s) { L("ntp(%s)", s); }
 void clu_time_set_zone(int z) { L("zone(%d)", z); }
+void clu_time_set_ntp_enabled(bool on) { L("ntp_on(%d)", on); }
+static esp_reset_reason_t s_reset_reason = ESP_RST_POWERON;
+esp_reset_reason_t esp_reset_reason(void) { return s_reset_reason; }
+#if CONFIG_CLU_HTTP
+static clu_http_cfg_t s_hc;
+void clu_http_init(const clu_http_cfg_t *c) { s_hc = *c; L("http_init"); }
+void clu_http_start(void) { L("http_start"); }
+#endif
 static esp_err_t s_mount = ESP_OK;
 esp_err_t esp_vfs_fat_spiflash_mount_rw_wl(const char *base, const char *label, const esp_vfs_fat_mount_config_t *c,
                                            wl_handle_t *wl)
@@ -200,6 +211,12 @@ uint32_t udp_server_remote_exec(uint32_t ip, const char *s) { return 0; }
 #define BUS_BOOT ""
 #endif
 
+#if CONFIG_CLU_HTTP
+#define HTTP_BOOT "http_init http_start " // before Lua: http.lua registers as an extension
+#else
+#define HTTP_BOOT ""
+#endif
+
 int main(void)
 {
     app_main();
@@ -207,7 +224,7 @@ int main(void)
               "(no wait for an IP), services, TFTP, UDP before Lua",
               "nvs_init crypto state_load telnet_init time_init mount(/fs,storage,1) config_files " BUS_BOOT
               "netif handler(IP_EVENT,0) handler(IP_EVENT,4) net_init(wifi,sta) wifi_init handler(WIFI_EVENT,-1) "
-              "wifi_config ps(0) wifi_start txpower(60) sntp telnet_start ota_start mqtt_init sysinfo tftp(/fs) udp_start "
+              "wifi_config ps(0) wifi_start txpower(60) sntp telnet_start ota_start mqtt_init " HTTP_BOOT "sysinfo tftp(/fs) udp_start "
               "lua_start ");
     check("storage: a:\\ and p:\\ created", !strcmp(s_mkdirs, "/fs/a /fs/p "));
     check("telnet config from Kconfig", s_tc.port == 23 && s_tc.max_clients == 2 && s_tc.history == 4096 &&
@@ -244,6 +261,22 @@ int main(void)
               s_lc.remote == udp_server_remote_exec && s_lc.cloud_connected == clu_mqtt_connected &&
               s_lc.on_init == on_lua_init && s_lc.on_reload == on_lua_reload && s_lc.clu_feature == on_clu_feature &&
               s_lc.on_time_set == clu_time_store);
+    check("Lua: device type, power-on reset reason", s_lc.gate == CLU_IS_GATE && s_lc.reset_reason == 0);
+#if CONFIG_CLU_HTTP
+    check("GATE HTTP objects: port / body limit / listener timeout from Kconfig",
+          s_hc.port == 80 && s_hc.max_body == 16384 && s_hc.listener_timeout_ms == 10000);
+#endif
+    static const struct { esp_reset_reason_t r; int want; } RR[] = {
+        {ESP_RST_POWERON, 0}, {ESP_RST_EXT, 1}, {ESP_RST_SW, 2}, {ESP_RST_PANIC, 3}, {ESP_RST_TASK_WDT, 3},
+        {ESP_RST_BROWNOUT, 3}, {ESP_RST_DEEPSLEEP, 0},
+    };
+    bool rr_ok = true;
+    for (size_t i = 0; i < sizeof RR / sizeof RR[0]; i++) {
+        s_reset_reason = RR[i].r;
+        rr_ok &= boot_reset_reason() == RR[i].want;
+    }
+    s_reset_reason = ESP_RST_POWERON;
+    check("GATE ResetReason: power-on 0, external 1, software 2, exception / watchdog / brownout 3", rr_ok);
 
     // NVS partition full / from a newer IDF: erased and initialised again; mount failure tolerated
     s_nvs_init[0] = ESP_ERR_NVS_NO_FREE_PAGES;
@@ -309,6 +342,19 @@ int main(void)
     s_log[0] = 0;
 
     // CLU features -> modules
+#if CLU_IS_GATE
+    on_clu_feature(14, NULL, 5);
+    on_clu_feature(14, NULL, NAN);
+    on_clu_feature(2, "8.8.8.8", 0);
+    on_clu_feature(3, "1.1.1.1", 0);
+    on_clu_feature(18, NULL, 0);
+    on_clu_feature(21, NULL, 0);
+    on_clu_feature(21, NULL, 1);
+    on_clu_feature(22, "ntp.example", 0); // NTPServer of a CLU: no such GATE feature
+    on_clu_feature(23, NULL, 4);          // TelnetLogLevel on a GATE
+    check_log("GATE features: TimeZone 14, DNS 2/3, UseCloud 18, UseNTP 21; CLU indices ignored",
+              "zone(5) zone(-1) dns0(8.8.8.8) dns1(1.1.1.1) mqtt(0) ntp_on(0) ntp_on(1) ");
+#else
     on_clu_feature(22, "ntp.example", 0);
     on_clu_feature(23, NULL, 5);
     on_clu_feature(23, NULL, NAN);
@@ -321,6 +367,8 @@ int main(void)
     on_clu_feature(99, "x", 1);
     check_log("features: NTPServer, TimeZone (NaN / out of range -> -1), DNS 1/2, UseCloud; others ignored",
               "ntp(ntp.example) zone(5) zone(-1) zone(-1) zone(-1) dns0(8.8.8.8) dns1(1.1.1.1) mqtt(0) mqtt(1) ");
+
+#endif
 
     // Lua lifecycle hooks
     on_lua_init();

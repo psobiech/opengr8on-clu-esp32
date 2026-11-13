@@ -4,6 +4,8 @@
  */
 #pragma once
 
+#include <stdbool.h>
+
 /**
  * @brief Load persisted time zone (TZ env) and NTP server; set the system clock from the RTC.
  *
@@ -16,6 +18,12 @@ void clu_time_store(void);
 
 /** @brief Start SNTP. Needs lwIP (esp_netif_init()), not an IP: it retries until it gets one. */
 void clu_time_start_sntp(void);
+
+/**
+ * @brief Switch SNTP on / off (GATE feature 21 UseNTP). Not persisted: OnInit sets it each boot.
+ * @param on false stops SNTP (the clock then runs from SetDateTime / the RTC only).
+ */
+void clu_time_set_ntp_enabled(bool on);
 
 /**
  * @brief Set the NTP server (CLU feature 22 NTPServer).

@@ -4,11 +4,12 @@
 #ifndef CONFIG_CLU_SOFT_RESET
 #define CONFIG_CLU_SOFT_RESET 1
 #endif
-#ifndef CONFIG_CLU_FW_API_VER
-#define CONFIG_CLU_FW_API_VER 5
+// Reported firmware identity (main/clu_state.h takes these over its per-device constants)
+#ifndef CLU_FW_API_VER
+#define CLU_FW_API_VER 5
 #endif
-#ifndef CONFIG_CLU_FW_VERSION
-#define CONFIG_CLU_FW_VERSION "1.0.0"
+#ifndef CLU_FW_VERSION
+#define CLU_FW_VERSION "1.0.0"
 #endif
 #ifndef CONFIG_CLU_SERIAL
 #define CONFIG_CLU_SERIAL ""

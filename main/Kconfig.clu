@@ -197,35 +197,49 @@ menu "OpenGr8on ESP32 CLU"
             IV of the factory project cipher (used until OM sends req_set_key).
             Empty: random per device. Changing it resets the keys to factory default.
 
-    config CLU_FW_API_VER
-        hex "Firmware API version (selects clu_ZWAVE_2_ft00000003_fv<ver> interface in OM)"
-        default 0x203
+    choice CLU_DEVICE
+        prompt "Device type"
+        default CLU_DEVICE_ZWAVE_2
         help
-            Real CLU_ZWAVE_2 reports hwType 0x13, hwVer 1, fwType 3 and fwApiVer 0x203 (515) on
-            firmware 5.15.x, 0x201 (513) on 5.13.x.
-            0x203 adds features 34 MeasurementKey / 35 LastMeasurementSendTime and the Statistics /
-            StatisticsPulse objects.
+            What Object Manager sees (hardware / firmware type and version in CONFIG.TXT,
+            CONFIG.JSON and the diagnostic pack); OM picks the device interface from it.
 
-    config CLU_FW_VERSION
-        string "Firmware version string"
-        default "5.15.24-2635"
+        config CLU_DEVICE_GATE_HTTP
+            bool "GATE HTTP"
+            help
+                CLU_GATE_HTTP: hwType 0x12, hwVer 2, fwType 3, fwApiVer 0x578, firmware 1.4.2-2346.
+                No TF-Bus (the RS485 bus is off). Objects: HttpRequest (121), HttpListener (120),
+                Timer. OM declares it as GATE:new(5000, ip, netmask, gateway, "", "").
+                See GATE_HTTP.md.
+
+        config CLU_DEVICE_ZWAVE_2
+            bool "CLU_ZWAVE_2"
+            help
+                hwType 0x13, hwVer 1, fwType 3, fwApiVer 0x203, firmware 5.15.24-2635. TF-Bus
+                modules on RS485, the CLU virtual objects (Timer, Calendar, Scheduler, ...).
+    endchoice
 
     menu "RS485 bus (TF-Bus / MySensors)"
 
         choice CLU_BUS
             prompt "Protocol"
+            default CLU_BUS_NONE if CLU_DEVICE_GATE_HTTP
             default CLU_TFBUS
             help
-                What the CLU drives on its RS485 / UART pins.
+                What the CLU drives on its RS485 / UART pins. "None" leaves the UART and the RS485
+                pins alone (e.g. a board without a transceiver). A GATE has no bus:
+                only "None" is offered there.
 
             config CLU_TFBUS
                 bool "TF-Bus master (Grenton RS485 modules)"
+                depends on !CLU_DEVICE_GATE_HTTP
                 help
                     Drive Grenton TF-Bus modules over RS485: discovery, addressing, polling and the
                     module drivers.
 
             config CLU_MYSENSORS
                 bool "MySensors gateway (RS485 network, MY_RS485)"
+                depends on !CLU_DEVICE_GATE_HTTP
                 help
                     Nodes built with MY_RS485 on the bus; the CLU is node 0, the gateway, and the
                     controller: answers find parent / ping / registration / echo, hands out node
@@ -234,10 +248,10 @@ menu "OpenGr8on ESP32 CLU"
                     gateway on the bus. OM sees no real TF-Bus modules.
 
             config CLU_BUS_NONE
-                bool "None"
+                bool "None (RS485 off)"
                 help
-                    The CLU runs only virtual objects, scripts and the network services (OM sees no
-                    modules; discovery / "Clear CLU" report an empty bus).
+                    No UART / RS485 driver at all. The CLU runs only virtual objects, scripts and the
+                    network services (OM sees no modules; discovery / "Clear CLU" report an empty bus).
         endchoice
 
         config CLU_TFBUS_MASTER
@@ -508,6 +522,47 @@ menu "OpenGr8on ESP32 CLU"
             help
                 Connections from other addresses are closed immediately. An invalid value
                 refuses everyone.
+
+    endmenu
+
+    menu "GATE HTTP objects (HttpRequest / HttpListener)"
+
+        config CLU_HTTP
+            bool "HttpRequest (class 121) and HttpListener (class 120)"
+            default y if CLU_DEVICE_GATE_HTTP
+            default n
+            help
+                The GATE HTTP objects. HttpRequest sends HTTP / HTTPS requests (HTTPS checked
+                against the built-in certificate bundle) one after another; HttpListener answers
+                requests on CLU_HTTP_PORT, routed by path to the listener whose Path matches.
+                Object Manager offers them only on a GATE (CLU_DEVICE_GATE_HTTP); on a CLU they
+                work when declared by hand. No authentication: anyone on the network can call the
+                listeners. See GATE_HTTP.md.
+
+        config CLU_HTTP_PORT
+            int "HttpListener TCP port"
+            range 1 65535
+            default 80
+            depends on CLU_HTTP
+            help
+                80 on a real GATE. Must differ from the OTA port (CLU_OTA_PORT).
+
+        config CLU_HTTP_MAX_BODY
+            int "Largest request / response body [bytes]"
+            range 1024 262144
+            default 16384
+            depends on CLU_HTTP
+            help
+                Larger responses to HttpRequest are dropped (no OnResponse); larger requests to
+                HttpListener get 413. Bodies are held in RAM (PSRAM when the board has it).
+
+        config CLU_HTTP_LISTENER_TIMEOUT_MS
+            int "HttpListener: wait for SendResponse [ms]"
+            range 500 60000
+            default 10000
+            depends on CLU_HTTP
+            help
+                A request not answered by SendResponse within this time gets 504.
 
     endmenu
 

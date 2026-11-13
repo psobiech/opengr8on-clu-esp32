@@ -234,7 +234,7 @@ void clu_state_write_config_files(void)
                 "{\"sn\":%lu,\"mac\":\"%s\",\"hwType\":%d,\"hwVer\":%d,\"fwType\":%d,"
                 "\"fwApiVer\":%d,\"fwVer\":\"%s\",\"status\":\"OK\",\"tfbusDevices\":[",
                 (unsigned long)g_clu.sn, mac, CLU_HW_TYPE, CLU_HW_VERSION, CLU_FW_TYPE,
-                CLU_FW_API_VER, CONFIG_CLU_FW_VERSION);
+                CLU_FW_API_VER, CLU_FW_VERSION);
         for (int i = 0; i < ndev; i++) {
             const tfbus_device_t *d = &dev[i];
             fprintf(f,

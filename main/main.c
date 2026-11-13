@@ -18,6 +18,9 @@
 
 #include "clu_crypto.h"
 #include "clu_eth.h"
+#if CONFIG_CLU_HTTP
+#include "clu_http.h"
+#endif
 #include "clu_lua.h"
 #if CONFIG_CLU_LOCAL_IO
 #include "clu_localio.h"
@@ -37,6 +40,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
+#include "esp_system.h"
 #include "esp_vfs_fat.h"
 #if CONFIG_CLU_WIFI
 #include "esp_wifi.h"
@@ -217,11 +221,22 @@ static void storage_mount(void)
 /**
  * @brief clu_lua_cfg_t::clu_feature: local CLU features applied by the firmware.
  *
- * Values are also kept in the Lua object. Handles 18 UseCloud, 22 NTPServer, 23 TimeZone,
- * 25 PrimaryDNS, 26 SecondaryDNS.
+ * Values are also kept in the Lua object. CLU_ZWAVE_2: 18 UseCloud, 22 NTPServer, 23 TimeZone,
+ * 25 PrimaryDNS, 26 SecondaryDNS. GATE: 2 PrimaryDNS, 3 SecondaryDNS, 14 TimeZone, 18 UseCloud,
+ * 21 UseNTP.
  */
 static void on_clu_feature(int idx, const char *str, double num)
 {
+#if CONFIG_CLU_DEVICE_GATE_HTTP
+    switch (idx) {
+    case 14: clu_time_set_zone(num >= 0 && num < 1000 ? (int)num : -1); break; // TimeZone
+    case 2: clu_net_set_dns(0, str); break;                                 // PrimaryDNS
+    case 3: clu_net_set_dns(1, str); break;                                 // SecondaryDNS
+    case 18: clu_mqtt_set_enabled(num != 0); break;                         // UseCloud
+    case 21: clu_time_set_ntp_enabled(num != 0); break;                     // UseNTP
+    default: break;
+    }
+#else
     switch (idx) {
     case 22: clu_time_set_ntp_server(str); break;       // NTPServer
     case 23: // TimeZone (enum index); NaN / out-of-range doubles must not reach the int cast
@@ -231,6 +246,25 @@ static void on_clu_feature(int idx, const char *str, double num)
     case 26: clu_net_set_dns(1, str); break;            // SecondaryDNS
     case 18: clu_mqtt_set_enabled(num != 0); break;     // UseCloud: MQTT connection on/off
     default: break;
+    }
+#endif
+}
+
+/**
+ * @brief GATE ResetReason (feature 26) of this chip boot: 0 power-on, 1 external (reset pin),
+ *        2 software restart, 3 exception / watchdog / brownout.
+ */
+static int boot_reset_reason(void)
+{
+    switch (esp_reset_reason()) {
+    case ESP_RST_EXT: return 1;
+    case ESP_RST_SW: return 2;
+    case ESP_RST_PANIC:
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:
+    case ESP_RST_BROWNOUT: return 3;
+    default: return 0;
     }
 }
 
@@ -343,7 +377,7 @@ void app_main(void)
 #endif
     const clu_mqtt_cfg_t mc = {
         .sn = g_clu.sn,
-        .fw_version = CONFIG_CLU_FW_VERSION,
+        .fw_version = CLU_FW_VERSION,
         .ca_path = CLU_FS_ROOT "/a/MQTT_CA.PEM",
         // cfg partition (prebuilt firmware) over menuconfig; NULL = the menuconfig value
         .broker_uri = clu_state_setting("mqtt_uri", NULL),
@@ -351,13 +385,24 @@ void app_main(void)
         .password = clu_state_setting("mqtt_pass", NULL),
     };
     clu_mqtt_init(&mc);
+#if CONFIG_CLU_HTTP
+    const clu_http_cfg_t hc = {
+        .port = CONFIG_CLU_HTTP_PORT,
+        .max_body = CONFIG_CLU_HTTP_MAX_BODY,
+        .listener_timeout_ms = CONFIG_CLU_HTTP_LISTENER_TIMEOUT_MS,
+    };
+    clu_http_init(&hc); // HttpRequest / HttpListener (http.lua)
+    clu_http_start();
+#endif
     clu_sysinfo_init();
     clu_tftp_init(CLU_FS_ROOT);
     udp_server_start(); // before Lua: OM.LUA's remote calls / reports need its queue and lock
     const clu_lua_cfg_t lc = {
         .root = CLU_FS_ROOT "/a",
         .sn = g_clu.sn,
-        .fw_version = CONFIG_CLU_FW_VERSION,
+        .fw_version = CLU_FW_VERSION,
+        .gate = CLU_IS_GATE,
+        .reset_reason = boot_reset_reason(),
         .report = udp_server_send_report,
         .on_init = on_lua_init,
         .remote = udp_server_remote_exec,

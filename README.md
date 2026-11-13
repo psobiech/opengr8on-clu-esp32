@@ -139,6 +139,7 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
   metody.
 - **`MQTT.*` w USER.LUA** — własne mapowania encji, ukrywanie, publikowanie dowolnych tematów.
 - **MySensors zamiast TF-Bus** (opcja kompilacji), zob. [MYSENSORS.md](MYSENSORS.md).
+- **Emulacja GATE HTTP** (HttpRequest / HttpListener) zamiast CLU, zob. [GATE_HTTP.md](GATE_HTTP.md).
 - **Bez chmury Grentona** — OM nie rejestruje CLU w chmurze (zob. niżej).
 - **Aktualizacja firmware przez sieć** (OTA, HTTP z hasłem, cofanie nieudanej aktualizacji).
 - **Lua 5.5** jako opcja kompilacji.
@@ -148,7 +149,8 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 
 ## Sprzęt
 
-Piny, profile i uwagi do każdej płytki: [DEVICES.md](DEVICES.md).
+Piny, profile i uwagi do każdej płytki: [DEVICES.md](DEVICES.md). Wymagany PSRAM, zob.
+[Wymagania pamięci](DEVICES.md#wymagania-pamięci).
 
 | Płytka | Układ | Sieć | Uwagi |
 |---|---|---|---|
@@ -169,12 +171,17 @@ aplikacji `opengr8on-clu-<płytka>-<wersja>-ota.bin` ([aktualizacja przez sieć]
 | Płytka | `<płytka>` | Układ | Sieć |
 |---|---|---|---|
 | Waveshare ESP32-S3-RS485-CAN | `waveshare` | `esp32s3` | WiFi |
-| Grenton GATE | `gate` | `esp32` | Ethernet (DHCP) |
 | KinCony F8 | `f8` | `esp32s3` | Ethernet (DHCP) |
 | KinCony KC868-A8v3 | `a8v3` | `esp32s3` | Ethernet (DHCP) |
 
 Wariant z bramką [MySensors](MYSENSORS.md) zamiast TF-Bus: te same obrazy z końcówką `-mysensors`
 (`…-<wersja>-mysensors.bin`, `…-<wersja>-ota-mysensors.bin`).
+
+[GATE HTTP](GATE_HTTP.md) na ESP32-S3 (16 MB flash, 8 MB PSRAM, WiFi, bez TF-Bus):
+`opengr8on-gate-http-esp32s3-<wersja>.bin` i `opengr8on-gate-http-esp32s3-<wersja>-ota.bin`.
+
+Dla [Grenton GATE](DEVICES.md#grenton-gate) wydanie ma tylko `opengr8on-clu-gate-<wersja>.zip`
+(zob. [Wgrywanie z linii poleceń](#wgrywanie-z-linii-poleceń)), bez osobnych `.bin`.
 
 Obrazy można wgrać
 **[flasherem w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/)** (Chrome / Edge na
@@ -200,7 +207,7 @@ wersję. Działa w każdej przeglądarce (strona i `/ota` to ten sam adres).
 **Z linii poleceń:**
 
 ```bash
-curl -u ota:HASLO --data-binary @opengr8on-clu-gate-v0.0.3-ota.bin http://IP_CLU:8080/ota
+curl -u ota:HASLO --data-binary @opengr8on-clu-waveshare-v0.0.3-ota.bin http://IP_CLU:8080/ota
 ```
 
 Nazwa użytkownika jest dowolna. Obraz trafia do drugiego slotu OTA, jest weryfikowany (układ,
@@ -218,14 +225,15 @@ adresem HTTP w sieci lokalnej tylko w przeglądarce z dostępem do sieci lokalne
 użytkownika). Gdy połączenie zostanie zablokowane (Firefox, Safari, odmowa), flasher daje link do
 strony samej CLU i zapisuje obraz aplikacji do wybrania tam.
 
-Uwaga: obraz `waveshare`, `f8` i `a8v3` to ten sam układ (`esp32s3`) — CLU nie odróżni płytki,
-wgraj obraz właściwy dla swojej.
+Uwaga: obraz `waveshare`, `f8`, `a8v3` i `gate-http-esp32s3` to ten sam układ (`esp32s3`) — CLU
+nie odróżni płytki, wgraj obraz właściwy dla swojej.
 
 ### Wgrywanie z linii poleceń
 
 Do linii poleceń służy `opengr8on-clu-<płytka>-<wersja>.zip` z wydania: katalog `tfbus/` i
 `mysensors/` (wariant [MySensors](MYSENSORS.md)), każdy z zawartością artefaktu z GitHub Actions
-(`opengr8on-clu-<płytka>` / `opengr8on-clu-<płytka>-mysensors`):
+(`opengr8on-clu-<płytka>` / `opengr8on-clu-<płytka>-mysensors`); `opengr8on-gate-http-esp32s3-<wersja>.zip`
+ma jeden katalog `firmware/` (artefakt `opengr8on-clu-gate-http`):
 
 - `opengr8on-clu-<płytka>[-mysensors]-full.bin`: pełny obraz od adresu `0x0` (ten sam co `.bin`
   wydania),
@@ -323,6 +331,7 @@ plik `sdkconfig`, więc można przełączać się między płytkami bez `set-tar
 | `gate` | [Grenton GATE](DEVICES.md#grenton-gate) (`esp32`) | `build-gate/` | `sdkconfig.gate` |
 | `f8` | [KinCony F8](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-f8/` | `sdkconfig.f8` |
 | `a8v3` | [KinCony KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-a8v3/` | `sdkconfig.a8v3` |
+| `gate-http` | [GATE HTTP](GATE_HTTP.md) na ESP32-S3 (WiFi) | `build-gate-http/` | `sdkconfig.gate-http` |
 
 ```bash
 . /opt/esp-idf/export.sh        # ścieżka do Twojej instalacji ESP-IDF
@@ -371,8 +380,7 @@ interfejsu, przez który widzi rozmówcę. Przy obu interfejsach trasa domyślna
 | `CLU_SERIAL` | losowy | numer seryjny (dziesiętnie), zapisywany w NVS przy pierwszym starcie |
 | `CLU_PRIVATE_KEY` | losowy | PIN / klucz prywatny (8 znaków A–Z0–9) |
 | `CLU_IV` | losowy | fabryczny IV projektu (32 znaki hex) |
-| `CLU_FW_API_VER` | `0x203` | wersja interfejsu CLU w OM (0x201 = firmware 5.13.x) |
-| `CLU_FW_VERSION` | `5.15.24-2635` | wersja raportowana do OM |
+| `CLU_DEVICE` | CLU_ZWAVE_2 | typ urządzenia widziany przez OM (`Device type`): CLU_ZWAVE_2 (hwType 0x13, fwApiVer 0x203, firmware 5.15.24-2635) albo GATE HTTP (hwType 0x12, fwApiVer 0x578, firmware 1.4.2-2346, [GATE_HTTP.md](GATE_HTTP.md)) |
 
 Numer seryjny i PIN ustawione w menuconfig zastępują zapisane w NVS; puste = wartości z partycji
 `cfg` (gotowe obrazy, `mknvs.py`, zob. [Gotowe obrazy](#gotowe-obrazy)), a bez nich
@@ -384,7 +392,7 @@ Podmenu **RS485 bus (TF-Bus / MySensors)**.
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|
-| `CLU_BUS` | `CLU_TFBUS` | co działa na pinach RS485 / UART: `CLU_TFBUS` (master TF-Bus), `CLU_MYSENSORS` ([MYSENSORS.md](MYSENSORS.md)) albo `CLU_BUS_NONE` (tylko obiekty wirtualne, skrypty i usługi sieciowe) |
+| `CLU_BUS` | `CLU_TFBUS` | co działa na pinach RS485 / UART: `CLU_TFBUS` (master TF-Bus), `CLU_MYSENSORS` ([MYSENSORS.md](MYSENSORS.md)) albo `CLU_BUS_NONE` (RS485 wyłączone: tylko obiekty wirtualne, skrypty i usługi sieciowe; jedyny wybór przy GATE) |
 | `CLU_RS485_UART` | 1 | numer UART |
 | `CLU_RS485_TX_GPIO` / `RX_GPIO` | 17 / 18 | piny |
 | `CLU_RS485_DE_GPIO` | 21 | pin DE/RE, `-1` = transceiver z automatycznym kierunkiem |

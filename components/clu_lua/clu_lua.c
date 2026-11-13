@@ -53,8 +53,9 @@ static volatile bool s_reload;       // clu_lua_reload() pending: unwind the scr
 static SemaphoreHandle_t s_reloaded; // old VM closed, on_reload done
 static volatile bool s_reload_ok;
 static volatile bool s_halt;        // clu_lua_halt(): after closing the VM, do not boot a new one
+static bool s_soft_reloaded;        // a VM was replaced by clu_lua_reload() since the chip boot
 
-#define MAX_EXTS 4
+#define MAX_EXTS 6
 /** @brief Registered extension (clu_lua_register_ext()). */
 typedef struct {
     const luaL_Reg *fns;
@@ -404,6 +405,17 @@ static void exec_request(lua_State *L, req_t *r)
         r->expr[--el] = 0;
     }
 
+    // A GATE answers checkAlive() itself with its serial in hex (observed on GATE ALARM / MODBUS):
+    // its MAIN.LUA defines checkAlive() as print("true"), which returns nothing.
+    if (s_cfg.gate && strcmp(r->expr, "checkAlive()") == 0) {
+        if (s_emergency) {
+            strlcpy(r->out, "emergency", r->cap);
+        } else {
+            snprintf(r->out, r->cap, "%08x", s_cfg.sn);
+        }
+        goto done;
+    }
+
     // Requests run nested in SYSTEM.Loop (MAIN.LUA): keep the caller's hook state.
     lua_Hook prev_hook = lua_gethook(L);
     int prev_mask = lua_gethookmask(L), prev_count = lua_gethookcount(L);
@@ -422,6 +434,7 @@ static void exec_request(lua_State *L, req_t *r)
         strlcpy(r->out, "nil", r->cap);
     }
 
+done:;
     int prev = __atomic_exchange_n(&r->state, REQ_DONE, __ATOMIC_ACQ_REL);
     if (prev == REQ_ABANDONED) {
         req_free(r);
@@ -600,8 +613,49 @@ static bool load_embedded(lua_State *L, const char *start, const char *end, cons
 }
 
 // ---------------------------------------------------------------------------
-// Class 0: local CLU (clu_ZWAVE_2_ft00000003_fv203 interface)
+// Class 0: local CLU (clu_ZWAVE_2_ft00000003_fv203 interface) or GATE
+// (clu_GATE_HTTP_ft00000003_fv00000578 interface, s_cfg.gate)
 // ---------------------------------------------------------------------------
+/** @brief Push the stored value of feature @p idx of the object at @p obj, @p def if unset. */
+static void push_stored(lua_State *L, int obj, int idx, lua_Integer def)
+{
+    lua_getfield(L, obj, "_f");
+    lua_rawgeti(L, -1, idx);
+    lua_remove(L, -2);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_pushinteger(L, def);
+    }
+}
+
+/**
+ * @brief GATE class 0 get: Uptime 0, Date 5, Time 6, LocalTime 13, UnixTime 15, FirmwareVersion 17,
+ *        UseCloud 18, CloudConnection 19, ResetReason 26. The settable rest (ClientReportInterval 1,
+ *        DNS 2/3, TimeZone 14, NTPTimeout 20, UseNTP 21, TelnetLogLevel 23, ...) is stored.
+ */
+static bool gate0_get(lua_State *L, int obj, int idx, time_t now, const struct tm *tm)
+{
+    char buf[48];
+    switch (idx) {
+    case 0: lua_pushinteger(L, (esp_timer_get_time() - s_boot_us) / 1000000); return true; // Uptime
+    case 5:
+        snprintf(buf, sizeof buf, "%04d-%02d-%02d", tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday);
+        lua_pushstring(L, buf);
+        return true;
+    case 6:
+        snprintf(buf, sizeof buf, "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
+        lua_pushstring(L, buf);
+        return true;
+    case 13: lua_pushinteger(L, (lua_Integer)now); return true; // LocalTime (as CLU feature 13)
+    case 15: lua_pushinteger(L, (lua_Integer)now); return true; // UnixTime
+    case 17: lua_pushstring(L, s_cfg.fw_version ? s_cfg.fw_version : ""); return true;
+    case 18: push_stored(L, obj, 18, 1); return true; // UseCloud (interface default 1): MQTT on/off
+    case 19: lua_pushinteger(L, s_cfg.cloud_connected && s_cfg.cloud_connected() ? 1 : 0); return true;
+    case 26: lua_pushinteger(L, s_soft_reloaded ? 2 : s_cfg.reset_reason); return true; // ResetReason
+    default: return false;
+    }
+}
+
 /**
  * @brief Class 0 get: computed features (Uptime, State, date/time, FwVersion, UseCloud, CloudConnection,
  *        LastMeasurementSendTime).
@@ -611,6 +665,9 @@ static bool clu0_get(lua_State *L, int obj, int idx)
     time_t now = time(NULL);
     struct tm tm;
     localtime_r(&now, &tm);
+    if (s_cfg.gate) {
+        return gate0_get(L, obj, idx, now, &tm);
+    }
     char buf[48];
     switch (idx) {
     case 0: lua_pushinteger(L, (esp_timer_get_time() - s_boot_us) / 1000000); return true; // Uptime
@@ -632,16 +689,7 @@ static bool clu0_get(lua_State *L, int obj, int idx)
     case 12: lua_pushinteger(L, tm.tm_min); return true;
     case 13: lua_pushinteger(L, (lua_Integer)now); return true;
     case 17: lua_pushstring(L, s_cfg.fw_version ? s_cfg.fw_version : ""); return true;
-    case 18: { // UseCloud (interface default 1): gates the MQTT connection
-        lua_getfield(L, obj, "_f");
-        lua_rawgeti(L, -1, 18);
-        lua_remove(L, -2);
-        if (lua_isnil(L, -1)) {
-            lua_pop(L, 1);
-            lua_pushinteger(L, 1);
-        }
-        return true;
-    }
+    case 18: push_stored(L, obj, 18, 1); return true; // UseCloud (interface default 1): MQTT on/off
     case 19: // CloudConnection: MQTT broker connected
         lua_pushinteger(L, s_cfg.cloud_connected && s_cfg.cloud_connected() ? 1 : 0);
         return true;
@@ -685,6 +733,17 @@ static bool clu0_set(lua_State *L, int obj, int idx, int val)
     if (s_cfg.clu_feature) {
         s_cfg.clu_feature(idx, lua_type(L, val) == LUA_TSTRING ? lua_tostring(L, val) : NULL,
                           lua_isnumber(L, val) ? lua_tonumber(L, val) : 0);
+    }
+    // GATE: UseCloud = true switches UseNTP (21) on as well (GATE HTTP manual, NTP section).
+    if (s_cfg.gate && idx == 18 &&
+        (lua_isboolean(L, val) ? lua_toboolean(L, val) : lua_isnumber(L, val) && lua_tonumber(L, val) != 0)) {
+        lua_getfield(L, obj, "_f");
+        lua_pushinteger(L, 1);
+        lua_rawseti(L, -2, 21);
+        lua_pop(L, 1);
+        if (s_cfg.clu_feature) {
+            s_cfg.clu_feature(21, NULL, 1);
+        }
     }
     return false;
 }
@@ -743,6 +802,34 @@ static int l_panic(lua_State *L)
 }
 
 /**
+ * @brief lua_pcall body of vm_new(): standard libraries and the private __clu table with the
+ *        extensions' C functions.
+ */
+static int vm_setup(lua_State *L)
+{
+    luaL_openlibs(L);
+    static const luaL_Reg fns[] = {
+        {"new", l_new},   {"get", l_get},       {"set", l_set},       {"execute", l_execute},
+        {"log", l_log},   {"loop", l_loop},     {"init", l_init},     {"wait", l_wait},
+        {"report", l_report}, {"millis", l_millis}, {"remote", l_remote}, {NULL, NULL},
+    };
+    luaL_newlib(L, fns);
+    lua_pushstring(L, s_cfg.root);
+    lua_setfield(L, -2, "root");
+    lua_pushinteger(L, s_cfg.sn);
+    lua_setfield(L, -2, "sn");
+    lua_pushboolean(L, s_cfg.gate);
+    lua_setfield(L, -2, "gate");
+    for (int i = 0; i < s_n_exts; i++) {
+        if (s_exts[i].fns) {
+            luaL_setfuncs(L, s_exts[i].fns, 0);
+        }
+    }
+    lua_setglobal(L, "__clu");
+    return 0;
+}
+
+/**
  * @brief Create a VM: libraries, __clu table, prelude, objects.lua, extensions, default checkAlive().
  *
  * __clu is removed from the globals afterwards; Lua code that needs it captured it while loading.
@@ -759,17 +846,16 @@ static lua_State *vm_new(void)
         return NULL;
     }
     lua_atpanic(L, l_panic);
-    luaL_openlibs(L);
-
-    static const luaL_Reg fns[] = {
-        {"new", l_new},   {"get", l_get},       {"set", l_set},       {"execute", l_execute},
-        {"log", l_log},   {"loop", l_loop},     {"init", l_init},     {"wait", l_wait},
-        {"report", l_report}, {"millis", l_millis}, {"remote", l_remote}, {NULL, NULL},
-    };
-    luaL_newlib(L, fns);
-    lua_pushstring(L, s_cfg.root);
-    lua_setfield(L, -2, "root");
-    lua_setglobal(L, "__clu");
+    // Out of memory while setting up must not reach the panic handler (abort -> reboot loop).
+    lua_pushcfunction(L, vm_setup);
+    if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+        ESP_LOGE(TAG, "Lua VM setup: %s (internal RAM free %u B, largest block %u B, reserve %u KB, PSRAM %u B)",
+                 lua_tostring(L, -1), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT),
+                 (unsigned)CONFIG_CLU_LUA_INTERNAL_RESERVE_KB, (unsigned)heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
+        lua_close(L);
+        return NULL;
+    }
 
     if (!load_embedded(L, prelude_lua_start, prelude_lua_end, "=prelude") ||
         !load_embedded(L, objects_lua_start, objects_lua_end, "=objects")) {
@@ -777,11 +863,6 @@ static lua_State *vm_new(void)
         return NULL;
     }
     for (int i = 0; i < s_n_exts; i++) {
-        lua_getglobal(L, "__clu");
-        if (s_exts[i].fns) {
-            luaL_setfuncs(L, s_exts[i].fns, 0);
-        }
-        lua_pop(L, 1);
         // A broken extension is logged and skipped: the CLU itself must still boot.
         if (s_exts[i].src && (luaL_loadbufferx(L, s_exts[i].src, s_exts[i].len, s_exts[i].name, "t") != LUA_OK ||
                               lua_pcall(L, 0, 0, 0) != LUA_OK)) {
@@ -819,11 +900,20 @@ static bool run_script(lua_State *L, const char *path)
     ESP_LOGI(TAG, "running %s", path);
     // Text only: precompiled bytecode is not verified by Lua and can corrupt memory.
     if (luaL_loadfilex(L, path, "t") != LUA_OK || lua_pcall(L, 0, 0, 0) != LUA_OK) {
-        ESP_LOGE(TAG, "%s: %s", path, lua_tostring(L, -1));
+        if (s_reload) {
+            ESP_LOGI(TAG, "%s stopped for the reload", path); // unwound by l_loop on purpose
+        } else {
+            ESP_LOGE(TAG, "%s: %s", path, lua_tostring(L, -1));
+        }
         lua_pop(L, 1);
         return false;
     }
-    ESP_LOGW(TAG, "%s returned", path);
+    if (s_cfg.gate) {
+        // A GATE's MAIN.LUA ends after SYSTEM.Init(); the firmware runs SYSTEM.Loop (idle_loop).
+        ESP_LOGI(TAG, "%s done, the firmware runs SYSTEM.Loop", path);
+    } else {
+        ESP_LOGW(TAG, "%s returned", path);
+    }
     return true;
 }
 
@@ -919,6 +1009,7 @@ static void lua_task(void *arg)
         drop_remote_results(); // replies for Lua threads of the old VM
         s_reload_ok = !s_cfg.on_reload || s_cfg.on_reload();
         s_boot_us = esp_timer_get_time(); // Uptime restarts as after a reboot
+        s_soft_reloaded = true;           // GATE ResetReason 2 (configuration reload)
         xSemaphoreGive(s_reloaded);
         if (!s_reload_ok) {
             ESP_LOGE(TAG, "reload: host reset failed, waiting for reboot");

@@ -42,6 +42,16 @@
             }
         },
         {
+            "name": "gate-http",
+            "displayName": "GATE HTTP on ESP32-S3 (WiFi, no TF-Bus)",
+            "binaryDir": "build-gate-http",
+            "cacheVariables": {
+                "IDF_TARGET": "esp32s3",
+                "SDKCONFIG": "${sourceDir}/sdkconfig.gate-http",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.gate-http"
+            }
+        },
+        {
             "name": "waveshare-mysensors",
             "displayName": "Waveshare ESP32-S3-RS485-CAN — MySensors gateway",
             "binaryDir": "build-waveshare-mysensors",

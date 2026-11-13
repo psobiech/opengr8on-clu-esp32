@@ -26,10 +26,10 @@
     <table class="boards">
       <thead><tr><th data-i18n="th_board"></th><th data-i18n="th_file"></th><th data-i18n="th_net"></th></tr></thead>
       <tbody>
-        <tr><td>Waveshare ESP32-S3-RS485-CAN</td><td><code>waveshare</code></td><td>WiFi</td></tr>
-        <tr><td>KinCony F8</td><td><code>f8</code></td><td data-i18n="net_eth"></td></tr>
-        <tr><td>KinCony KC868-A8v3</td><td><code>a8v3</code></td><td data-i18n="net_eth"></td></tr>
-        <tr><td>GATE HTTP (ESP32-S3)</td><td><code>opengr8on-gate-http-esp32s3-…</code></td><td>WiFi</td></tr>
+        <tr><td>Waveshare ESP32-S3-RS485-CAN</td><td><code>opengr8on-clu-waveshare-<span data-i18n="ph_ver"></span>.bin</code><br><code>opengr8on-clu-waveshare-<span data-i18n="ph_ver"></span>-ota.bin</code><br><code>opengr8on-clu-waveshare-<span data-i18n="ph_ver"></span>-mysensors.bin</code><br><code>opengr8on-clu-waveshare-<span data-i18n="ph_ver"></span>-ota-mysensors.bin</code></td><td>WiFi</td></tr>
+        <tr><td>KinCony F8</td><td><code>opengr8on-clu-f8-<span data-i18n="ph_ver"></span>.bin</code><br><code>opengr8on-clu-f8-<span data-i18n="ph_ver"></span>-ota.bin</code><br><code>opengr8on-clu-f8-<span data-i18n="ph_ver"></span>-mysensors.bin</code><br><code>opengr8on-clu-f8-<span data-i18n="ph_ver"></span>-ota-mysensors.bin</code></td><td data-i18n="net_eth"></td></tr>
+        <tr><td>KinCony KC868-A8v3</td><td><code>opengr8on-clu-a8v3-<span data-i18n="ph_ver"></span>.bin</code><br><code>opengr8on-clu-a8v3-<span data-i18n="ph_ver"></span>-ota.bin</code><br><code>opengr8on-clu-a8v3-<span data-i18n="ph_ver"></span>-mysensors.bin</code><br><code>opengr8on-clu-a8v3-<span data-i18n="ph_ver"></span>-ota-mysensors.bin</code></td><td data-i18n="net_eth"></td></tr>
+        <tr><td>GATE HTTP (ESP32-S3)</td><td><code>opengr8on-gate-http-esp32s3-<span data-i18n="ph_ver"></span>.bin</code><br><code>opengr8on-gate-http-esp32s3-<span data-i18n="ph_ver"></span>-ota.bin</code></td><td>WiFi</td></tr>
       </tbody>
     </table>
     <label class="file"><span data-i18n="fw_label"></span>
@@ -48,24 +48,26 @@
       <p class="hint" id="cfg-ota-hint" data-i18n="cfg_ota_hint" hidden></p>
       <fieldset class="cfg-fields">
         <legend data-i18n="lg_identity"></legend>
-        <label><span data-i18n="l_sn"></span> <input name="sn" inputmode="numeric" placeholder="221010155"></label>
-        <label><span data-i18n="l_pin"></span> <input name="pin" maxlength="8" data-i18n-placeholder="ph_pin"></label>
+        <label><span data-i18n="l_sn"></span> <small class="tag" data-i18n="t_opt"></small> <input name="sn" inputmode="numeric" placeholder="221010155"></label>
+        <p class="hint" data-i18n="sn_hint"></p>
+        <label><span data-i18n="l_pin"></span> <small class="tag rec" data-i18n="t_rec"></small> <input name="pin" maxlength="8" data-i18n-placeholder="ph_pin"></label>
+        <p class="hint" data-i18n="pin_hint"></p>
       </fieldset>
       <fieldset class="cfg-fields">
         <legend><span data-i18n="lg_wifi"></span> <small data-i18n="wifi_only"></small></legend>
-        <label><span data-i18n="l_ssid"></span> <input name="wifi_ssid" maxlength="32"></label>
-        <label><span data-i18n="l_pass"></span> <input name="wifi_pass" type="password" maxlength="63"></label>
+        <label><span data-i18n="l_ssid"></span> <small class="tag req" data-i18n="t_req_wifi"></small> <input name="wifi_ssid" maxlength="32"></label>
+        <label><span data-i18n="l_pass"></span> <small class="tag" data-i18n="t_opt"></small> <input name="wifi_pass" type="password" maxlength="63"></label>
       </fieldset>
       <fieldset class="cfg-fields">
         <legend data-i18n="lg_mqtt"></legend>
-        <label><span data-i18n="l_uri"></span> <input name="mqtt_uri" placeholder="mqtt://192.168.1.10:1883"></label>
-        <label><span data-i18n="l_user"></span> <input name="mqtt_user"></label>
-        <label><span data-i18n="l_pass"></span> <input name="mqtt_pass" type="password"></label>
+        <label><span data-i18n="l_uri"></span> <small class="tag" data-i18n="t_opt"></small> <input name="mqtt_uri" placeholder="mqtt://192.168.1.10:1883"></label>
+        <label><span data-i18n="l_user"></span> <small class="tag" data-i18n="t_opt"></small> <input name="mqtt_user"></label>
+        <label><span data-i18n="l_pass"></span> <small class="tag" data-i18n="t_opt"></small> <input name="mqtt_pass" type="password"></label>
         <label class="check"><input type="checkbox" name="mqtt_off"> <span data-i18n="mqtt_off"></span></label>
       </fieldset>
       <fieldset class="cfg-fields">
         <legend data-i18n="lg_ota"></legend>
-        <label><span data-i18n="l_pass"></span> <input name="ota_pass" type="password" maxlength="64"></label>
+        <label><span data-i18n="l_pass"></span> <small class="tag" data-i18n="t_opt"></small> <input name="ota_pass" type="password" maxlength="64"></label>
         <p class="hint" data-i18n-html="ota_hint"></p>
       </fieldset>
       <p id="cfg-errors" class="warn" aria-live="polite"></p>

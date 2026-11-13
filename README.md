@@ -32,132 +32,17 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 
 ## Spis treści
 
+- [Budowanie i wgrywanie](#budowanie-i-wgrywanie)
 - [Architektura](#architektura)
 - [Zgodność z CLU_ZWAVE_2](#zgodność-z-clu_zwave_2)
 - [Funkcje ponad CLU_ZWAVE_2](#funkcje-ponad-clu_zwave_2)
 - [Sprzęt](#sprzęt)
-- [Budowanie i wgrywanie](#budowanie-i-wgrywanie)
 - [Konfiguracja](#konfiguracja)
 - [MQTT / Home Assistant](#mqtt--home-assistant)
 - [Testy](#testy)
 - [Bezpieczeństwo](#bezpieczeństwo)
 - [Licencje](#licencje)
 - [Zastrzeżenie prawne](#zastrzeżenie-prawne)
-
-## Architektura
-
-| Komponent | Rola |
-|---|---|
-| `main/` | start, WiFi/Ethernet/IP (`clu_net`, `clu_eth`), czas/SNTP/RTC (`clu_time`), serwer UDP/1234 (`udp_server`), diagnostyka OM (`clu_diag`), stan CLU (`clu_state`) |
-| `components/clu_crypto` | AES-128-CBC/PKCS#7 (PSA crypto, mbedtls 4) |
-| `components/clu_proto` | wyprowadzanie kluczy, ramkowanie TF-Bus, emulowane moduły TF-Bus, protokół TFTP, linie MySensors (czysty C, testowany na hoście) |
-| `components/clu_lua` | środowisko Lua: prelude (model obiektów OM), obiekty wirtualne (`objects.lua`) |
-| `components/lua` | Lua 5.3.6 (domyślnie, jak w CLU) i 5.5.1 (opcja `CLU_LUA_5_5`), źródła niezmodyfikowane |
-| `components/tfbus_uart` | UART RS485 half-duplex |
-| `components/tfbus_master` | master magistrali: rejestr modułów, adresowanie, odpytywanie, discovery |
-| `components/tfbus_drivers` | sterowniki modułów TF-Bus, zob. [TFBUS.md](TFBUS.md) |
-| `components/clu_tftp` | serwer TFTP (a:\ i p:\) |
-| `components/clu_telnet` | konsola logów (TCP 23, tylko odczyt) |
-| `components/clu_mqtt` | MQTT + discovery Home Assistant |
-| `components/clu_mysensors` | kontroler MySensors, zob. [MYSENSORS.md](MYSENSORS.md) |
-| `components/clu_ota` | aktualizacja firmware przez HTTP z hasłem (`POST /ota`), potwierdzanie nowego obrazu |
-| `components/clu_rtc` | zegar RTC PCF85063 albo DS3231 na I2C (podtrzymywany bateryjnie) |
-| `components/clu_i2c` | wspólne magistrale I2C (jedna na parę pinów: RTC + ekspander IO) |
-| `components/clu_localio` | IO płytki (PCF8575) jako moduł IO_MODULE_DIN_8 odpowiadający na ramki TF-Bus |
-| `tools/mknvs.py` | obraz partycji `cfg` z ustawieniami dla gotowych obrazów (seryjny, PIN, WiFi, MQTT) |
-| `web/` | flasher w przeglądarce (GitHub Pages): obraz z Releases + ustawienia generowane na stronie (`web/nvs.js`) |
-
-Partycje (`partitions.csv`): NVS (klucze, PIN, sieć, czas), `cfg` (12 KB pod `0x12000`, ustawienia
-z `mknvs.py`, firmware tylko je czyta), dwie partycje aplikacji po 4 MB, FAT 6 MB jako `a:\`
-(projekt, CONFIG.JSON, STORAGE.DAT, certyfikaty).
-
-## Zgodność z CLU_ZWAVE_2
-
-Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApiVer 0x203) i Object Manager 1.13.x. Legenda: ✅ gotowe,
-🟡 gotowe, ale niezweryfikowane na prawdziwym sprzęcie / semantyka odgadnięta, ❌ brak.
-
-### Protokół UDP i usługi CLU
-
-| Obszar | Stan | Uwagi |
-|---|---|---|
-| Discovery, `req_set_key`, `req_reset`, `req:` (Lua), clientReport | ✅ | AES-128-CBC, klucze jak w `docs/UDP.md` |
-| `req_set_clu_ip` | 🟡 | statyczny IP w NVS, zakładana maska /24, `0.0.0.0` = powrót do DHCP; DNS z cech 25/26 |
-| Czas: SNTP (cecha 22), TimeZone (23), OnTimeChange (zdarzenie 13) | ✅ | zapisywane w NVS |
-| TFTP (`req_start_ftp` / `req_tftp_stop`, octet + netascii) | ✅ | |
-| Diagnostyka OM (`req_diagnostic_refresh` → `m:\DIAGNOSTIC_PACK.JSON`) | ✅ | napięcie zawsze 0 (brak pomiaru) |
-| Logi w OM (Diagnostyka › Logi, telnet TCP 23) | ✅ | |
-| `req_refresh_modules` (wyszukiwanie nowych modułów) | 🟡 | odpowiedź DISCOVER prawdziwych modułów nieprzechwycona |
-
-### Lua i obiekty
-
-| Obszar | Stan | Uwagi |
-|---|---|---|
-| Lua 5.3.6, MAIN/OM/USER.LUA, tryb awaryjny, OBJECT/SYSTEM | ✅ | prelude przetestowane z prawdziwym OM.LUA |
-| Lokalna CLU (klasa 0): Uptime, State, Date/Time, AddToLog, SetDateTime | ✅ | |
-| Zdalna CLU (klasa 1): `execute(0, "lua")`, `get`/`set`/`execute` | ✅ | w zdarzeniach wywołanie czeka na odpowiedź (korutyna) |
-| Timer, Calendar (cron), EventScheduler, PresenceSensor v2, Storage | 🟡 | Storage: trwałe zmienne w `a:\STORAGE.DAT` |
-| Scheduler, Thermostat v2, SunriseSunsetCalendar v3 | 🟡 | format danych zgodny z OM, sterowanie niezweryfikowane |
-| Push | 🟡 | tylko wpis do logu (brak chmury Grentona) |
-| MultiFanACThermostat, PIDcontroller | ❌ | |
-
-### Moduły TF-Bus
-
-| Moduł | Stan | Uwagi |
-|---|---|---|
-| Master: RESET/SEEK/ADDR_ASSIGN, odpytywanie, obecność | ✅ | kolejność zweryfikowana z przechwytem |
-| Nowe moduły: DISCOVER (0x08), VERSION_QUERY, `tfbusDevices` w `a:\CONFIG.JSON` | 🟡 | moduły offline adresowane ponownie |
-| IO_MODULE_DIN_8 (0x1e), RELAY_DIN_4 (0x15) | ✅ | DOUT/DIN, czasowe Switch*, click/hold ze zboczy wejść |
-| ROLLER_SH_DIN_3 (0x2a), ROLLER_SH_DIN (0x17) | 🟡 | maska bitowa ruch/stop niezweryfikowana |
-| TOUCH_PANEL_FM_4 (0x1c) | 🟡 | przyciski, temperatura, światło, buzzer; LED niezweryfikowane |
-| SMART_PANEL_FM_4 (0x03) | 🟡 | przyciski, czujniki, LED, PrintText/Draw/Beep; brak konfiguracji stron/gestów |
-| DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](TFBUS.md#dimmer_mosfet_din) |
-| LED_RGBW_DIN (0x18) | 🟡 | LEDRGB, LED_CHANNEL ×4, LED_CCT ×2, PowerSupplyVoltage; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](TFBUS.md#led_rgbw_din) |
-| Pozostałe moduły TF-Bus (ściemniacze FM, LED FM, analogowe itd.) | ❌ | brak sterowników |
-| Wbudowane IO płytki (PCF8575) jako IO_MODULE_DIN_8 | 🟡 | KinCony F8, KC868-A8v3, zob. [DEVICES.md](DEVICES.md#kincony-f8-i-kc868-a8v3); niesprawdzone na sprzęcie |
-
-### Czego brakuje względem CLU_ZWAVE_2
-
-- **Z-Wave** — brak radia; węzły Z-Wave z OM.LUA są pomijane.
-- **Ethernet** — wewnętrzny EMAC tylko na targecie `esp32` (LAN8720A na sprzęcie Grenton GATE, inne
-  PHY RMII przez sterownik generyczny, np. JL1101); ESP32-S3 nie ma EMAC, więc tam Ethernet tylko
-  przez W5500 na SPI (KinCony F8, KC868-A8v3) albo wyłącznie WiFi.
-- **Pomiar napięcia magistrali** (cechy 27–30, zdarzenia OnBusVoltage*) — brak ADC na płytce.
-- **Chmura Grentona** (aplikacja mobilna, Push) — świadomie wyłączona; zamiast niej MQTT + Home Assistant.
-- **Aktualizacja firmware z OM** — firmware wgrywa się przez `idf.py flash`.
-- Sterowniki większości typów modułów, konfiguracja stron SMART_PANEL, MultiFanACThermostat,
-  PIDcontroller.
-- Cechy QoS (24) i TelnetLogLevel (31) są tylko zapamiętywane.
-
-## Funkcje ponad CLU_ZWAVE_2
-
-- **MQTT + discovery Home Assistant** — encje HA tworzone automatycznie z OM.LUA, z nazwami z OM;
-  sterowanie przekaźnikami, roletami, zdarzenia przycisków, czujniki paneli. Szczegóły:
-  [MQTT / Home Assistant](#mqtt--home-assistant).
-- **Diagnostyka firmware w HA** — heap, PSRAM, pamięć Lua, RSSI, IP, przyczyna resetu, liczniki
-  TF-Bus, obecność każdego modułu, przycisk Restart.
-- **Surowe API obiektów przez MQTT** (opcjonalne) — get/set dowolnej cechy, wywołanie dowolnej
-  metody.
-- **`MQTT.*` w USER.LUA** — własne mapowania encji, ukrywanie, publikowanie dowolnych tematów.
-- **MySensors zamiast TF-Bus** (opcja kompilacji), zob. [MYSENSORS.md](MYSENSORS.md).
-- **Emulacja GATE HTTP** (HttpRequest / HttpListener) zamiast CLU, zob. [GATE_HTTP.md](GATE_HTTP.md).
-- **Bez chmury Grentona** — OM nie rejestruje CLU w chmurze (zob. niżej).
-- **Aktualizacja firmware przez sieć** (OTA, HTTP z hasłem, cofanie nieudanej aktualizacji).
-- **Lua 5.5** jako opcja kompilacji.
-- **Wzmocnienia bezpieczeństwa** zgodne z OM; jedyna zmiana obsługi: discovery, klucz i TFTP tylko w oknie
-  konfiguracji po starcie lub po wciśnięciu BOOT (zob. [Bezpieczeństwo](#bezpieczeństwo)).
-- **Testy hosta** porównujące sterowniki bajt po bajcie z przechwytem prawdziwej CLU.
-
-## Sprzęt
-
-Piny, profile i uwagi do każdej płytki: [DEVICES.md](DEVICES.md). Wymagany PSRAM, zob.
-[Wymagania pamięci](DEVICES.md#wymagania-pamięci).
-
-| Płytka | Układ | Sieć | Uwagi |
-|---|---|---|---|
-| [Waveshare ESP32-S3-RS485-CAN](DEVICES.md#waveshare-esp32-s3-rs485-can) | ESP32-S3R8 | WiFi | zalecana; RS485 i RTC na płytce |
-| [Inne płytki ESP32-S3](DEVICES.md#inne-płytki-esp32-s3) | ESP32-S3, 16 MB / 8 MB PSRAM | WiFi | własny transceiver RS485 |
-| [KinCony F8, KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3) | ESP32-S3 N16R8 | Ethernet W5500 | 8 przekaźników + 8 wejść jako IO_MODULE_DIN_8 |
-| [Grenton GATE](DEVICES.md#grenton-gate) | ESP32-WROVER-B | Ethernet LAN8720A | target `esp32` |
 
 ## Budowanie i wgrywanie
 
@@ -347,6 +232,121 @@ Jednorazowo bez zmiennej: `idf.py --preset gate build`.
 Log na UART wypisuje `SN=… MAC=… PIN(private key)=…`. Fabryczny klucz projektu jest wyprowadzany z
 PIN-u (`docs/UDP.md` › Encryption and keys). Wpisz PIN w Object Managerze (albo w `clu-repl`) przy
 pierwszym `req_set_key`. Linia z PIN-em trafia tylko na UART, nie na telnet.
+
+## Architektura
+
+| Komponent | Rola |
+|---|---|
+| `main/` | start, WiFi/Ethernet/IP (`clu_net`, `clu_eth`), czas/SNTP/RTC (`clu_time`), serwer UDP/1234 (`udp_server`), diagnostyka OM (`clu_diag`), stan CLU (`clu_state`) |
+| `components/clu_crypto` | AES-128-CBC/PKCS#7 (PSA crypto, mbedtls 4) |
+| `components/clu_proto` | wyprowadzanie kluczy, ramkowanie TF-Bus, emulowane moduły TF-Bus, protokół TFTP, linie MySensors (czysty C, testowany na hoście) |
+| `components/clu_lua` | środowisko Lua: prelude (model obiektów OM), obiekty wirtualne (`objects.lua`) |
+| `components/lua` | Lua 5.3.6 (domyślnie, jak w CLU) i 5.5.1 (opcja `CLU_LUA_5_5`), źródła niezmodyfikowane |
+| `components/tfbus_uart` | UART RS485 half-duplex |
+| `components/tfbus_master` | master magistrali: rejestr modułów, adresowanie, odpytywanie, discovery |
+| `components/tfbus_drivers` | sterowniki modułów TF-Bus, zob. [TFBUS.md](TFBUS.md) |
+| `components/clu_tftp` | serwer TFTP (a:\ i p:\) |
+| `components/clu_telnet` | konsola logów (TCP 23, tylko odczyt) |
+| `components/clu_mqtt` | MQTT + discovery Home Assistant |
+| `components/clu_mysensors` | kontroler MySensors, zob. [MYSENSORS.md](MYSENSORS.md) |
+| `components/clu_ota` | aktualizacja firmware przez HTTP z hasłem (`POST /ota`), potwierdzanie nowego obrazu |
+| `components/clu_rtc` | zegar RTC PCF85063 albo DS3231 na I2C (podtrzymywany bateryjnie) |
+| `components/clu_i2c` | wspólne magistrale I2C (jedna na parę pinów: RTC + ekspander IO) |
+| `components/clu_localio` | IO płytki (PCF8575) jako moduł IO_MODULE_DIN_8 odpowiadający na ramki TF-Bus |
+| `tools/mknvs.py` | obraz partycji `cfg` z ustawieniami dla gotowych obrazów (seryjny, PIN, WiFi, MQTT) |
+| `web/` | flasher w przeglądarce (GitHub Pages): obraz z Releases + ustawienia generowane na stronie (`web/nvs.js`) |
+
+Partycje (`partitions.csv`): NVS (klucze, PIN, sieć, czas), `cfg` (12 KB pod `0x12000`, ustawienia
+z `mknvs.py`, firmware tylko je czyta), dwie partycje aplikacji po 4 MB, FAT 6 MB jako `a:\`
+(projekt, CONFIG.JSON, STORAGE.DAT, certyfikaty).
+
+## Zgodność z CLU_ZWAVE_2
+
+Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApiVer 0x203) i Object Manager 1.13.x. Legenda: ✅ gotowe,
+🟡 gotowe, ale niezweryfikowane na prawdziwym sprzęcie / semantyka odgadnięta, ❌ brak.
+
+### Protokół UDP i usługi CLU
+
+| Obszar | Stan | Uwagi |
+|---|---|---|
+| Discovery, `req_set_key`, `req_reset`, `req:` (Lua), clientReport | ✅ | AES-128-CBC, klucze jak w `docs/UDP.md` |
+| `req_set_clu_ip` | 🟡 | statyczny IP w NVS, zakładana maska /24, `0.0.0.0` = powrót do DHCP; DNS z cech 25/26 |
+| Czas: SNTP (cecha 22), TimeZone (23), OnTimeChange (zdarzenie 13) | ✅ | zapisywane w NVS |
+| TFTP (`req_start_ftp` / `req_tftp_stop`, octet + netascii) | ✅ | |
+| Diagnostyka OM (`req_diagnostic_refresh` → `m:\DIAGNOSTIC_PACK.JSON`) | ✅ | napięcie zawsze 0 (brak pomiaru) |
+| Logi w OM (Diagnostyka › Logi, telnet TCP 23) | ✅ | |
+| `req_refresh_modules` (wyszukiwanie nowych modułów) | 🟡 | odpowiedź DISCOVER prawdziwych modułów nieprzechwycona |
+
+### Lua i obiekty
+
+| Obszar | Stan | Uwagi |
+|---|---|---|
+| Lua 5.3.6, MAIN/OM/USER.LUA, tryb awaryjny, OBJECT/SYSTEM | ✅ | prelude przetestowane z prawdziwym OM.LUA |
+| Lokalna CLU (klasa 0): Uptime, State, Date/Time, AddToLog, SetDateTime | ✅ | |
+| Zdalna CLU (klasa 1): `execute(0, "lua")`, `get`/`set`/`execute` | ✅ | w zdarzeniach wywołanie czeka na odpowiedź (korutyna) |
+| Timer, Calendar (cron), EventScheduler, PresenceSensor v2, Storage | 🟡 | Storage: trwałe zmienne w `a:\STORAGE.DAT` |
+| Scheduler, Thermostat v2, SunriseSunsetCalendar v3 | 🟡 | format danych zgodny z OM, sterowanie niezweryfikowane |
+| Push | 🟡 | tylko wpis do logu (brak chmury Grentona) |
+| MultiFanACThermostat, PIDcontroller | ❌ | |
+
+### Moduły TF-Bus
+
+| Moduł | Stan | Uwagi |
+|---|---|---|
+| Master: RESET/SEEK/ADDR_ASSIGN, odpytywanie, obecność | ✅ | kolejność zweryfikowana z przechwytem |
+| Nowe moduły: DISCOVER (0x08), VERSION_QUERY, `tfbusDevices` w `a:\CONFIG.JSON` | 🟡 | moduły offline adresowane ponownie |
+| IO_MODULE_DIN_8 (0x1e), RELAY_DIN_4 (0x15) | ✅ | DOUT/DIN, czasowe Switch*, click/hold ze zboczy wejść |
+| ROLLER_SH_DIN_3 (0x2a), ROLLER_SH_DIN (0x17) | 🟡 | maska bitowa ruch/stop niezweryfikowana |
+| TOUCH_PANEL_FM_4 (0x1c) | 🟡 | przyciski, temperatura, światło, buzzer; LED niezweryfikowane |
+| SMART_PANEL_FM_4 (0x03) | 🟡 | przyciski, czujniki, LED, PrintText/Draw/Beep; brak konfiguracji stron/gestów |
+| DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](TFBUS.md#dimmer_mosfet_din) |
+| LED_RGBW_DIN (0x18) | 🟡 | LEDRGB, LED_CHANNEL ×4, LED_CCT ×2, PowerSupplyVoltage; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](TFBUS.md#led_rgbw_din) |
+| Pozostałe moduły TF-Bus (ściemniacze FM, LED FM, analogowe itd.) | ❌ | brak sterowników |
+| Wbudowane IO płytki (PCF8575) jako IO_MODULE_DIN_8 | 🟡 | KinCony F8, KC868-A8v3, zob. [DEVICES.md](DEVICES.md#kincony-f8-i-kc868-a8v3); niesprawdzone na sprzęcie |
+
+### Czego brakuje względem CLU_ZWAVE_2
+
+- **Z-Wave** — brak radia; węzły Z-Wave z OM.LUA są pomijane.
+- **Ethernet** — wewnętrzny EMAC tylko na targecie `esp32` (LAN8720A na sprzęcie Grenton GATE, inne
+  PHY RMII przez sterownik generyczny, np. JL1101); ESP32-S3 nie ma EMAC, więc tam Ethernet tylko
+  przez W5500 na SPI (KinCony F8, KC868-A8v3) albo wyłącznie WiFi.
+- **Pomiar napięcia magistrali** (cechy 27–30, zdarzenia OnBusVoltage*) — brak ADC na płytce.
+- **Chmura Grentona** (aplikacja mobilna, Push) — świadomie wyłączona; zamiast niej MQTT + Home Assistant.
+- **Aktualizacja firmware z OM** — firmware wgrywa się przez `idf.py flash`.
+- Sterowniki większości typów modułów, konfiguracja stron SMART_PANEL, MultiFanACThermostat,
+  PIDcontroller.
+- Cechy QoS (24) i TelnetLogLevel (31) są tylko zapamiętywane.
+
+## Funkcje ponad CLU_ZWAVE_2
+
+- **MQTT + discovery Home Assistant** — encje HA tworzone automatycznie z OM.LUA, z nazwami z OM;
+  sterowanie przekaźnikami, roletami, zdarzenia przycisków, czujniki paneli. Szczegóły:
+  [MQTT / Home Assistant](#mqtt--home-assistant).
+- **Diagnostyka firmware w HA** — heap, PSRAM, pamięć Lua, RSSI, IP, przyczyna resetu, liczniki
+  TF-Bus, obecność każdego modułu, przycisk Restart.
+- **Surowe API obiektów przez MQTT** (opcjonalne) — get/set dowolnej cechy, wywołanie dowolnej
+  metody.
+- **`MQTT.*` w USER.LUA** — własne mapowania encji, ukrywanie, publikowanie dowolnych tematów.
+- **MySensors zamiast TF-Bus** (opcja kompilacji), zob. [MYSENSORS.md](MYSENSORS.md).
+- **Emulacja GATE HTTP** (HttpRequest / HttpListener) zamiast CLU, zob. [GATE_HTTP.md](GATE_HTTP.md).
+- **Bez chmury Grentona** — OM nie rejestruje CLU w chmurze (zob. niżej).
+- **Aktualizacja firmware przez sieć** (OTA, HTTP z hasłem, cofanie nieudanej aktualizacji).
+- **Lua 5.5** jako opcja kompilacji.
+- **Wzmocnienia bezpieczeństwa** zgodne z OM; jedyna zmiana obsługi: discovery, klucz i TFTP tylko w oknie
+  konfiguracji po starcie lub po wciśnięciu BOOT (zob. [Bezpieczeństwo](#bezpieczeństwo)).
+- **Testy hosta** porównujące sterowniki bajt po bajcie z przechwytem prawdziwej CLU.
+
+## Sprzęt
+
+Piny, profile i uwagi do każdej płytki: [DEVICES.md](DEVICES.md). Wymagany PSRAM, zob.
+[Wymagania pamięci](DEVICES.md#wymagania-pamięci).
+
+| Płytka | Układ | Sieć | Uwagi |
+|---|---|---|---|
+| [Waveshare ESP32-S3-RS485-CAN](DEVICES.md#waveshare-esp32-s3-rs485-can) | ESP32-S3R8 | WiFi | zalecana; RS485 i RTC na płytce |
+| [Inne płytki ESP32-S3](DEVICES.md#inne-płytki-esp32-s3) | ESP32-S3, 16 MB / 8 MB PSRAM | WiFi | własny transceiver RS485 |
+| [KinCony F8, KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3) | ESP32-S3 N16R8 | Ethernet W5500 | 8 przekaźników + 8 wejść jako IO_MODULE_DIN_8 |
+| [Grenton GATE](DEVICES.md#grenton-gate) | ESP32-WROVER-B | Ethernet LAN8720A | target `esp32` |
 
 ## Konfiguracja
 

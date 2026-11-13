@@ -29,7 +29,7 @@ body {
   color: var(--fg);
   font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
-main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+main { max-width: 960px; margin: 0 auto; padding: 24px 16px 64px; }
 h1 { font-size: 1.6rem; margin: 0 0 8px; }
 h2 { font-size: 1.15rem; margin: 0 0 8px; display: flex; align-items: center; gap: 10px; }
 .step {
@@ -44,7 +44,23 @@ p { margin: 0 0 12px; }
 a { color: var(--accent); }
 code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
 .boards { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 0.95rem; }
-.boards th, .boards td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); }
+.boards th, .boards td { text-align: left; padding: 4px 8px 4px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.boards td code { overflow-wrap: anywhere; line-height: 1.7; }
+.boards th:last-child, .boards td:last-child { white-space: nowrap; padding-right: 0; }
+.tag {
+  font-size: 0.75rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px;
+  padding: 0 7px; margin-left: 4px; white-space: nowrap;
+}
+.tag.rec { color: var(--accent); border-color: var(--accent); }
+.tag.req { color: var(--warn); border-color: var(--warn); }
+@media (max-width: 640px) { /* stack: board + network on one line, the files below */
+  .boards thead { display: none; }
+  .boards tr { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+  .boards td { border: 0; padding: 0; }
+  .boards td:first-child { font-weight: 600; }
+  .boards td:nth-child(2) { grid-column: 1 / -1; order: 3; padding-top: 4px; }
+  .boards td code { font-size: 0.8em; }
+}
 fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; padding: 8px 12px 12px; }
 legend { padding: 0 4px; color: var(--muted); }
 label { display: block; margin-top: 8px; }

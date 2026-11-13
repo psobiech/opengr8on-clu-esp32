@@ -121,4 +121,4 @@ idf.py --preset gate -p /dev/ttyUSB0 erase-flash flash monitor
 ```
 
 > **UWAGA: eFuse są nieodwracalne.** `FLASH_CRYPT_CNT` ma 7 bitów, więc szyfrowanie można przełączać
-> tylko kilka razy. Po dopaleniu eFuse fabryczny firmware przestaje się uruchamiać i niejest możliwe jego przywrócenie!
+> tylko kilka razy. Po dopaleniu eFuse fabryczny firmware przestaje się uruchamiać i nie jest możliwe jego przywrócenie!

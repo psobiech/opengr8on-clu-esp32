@@ -12,9 +12,10 @@
 > comes with no warranty — see [Disclaimer](#disclaimer).
 
 Firmware, który z ESP32-S3 (R8: 16 MB flash, 8 MB PSRAM) i transceivera RS485 robi jednostkę
-centralną (CLU) zgodną z systemem Grenton. Object Manager (OM) widzi ją jak zwykłą CLU: wykrywa ją,
-wgrywa projekt (OM.LUA / USER.LUA), steruje obiektami i odczytuje diagnostykę. Po stronie RS485
-CLU jest masterem magistrali TF-Bus i obsługuje prawdziwe moduły Grentona.
+centralną (CLU) zgodną z systemem Grenton. Object Manager (OM) — albo rozszerzenie VS Code
+[opengr8on-vscode](https://github.com/psobiech/opengr8on-vscode) w jego roli — widzi ją jak zwykłą
+CLU: wykrywa ją, wgrywa projekt (OM.LUA / USER.LUA), steruje obiektami i odczytuje diagnostykę.
+Po stronie RS485 CLU jest masterem magistrali TF-Bus i obsługuje prawdziwe moduły Grentona.
 
 To port w C vCLU z [opengr8on-node](https://github.com/psobiech/opengr8on-node): strona UDP/Lua
 pochodzi z vCLU, strona RS485 z jego `src/tfbus`. Opis protokołów: `docs/UDP.md` i `docs/TFBUS.md`.
@@ -154,64 +155,40 @@ Piny, profile i uwagi do każdej płytki: [DEVICES.md](DEVICES.md).
 
 ## Budowanie i wgrywanie
 
-### Wymagania
+### Gotowe obrazy
 
-- **ESP-IDF 6.0** (projekt budowany na 6.0.2, zob. `dependencies.lock`), target `esp32s3` albo
-  `esp32` (Grenton GATE).
-- Sieć przy pierwszym budowaniu: component manager pobiera `espressif/mqtt`
-  (`components/clu_mqtt/idf_component.yml`), `espressif/w5500` i na `esp32` `espressif/lan87xx`
-  (`main/idf_component.yml`), bo esp-mqtt i sterowniki Ethernet nie są już częścią ESP-IDF 6.
-- Lua jest dołączona w repozytorium (`components/lua`), nic więcej nie trzeba instalować.
+Bez instalowania ESP-IDF. Każde wydanie na stronie
+[Releases](https://github.com/psobiech/opengr8on-clu-esp32/releases) ma dla każdej płytki pełny
+obraz `opengr8on-clu-<płytka>-<wersja>.bin`:
 
-### Budowanie
-
-Płytkę wybiera preset CMake (`CMakePresets.json`). Każdy ma własny katalog budowania, target i
-plik `sdkconfig`, więc można przełączać się między płytkami bez `set-target` i bez czyszczenia:
-
-| Preset | Płytka | Katalog | Konfiguracja |
+| Płytka | `<płytka>` | Układ | Sieć |
 |---|---|---|---|
-| `waveshare` (domyślny) | [Waveshare ESP32-S3-RS485-CAN](DEVICES.md#waveshare-esp32-s3-rs485-can) | `build/` | `sdkconfig` |
-| `gate` | [Grenton GATE](DEVICES.md#grenton-gate) (`esp32`) | `build-gate/` | `sdkconfig.gate` |
-| `f8` | [KinCony F8](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-f8/` | `sdkconfig.f8` |
-| `a8v3` | [KinCony KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-a8v3/` | `sdkconfig.a8v3` |
+| Waveshare ESP32-S3-RS485-CAN | `waveshare` | `esp32s3` | WiFi |
+| Grenton GATE | `gate` | `esp32` | Ethernet (DHCP) |
+| KinCony F8 | `f8` | `esp32s3` | Ethernet (DHCP) |
+| KinCony KC868-A8v3 | `a8v3` | `esp32s3` | Ethernet (DHCP) |
 
-```bash
-. /opt/esp-idf/export.sh        # ścieżka do Twojej instalacji ESP-IDF
-export IDF_PRESET=f8            # wybór płytki; bez tego: waveshare
-idf.py menuconfig               # zob. "Konfiguracja"
-idf.py build flash monitor
-```
-
-Jednorazowo bez zmiennej: `idf.py --preset gate build`.
-
-### Gotowe obrazy (GitHub Actions)
-
-Bez instalowania ESP-IDF. Najprościej przez przeglądarkę:
-**[flasher w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/)** (Chrome / Edge na
-komputerze, Web Serial). Pobierz obraz płytki ze strony
-[Releases](https://github.com/psobiech/opengr8on-clu-esp32/releases)
-(`opengr8on-clu-<płytka>-<wersja>.bin`), wybierz go we flasherze i wybierz tryb: **Instalacja**
+Wgrywa się go
+**[flasherem w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/)** (Chrome / Edge na
+komputerze, Web Serial): wybierz w nim obraz `.bin` płytki i tryb: **Instalacja**
 (kasuje cały flash), **Aktualizacja** (stan i dysk `a:\` zostają) albo **Tylko ustawienia**.
 Ustawienia (seryjny, PIN, WiFi, MQTT) są zapisywane tylko po zaznaczeniu **Zapisz nowe
 ustawienia**; bez tego zostają te z urządzenia (instalacja odczytuje je przed kasowaniem i wgrywa
 z powrotem). Obraz ustawień powstaje w przeglądarce (ten sam co z `mknvs.py`,
 hasła nigdzie nie są wysyłane); można go też pobrać jako `cfg.bin`. Flasher sprawdza, czy obraz
-pasuje do podłączonego układu.
+pasuje do podłączonego układu, a po wgraniu pokazuje log UART.
 
-Wydania (tag `v*`) zawierają dla każdej płytki pełny obraz `opengr8on-clu-<płytka>-<wersja>.bin` i
-cały artefakt jako `.zip`. Workflow **Firmware** buduje też każdy push na `develop` / `main`:
-zakładka **Actions** → przebieg *Firmware* → **Artifacts**. Poniżej wgrywanie z linii poleceń.
+### Wgrywanie z linii poleceń
 
-| Artefakt | Płytka | `--chip` | Sieć |
-|---|---|---|---|
-| `opengr8on-clu-waveshare` | Waveshare ESP32-S3-RS485-CAN | `esp32s3` | WiFi |
-| `opengr8on-clu-gate` | Grenton GATE | `esp32` | Ethernet (DHCP) |
-| `opengr8on-clu-f8` | KinCony F8 | `esp32s3` | Ethernet (DHCP) |
-| `opengr8on-clu-a8v3` | KinCony KC868-A8v3 | `esp32s3` | Ethernet (DHCP) |
+Do linii poleceń służy `opengr8on-clu-<płytka>-<wersja>.zip` z wydania (ta sama zawartość co
+artefakt z GitHub Actions):
 
-Zawartość: `opengr8on-clu-<preset>-full.bin` (pełny obraz od adresu `0x0`), osobne obrazy z
-`flash_args` (aktualizacja bez kasowania ustawień), `mknvs.py` (obraz ustawień), `.elf` (do
-dekodowania zrzutów), `CHIP` i `VERSION`.
+- `opengr8on-clu-<płytka>-full.bin`: pełny obraz od adresu `0x0` (ten sam co `.bin` wydania),
+- osobne obrazy i `flash_args`: aktualizacja bez kasowania ustawień — pełny obraz nadpisuje też
+  partycje `nvs` (`0x9000`) i `cfg` (`0x12000`) leżące przed aplikacją,
+- `mknvs.py`: obraz ustawień (`cfg.bin`),
+- `opengr8on_clu_esp32.elf`: do dekodowania zrzutów awarii tej wersji,
+- `CHIP` (`esp32s3` / `esp32`, wartość dla `--chip`) i `VERSION`.
 
 Potrzebny jest Python 3 i:
 
@@ -226,7 +203,7 @@ Windows. Jeśli esptool nie może się połączyć, wejdź w tryb pobierania rę
 **1. Pierwsza instalacja** (kasuje cały flash, także ustawienia i dysk `a:\`):
 
 ```bash
-unzip opengr8on-clu-waveshare.zip -d clu && cd clu
+unzip opengr8on-clu-waveshare-v0.0.2-alpha.zip -d clu && cd clu
 esptool --chip esp32s3 --port /dev/ttyUSB0 erase-flash
 esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash 0x0 opengr8on-clu-waveshare-full.bin
 ```
@@ -259,8 +236,8 @@ obecnego, CLU go przyjmuje, a klucze projektu wracają do fabrycznych (OM wymaga
 `req_set_key`). Pełny obraz z kroku 1 czyści też `cfg`, więc ustawienia wgrywa się po nim.
 `--csv plik.csv` zapisuje też źródłowy CSV (z hasłami jawnym tekstem).
 
-**3. Aktualizacja** z zachowaniem ustawień, stanu i dysku `a:\` (z rozpakowanego katalogu
-artefaktu; wgrywa też aktualną tablicę partycji, adresy aplikacji się nie zmieniają):
+**3. Aktualizacja** z zachowaniem ustawień, stanu i dysku `a:\` (z rozpakowanego katalogu;
+wgrywa też aktualną tablicę partycji, adresy aplikacji się nie zmieniają):
 
 ```bash
 esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash @flash_args
@@ -269,6 +246,42 @@ esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash @flash_args
 Bez Pythona: [flasher w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/) (wyżej).
 
 Grenton GATE: `--chip esp32`, w pozostałych przykładach bez zmian.
+
+### Obrazy z GitHub Actions
+
+Workflow **Firmware** buduje każdy push na `develop` / `main` (bez wydania): zakładka **Actions** →
+przebieg *Firmware* → **Artifacts**. Zawartość jak `.zip` wydania (zob. wyżej); do flashera wybierz z
+niego `…-full.bin`.
+
+### Wymagania do budowania
+
+- **ESP-IDF 6.0** (projekt budowany na 6.0.2, zob. `dependencies.lock`), target `esp32s3` albo
+  `esp32` (Grenton GATE).
+- Sieć przy pierwszym budowaniu: component manager pobiera `espressif/mqtt`
+  (`components/clu_mqtt/idf_component.yml`), `espressif/w5500` i na `esp32` `espressif/lan87xx`
+  (`main/idf_component.yml`), bo esp-mqtt i sterowniki Ethernet nie są już częścią ESP-IDF 6.
+- Lua jest dołączona w repozytorium (`components/lua`), nic więcej nie trzeba instalować.
+
+### Budowanie
+
+Płytkę wybiera preset CMake (`CMakePresets.json`). Każdy ma własny katalog budowania, target i
+plik `sdkconfig`, więc można przełączać się między płytkami bez `set-target` i bez czyszczenia:
+
+| Preset | Płytka | Katalog | Konfiguracja |
+|---|---|---|---|
+| `waveshare` (domyślny) | [Waveshare ESP32-S3-RS485-CAN](DEVICES.md#waveshare-esp32-s3-rs485-can) | `build/` | `sdkconfig` |
+| `gate` | [Grenton GATE](DEVICES.md#grenton-gate) (`esp32`) | `build-gate/` | `sdkconfig.gate` |
+| `f8` | [KinCony F8](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-f8/` | `sdkconfig.f8` |
+| `a8v3` | [KinCony KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-a8v3/` | `sdkconfig.a8v3` |
+
+```bash
+. /opt/esp-idf/export.sh        # ścieżka do Twojej instalacji ESP-IDF
+export IDF_PRESET=f8            # wybór płytki; bez tego: waveshare
+idf.py menuconfig               # zob. "Konfiguracja"
+idf.py build flash monitor
+```
+
+Jednorazowo bez zmiennej: `idf.py --preset gate build`.
 
 ### Pierwsze uruchomienie
 

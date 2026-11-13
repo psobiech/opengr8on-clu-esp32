@@ -4,8 +4,8 @@
  *
  * Boot order: NVS, crypto, CLU identity, telnet log hook, time zone + clock from the RTC (CLU_RTC), FAT
  * storage (a:\\, p:\\),
- * config files, RS485 + TFBUS master and drivers (CLU_TFBUS) with the on-board IO modules (CLU_LOCAL_IO),
- * network (WiFi and / or Ethernet), SNTP,
+ * config files, RS485 + TFBUS master and drivers (CLU_TFBUS) with the on-board IO modules (CLU_LOCAL_IO)
+ * or the MySensors gateway (CLU_MYSENSORS) on the same pins, network (WiFi and / or Ethernet), SNTP,
  * telnet server, OTA updates (HTTP), MQTT, TFTP, the UDP/1234 CLU protocol server and the Lua runtime.
  *
  * Nothing waits for an IP: the bus and the local scripts run without the network. Network
@@ -23,6 +23,9 @@
 #include "clu_localio.h"
 #endif
 #include "clu_mqtt.h"
+#if CONFIG_CLU_MYSENSORS
+#include "clu_mysensors.h"
+#endif
 #include "clu_ota.h"
 #include "clu_net.h"
 #include "clu_time.h"
@@ -239,7 +242,7 @@ static void on_clu_feature(int idx, const char *str, double num)
  */
 static bool on_lua_reload(void)
 {
-#if CONFIG_CLU_TFBUS
+#if CONFIG_CLU_TFBUS_MASTER
     return tfbus_master_reset(8000);
 #else
     return true;
@@ -251,7 +254,7 @@ static bool on_lua_reload(void)
  */
 static void on_lua_init(void)
 {
-#if CONFIG_CLU_TFBUS
+#if CONFIG_CLU_TFBUS_MASTER
     tfbus_master_start();
 #endif
     clu_mqtt_start();
@@ -282,17 +285,42 @@ void app_main(void)
     storage_mount();
     clu_state_write_config_files();
 
-#if CONFIG_CLU_TFBUS
-    const tfbus_uart_cfg_t uc = {
+#if CONFIG_CLU_MYSENSORS
+    const clu_mysensors_cfg_t msc = {
         .uart_num = CONFIG_CLU_RS485_UART,
         .tx_pin = CONFIG_CLU_RS485_TX_GPIO,
         .rx_pin = CONFIG_CLU_RS485_RX_GPIO,
         .de_pin = CONFIG_CLU_RS485_DE_GPIO,
-        .baud = CONFIG_CLU_RS485_BAUD,
+        .baud = CONFIG_CLU_MYSENSORS_BAUD,
+#if CONFIG_CLU_MYSENSORS_METRIC
+        .metric = true,
+#endif
+#if CONFIG_CLU_MYSENSORS_TRACE
+        .trace = true,
+#endif
+        .max_modules = CONFIG_CLU_MYSENSORS_MODULES_MAX,
+    };
+#endif
+#if CONFIG_CLU_TFBUS_MASTER
+    const tfbus_uart_cfg_t uc = {
+#if CONFIG_CLU_TFBUS
+        .uart_num = CONFIG_CLU_RS485_UART,
+        .tx_pin = CONFIG_CLU_RS485_TX_GPIO,
+        .rx_pin = CONFIG_CLU_RS485_RX_GPIO,
+        .de_pin = CONFIG_CLU_RS485_DE_GPIO,
+        .baud = CONFIG_CLU_TFBUS_BAUD,
+#else
+        .uart_num = -1, // the RS485 pins carry the MySensors gateway: emulated modules only
+#endif
     };
     tfbus_uart_init(&uc);
 #if CONFIG_CLU_LOCAL_IO
     clu_localio_start(); // answers the bus frames for the on-board IO modules
+#endif
+#if CONFIG_CLU_MYSENSORS
+    clu_mysensors_init(&msc); // the CLU is the RS485 network's gateway (no scripts needed), emulated modules
+    tfbus_master_set_log_tag("mysensors"); // the master serves only the emulated modules
+    tfbus_master_on_refresh(clu_mysensors_refresh); // OM discovery: modules of nodes that are gone removed
 #endif
     tfbus_drivers_register_all();
     tfbus_master_on_scan(clu_state_write_config_files); // CONFIG.JSON tfbusDevices

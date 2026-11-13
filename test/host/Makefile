@@ -42,18 +42,18 @@ test_master: test_master.c $(COMP)/tfbus_master/tfbus_master.c $(PROTO)/tfbus_fr
 	    $(LUA_DEFS) $(MASTER_INC) -o $@ test_master.c $(PROTO)/tfbus_frame.c liblua_host.a -lm -ldl
 
 # On-board IO emulation (two IO_MODULE_DIN_8 answering TF-Bus frames) against fake expanders.
-test_localio: test_localio.c $(COMP)/clu_localio/localio.c $(PROTO)/tfbus_frame.c $(STUBS) $(HDRS)
+test_localio: test_localio.c $(COMP)/clu_localio/localio.c $(PROTO)/tfbus_frame.c $(PROTO)/tfbus_vmod.c $(STUBS) $(HDRS)
 	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
 	    -Istubs -I$(PROTO)/include -I$(COMP)/clu_localio/include -o $@ $(filter %.c,$^)
 
 # On-board IO board glue (clu_localio.c, included by the test): serial in NVS, PCF8575 pin mapping
 # of KinCony F8 and KC868-A8v3, against a fake expander.
 LOCALIO_BOARD_DEPS := test_localio_board.c $(COMP)/clu_localio/clu_localio.c $(COMP)/clu_localio/localio.c \
-                      $(COMP)/clu_i2c/clu_i2c.c $(PROTO)/tfbus_frame.c fake_nvs.h $(STUBS) $(HDRS)
+                      $(COMP)/clu_i2c/clu_i2c.c $(PROTO)/tfbus_frame.c $(PROTO)/tfbus_vmod.c fake_nvs.h $(STUBS) $(HDRS)
 LOCALIO_BOARD_CC = $(TCC) $(HOST_CFLAGS) -Wno-unused-function -Istubs -I. -I$(PROTO)/include -I$(COMP)/clu_localio/include \
                    -I$(COMP)/clu_crypto/include -I$(COMP)/tfbus_uart/include -I$(COMP)/clu_i2c/include \
                    -o $@ test_localio_board.c $(COMP)/clu_localio/localio.c $(COMP)/clu_i2c/clu_i2c.c \
-                   $(PROTO)/tfbus_frame.c
+                   $(PROTO)/tfbus_frame.c $(PROTO)/tfbus_vmod.c
 
 test_localio_f8: $(LOCALIO_BOARD_DEPS)
 	$(LOCALIO_BOARD_CC) -DBOARD_F8=1
@@ -107,6 +107,15 @@ test_mqttc: test_mqttc.c $(COMP)/clu_mqtt/clu_mqtt.c liblua_host.a $(STUBS) $(HD
 	$(TCC) $(HOST_CFLAGS) -Istubs -I$(LUA_DIR) -I$(COMP)/clu_lua/include -I$(COMP)/clu_mqtt/include \
 	    -o $@ test_mqttc.c liblua_host.a -lm -ldl
 
+# MySensors protocol (ms_proto.c) and controller (clu_mysensors.c, included by the test) against a
+# fake UART, NVS and clock; the Lua bindings in a real VM.
+MS_SRCS := $(COMP)/clu_mysensors/ms_vmod.c $(PROTO)/ms_proto.c $(PROTO)/ms_rs485.c $(PROTO)/tfbus_vmod.c $(PROTO)/tfbus_frame.c
+test_mysensors: test_mysensors.c $(COMP)/clu_mysensors/clu_mysensors.c $(COMP)/clu_mysensors/ms_vmod.h $(MS_SRCS) \
+                liblua_host.a fake_nvs.h $(STUBS) $(HDRS)
+	$(TCC) $(HOST_CFLAGS) -Wno-unused-function -Istubs -I. -I$(PROTO)/include -I$(LUA_DIR) -I$(COMP)/clu_lua/include \
+	    -I$(COMP)/clu_mysensors/include -I$(COMP)/clu_mysensors -I$(COMP)/tfbus_uart/include \
+	    -o $@ test_mysensors.c $(MS_SRCS) liblua_host.a -lm -ldl
+
 # Lua runtime (clu_lua.c, included by the test; prelude.lua / objects.lua embedded with .incbin)
 # with the Lua task on a pthread.
 test_lua: test_lua.c $(COMP)/clu_lua/clu_lua.c $(COMP)/clu_lua/prelude.lua $(COMP)/clu_lua/objects.lua \
@@ -136,6 +145,12 @@ test_main: test_main.c $(MAIN)/main.c $(STUBS) $(HDRS)
 test_main_nobus: test_main.c $(MAIN)/main.c $(STUBS) $(HDRS)
 	$(TCC) $(HOST_CFLAGS) $(MAIN_INC) -DCONFIG_CLU_TFBUS=0 -o $@ test_main.c -lm
 
+# The same with the MySensors gateway on the bus pins instead (imperial units, up to two emulated
+# IO_MODULE_DIN_8): the bus master runs without a wire.
+test_main_mysensors: test_main.c $(MAIN)/main.c $(STUBS) $(HDRS)
+	$(TCC) $(HOST_CFLAGS) $(MAIN_INC) -I$(COMP)/clu_mysensors/include -DCONFIG_CLU_TFBUS=0 -DCONFIG_CLU_MYSENSORS=1 \
+	    -DCONFIG_CLU_MYSENSORS_MODULES_MAX=2 -o $@ test_main.c -lm
+
 # AES (clu_crypto.c) against the host's mbedtls 3.6 PSA API (Arch: mbedtls3; elsewhere set
 # MBEDTLS3_INC / MBEDTLS3_LIB). Skipped by `make test` when the headers are missing.
 MBEDTLS3_INC ?= /usr/include/mbedtls3
@@ -147,7 +162,7 @@ test_crypto: test_crypto.c $(COMP)/clu_crypto/clu_crypto.c $(PROTO)/clu_keys.c
 
 HAVE_MBEDTLS3 := $(wildcard $(MBEDTLS3_INC)/psa/crypto.h)
 
-C_TESTS := test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc $(if $(HAVE_MBEDTLS3),test_crypto)
+C_TESTS := test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_time_nortc test_rtc $(if $(HAVE_MBEDTLS3),test_crypto)
 
 .PHONY: test test-c clean coverage
 test: test-c test-lua
@@ -167,14 +182,16 @@ test-c: $(C_TESTS)
 	./test_telnet 2>/dev/null
 	./test_ota 2>/dev/null
 	ASAN_OPTIONS=detect_leaks=0 ./test_mqttc 2>/dev/null
+	ASAN_OPTIONS=detect_leaks=0 ./test_mysensors 2>/dev/null
 	ASAN_OPTIONS=detect_leaks=0 ./test_lua 2>/dev/null
 	./test_main 2>/dev/null
 	./test_main_nobus 2>/dev/null
+	./test_main_mysensors 2>/dev/null
 	./test_time_nortc 2>/dev/null
 	$(if $(HAVE_MBEDTLS3),./test_crypto,@echo "skip test_crypto: no $(MBEDTLS3_INC)/psa/crypto.h")
 
 clean:
-	rm -f test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_lua test_main test_main_nobus test_time_nortc test_rtc test_crypto liblua_host.a *.o
+	rm -f test_proto test_drivers test_master test_udp test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_time_nortc test_rtc test_crypto liblua_host.a *.o
 	rm -rf *.gcda *.gcno coverage
 
 # Prelude (Lua object model) + MQTT/Home Assistant (clu_mqtt/mqtt.lua) tests; needs lua$(LUA) on the host. Pass OM=<path> to also load a real OM.LUA.
@@ -185,6 +202,7 @@ test-lua:
 	$(if $(COV),mkdir -p coverage)
 	$(LUA_RUN) test_prelude.lua
 	$(LUA_RUN) test_mqtt.lua
+	$(LUA_RUN) test_mysensors.lua
 	$(if $(OM),$(LUA_RUN) test_prelude.lua "$(OM)")
 
 # Line/branch coverage of C (gcov) and Lua (lua_cov.lua) code under test: summary on stdout,

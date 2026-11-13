@@ -49,6 +49,7 @@ typedef struct tfbus_module {
     uint8_t  status_len;      /**< Length of @ref status. */
     const struct tfbus_driver *drv;      /**< Driver for @ref hw_type (NULL = none). */
     void    *drv_ctx;         /**< Driver state; freed by the master on reset. */
+    bool     init_pending;    /**< Driver init due once the module answers (it was offline at init). */
 } tfbus_module_t;
 
 /**
@@ -105,8 +106,16 @@ void tfbus_driver_register(const tfbus_driver_t *drv);
  */
 void tfbus_master_init(void);
 
-/** @brief SYSTEM.Init(): the module configuration is known, run driver init (also after rediscovery). */
+/** @brief SYSTEM.Init(): the module configuration is known, run driver init (also after rediscovery).
+ *  Modules not answering then get it when they come online. */
 void tfbus_master_start(void);
+
+/**
+ * @brief Log tag of the bus master (default "tfbus"), e.g. "mysensors" when it serves only modules
+ * emulated for a MySensors network. Call before tfbus_master_init().
+ * @param tag Tag; must stay valid.
+ */
+void tfbus_master_set_log_tag(const char *tag);
 
 /**
  * @brief Lua reload: drop the driver state and Lua names.
@@ -143,6 +152,14 @@ int tfbus_master_devices(tfbus_device_t *out, int max);
  * @param cb Callback (NULL = none).
  */
 void tfbus_master_on_scan(void (*cb)(void));
+
+/**
+ * @brief Set a callback run in the bus task at the start of every refresh (tfbus_master_refresh(),
+ * req_refresh_modules), before its RESET: firmware-emulated modules may change then (they are all
+ * re-addressed after the RESET).
+ * @param cb Callback (NULL = none).
+ */
+void tfbus_master_on_refresh(void (*cb)(void));
 
 /**
  * @brief Re-run discovery (RESET, SEEK, DISCOVER, ADDR_ASSIGN, VERSION_QUERY) and wait for it.

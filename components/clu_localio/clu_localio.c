@@ -141,7 +141,7 @@ void clu_localio_start(void)
     }
 
     localio_setup(&sn, 1, &s_hw); // relays off, input pins high
-    tfbus_uart_set_local(localio_frame);
+    tfbus_uart_add_local(localio_frame);
     ESP_LOGI(TAG, "on-board IO: IO_MODULE_DIN_8 sn=%lu (PCF8575 0x%02x)", (unsigned long)sn,
              CONFIG_CLU_LOCAL_IO_ADDR);
 }

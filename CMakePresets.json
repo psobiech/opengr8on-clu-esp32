@@ -40,6 +40,46 @@
                 "SDKCONFIG": "${sourceDir}/sdkconfig.a8v3",
                 "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.a8v3"
             }
+        },
+        {
+            "name": "waveshare-mysensors",
+            "displayName": "Waveshare ESP32-S3-RS485-CAN — MySensors gateway",
+            "binaryDir": "build-waveshare-mysensors",
+            "cacheVariables": {
+                "IDF_TARGET": "esp32s3",
+                "SDKCONFIG": "${sourceDir}/sdkconfig.waveshare-mysensors",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.mysensors"
+            }
+        },
+        {
+            "name": "gate-mysensors",
+            "displayName": "Grenton GATE — MySensors gateway",
+            "binaryDir": "build-gate-mysensors",
+            "cacheVariables": {
+                "IDF_TARGET": "esp32",
+                "SDKCONFIG": "${sourceDir}/sdkconfig.gate-mysensors",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.mysensors"
+            }
+        },
+        {
+            "name": "f8-mysensors",
+            "displayName": "KinCony F8 — MySensors gateway",
+            "binaryDir": "build-f8-mysensors",
+            "cacheVariables": {
+                "IDF_TARGET": "esp32s3",
+                "SDKCONFIG": "${sourceDir}/sdkconfig.f8-mysensors",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.f8;${sourceDir}/sdkconfig.defaults.mysensors"
+            }
+        },
+        {
+            "name": "a8v3-mysensors",
+            "displayName": "KinCony KC868-A8v3 — MySensors gateway",
+            "binaryDir": "build-a8v3-mysensors",
+            "cacheVariables": {
+                "IDF_TARGET": "esp32s3",
+                "SDKCONFIG": "${sourceDir}/sdkconfig.a8v3-mysensors",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.a8v3;${sourceDir}/sdkconfig.defaults.mysensors"
+            }
         }
     ]
 }

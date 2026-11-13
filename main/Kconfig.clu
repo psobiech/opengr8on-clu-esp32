@@ -210,110 +210,189 @@ menu "OpenGr8on ESP32 CLU"
         string "Firmware version string"
         default "5.15.24-2635"
 
-    menuconfig CLU_TFBUS
-        bool "TF-Bus master (RS485 modules)"
-        default y
-        help
-            Drive Grenton TF-Bus modules over RS485: discovery, addressing, polling and the module
-            drivers. Without it the CLU runs only virtual objects, scripts and the network
-            services (OM still sees no modules; discovery / "Clear CLU" report an empty bus).
+    menu "RS485 bus (TF-Bus / MySensors)"
 
-    if CLU_TFBUS
-
-        config CLU_RS485_UART
-            int "RS485 UART number"
-            range 1 2
-            default 1
+        choice CLU_BUS
+            prompt "Protocol"
+            default CLU_TFBUS
             help
-                Grenton GATE (ESP32): UART1 on TX=4, RX=3, DE=5.
+                What the CLU drives on its RS485 / UART pins.
 
-        config CLU_RS485_TX_GPIO
-            int "RS485 TX (DI) GPIO"
-            default 4 if IDF_TARGET_ESP32
-            default 17
+            config CLU_TFBUS
+                bool "TF-Bus master (Grenton RS485 modules)"
+                help
+                    Drive Grenton TF-Bus modules over RS485: discovery, addressing, polling and the
+                    module drivers.
 
-        config CLU_RS485_RX_GPIO
-            int "RS485 RX (RO) GPIO"
-            default 3 if IDF_TARGET_ESP32
-            default 18
+            config CLU_MYSENSORS
+                bool "MySensors gateway (RS485 network, MY_RS485)"
+                help
+                    Nodes built with MY_RS485 on the bus; the CLU is node 0, the gateway, and the
+                    controller: answers find parent / ping / registration / echo, hands out node
+                    ids (kept in NVS), answers I_CONFIG / I_TIME and value requests, and passes every
+                    message to the scripts (USER.LUA global MySensors, see MYSENSORS.md). No other
+                    gateway on the bus. OM sees no real TF-Bus modules.
 
-        config CLU_RS485_DE_GPIO
-            int "RS485 DE/RE GPIO (-1 = auto-direction transceiver)"
-            default 5 if IDF_TARGET_ESP32
-            default 21
+            config CLU_BUS_NONE
+                bool "None"
+                help
+                    The CLU runs only virtual objects, scripts and the network services (OM sees no
+                    modules; discovery / "Clear CLU" report an empty bus).
+        endchoice
+
+        config CLU_TFBUS_MASTER
+            bool
+            default y if CLU_TFBUS || CLU_MYSENSORS
             help
-                Waveshare ESP32-S3-RS485-CAN: TX=17, RX=18, DE=21 (driven as UART RTS).
+                TF-Bus master running: on the RS485 wire (CLU_TFBUS) or without a wire, serving only
+                modules emulated by the firmware (CLU_MYSENSORS, CLU_LOCAL_IO).
 
-        config CLU_RS485_BAUD
-            int "TFBUS baud rate"
-            default 115200
+        if CLU_TFBUS || CLU_MYSENSORS
 
-        menuconfig CLU_LOCAL_IO
-            bool "On-board IO as a TF-Bus module (PCF8575)"
-            default n
-            help
-                8 relay outputs and 8 digital inputs on one PCF8575 I2C expander on the controller
-                board (KinCony F8, KC868-A8v3) appear to Object Manager as an IO_MODULE_DIN_8 module
-                (8 DOUT + 8 DIN). The firmware answers the TF-Bus frames for it itself, so it takes
-                part in discovery, addressing and polling like a module on the RS485 bus. Add it to
-                the project in OM like any discovered module.
+            config CLU_RS485_UART
+                int "UART number"
+                range 1 2
+                default 1
+                help
+                    Grenton GATE (ESP32): UART1 on TX=4, RX=3, DE=5.
 
-        if CLU_LOCAL_IO
+            config CLU_RS485_TX_GPIO
+                int "TX (DI) GPIO"
+                default 4 if IDF_TARGET_ESP32
+                default 17
 
-            config CLU_LOCAL_IO_SDA_GPIO
-                int "I2C SDA GPIO"
-                range 0 48
-                default 8
-
-            config CLU_LOCAL_IO_SCL_GPIO
-                int "I2C SCL GPIO"
-                range 0 48
+            config CLU_RS485_RX_GPIO
+                int "RX (RO) GPIO"
+                default 3 if IDF_TARGET_ESP32
                 default 18
+
+            config CLU_RS485_DE_GPIO
+                int "DE/RE GPIO (-1 = auto-direction transceiver)"
+                default 5 if IDF_TARGET_ESP32
+                default 21
                 help
-                    Shared with the RTC (CLU_RTC) when it uses the same pins (KinCony F8 / A8v3).
+                    Waveshare ESP32-S3-RS485-CAN: TX=17, RX=18, DE=21 (driven as UART RTS).
 
-            config CLU_LOCAL_IO_ADDR
-                hex "PCF8575 I2C address"
-                range 0x20 0x27
-                default 0x24
+            # One option per protocol: a single one keeps its saved value when the protocol changes.
+            config CLU_TFBUS_BAUD
+                int "Baud rate"
+                depends on CLU_TFBUS
+                default 115200
                 help
-                    KinCony F8: 0x24, KC868-A8v3: 0x22.
+                    TF-Bus: 115200.
 
-            choice CLU_LOCAL_IO_OUT_PINS
-                prompt "Relay outputs on"
-                default CLU_LOCAL_IO_OUT_P1
-
-                config CLU_LOCAL_IO_OUT_P1
-                    bool "P10-P17, inputs on P00-P07 (KinCony F8)"
-                config CLU_LOCAL_IO_OUT_P0
-                    bool "P00-P07, inputs on P10-P17 (KC868-A8v3)"
-            endchoice
-
-            config CLU_LOCAL_IO_OUT_ACTIVE_LOW
-                bool "Outputs are active low"
-                default y
+            config CLU_MYSENSORS_BAUD
+                int "Baud rate"
+                depends on CLU_MYSENSORS
+                default 57600
                 help
-                    A relay is on when its PCF8575 pin is driven low. The expander powers up with all
-                    pins high, so the relays stay off until the CLU switches them.
-
-            config CLU_LOCAL_IO_IN_ACTIVE_LOW
-                bool "Inputs are active low"
-                default y
-                help
-                    An input reads low when it is active (optocoupler conducting).
-
-            config CLU_LOCAL_IO_SN
-                string "Module serial (decimal, empty = random, stored in NVS)"
-                default ""
-                help
-                    Like the CLU serial: a random serial is generated once and kept in NVS, so the
-                    module keeps its identity in the OM project across reboots and updates. Set it to
-                    take over the serial of a module already in the project. Overrides the NVS value
-                    when non-empty.
+                    The nodes' MY_RS485_BAUD_RATE (57600 here; the MySensors library defaults to 9600).
 
         endif
 
-    endif
+        menu "MySensors gateway"
+            depends on CLU_MYSENSORS
+
+
+            config CLU_MYSENSORS_METRIC
+                bool "Metric units (I_CONFIG answers M, else I)"
+                default y
+
+            config CLU_MYSENSORS_TRACE
+                bool "Log every message at INFO"
+                default n
+                help
+                    Both directions as text lines ("< " from a node, "> " to a node). Can also be
+                    switched at runtime from a script: MySensors.trace(true). The bus state (valid
+                    frames / garbage) is logged on every change regardless.
+
+            config CLU_MYSENSORS_MODULES_MAX
+                int "Max emulated IO_MODULE_DIN_8 modules (0 = none)"
+                range 0 8
+                default 4
+                help
+                    MySensors binary sensors and outputs as TF-Bus modules in Object Manager: each
+                    module has 8 DIN (S_DOOR, S_MOTION, S_SMOKE, S_WATER_LEAK, S_SOUND, S_VIBRATION,
+                    S_MOISTURE -> V_TRIPPED) and 8 DOUT (S_BINARY, S_SPRINKLER -> V_STATUS, S_LOCK ->
+                    V_LOCK_STATUS). Modules are created on demand: a sensor takes the first free channel
+                    when it presents itself, and a new module (fresh serial) is added when all are
+                    full, up to this limit. Serials and channels are kept in NVS. Run discovery in OM
+                    after new sensors appeared and add the modules to the project.
+                    MySensors.slots() lists which sensor is on which channel.
+
+        endmenu
+
+        if CLU_TFBUS_MASTER
+
+            menuconfig CLU_LOCAL_IO
+                bool "On-board IO as a TF-Bus module (PCF8575)"
+                default n
+                help
+                    8 relay outputs and 8 digital inputs on one PCF8575 I2C expander on the controller
+                    board (KinCony F8, KC868-A8v3) appear to Object Manager as an IO_MODULE_DIN_8 module
+                    (8 DOUT + 8 DIN). The firmware answers the TF-Bus frames for it itself, so it takes
+                    part in discovery, addressing and polling like a module on the RS485 bus. Add it to
+                    the project in OM like any discovered module. Also works with CLU_MYSENSORS.
+
+            if CLU_LOCAL_IO
+
+                config CLU_LOCAL_IO_SDA_GPIO
+                    int "I2C SDA GPIO"
+                    range 0 48
+                    default 8
+
+                config CLU_LOCAL_IO_SCL_GPIO
+                    int "I2C SCL GPIO"
+                    range 0 48
+                    default 18
+                    help
+                        Shared with the RTC (CLU_RTC) when it uses the same pins (KinCony F8 / A8v3).
+
+                config CLU_LOCAL_IO_ADDR
+                    hex "PCF8575 I2C address"
+                    range 0x20 0x27
+                    default 0x24
+                    help
+                        KinCony F8: 0x24, KC868-A8v3: 0x22.
+
+                choice CLU_LOCAL_IO_OUT_PINS
+                    prompt "Relay outputs on"
+                    default CLU_LOCAL_IO_OUT_P1
+
+                    config CLU_LOCAL_IO_OUT_P1
+                        bool "P10-P17, inputs on P00-P07 (KinCony F8)"
+                    config CLU_LOCAL_IO_OUT_P0
+                        bool "P00-P07, inputs on P10-P17 (KC868-A8v3)"
+                endchoice
+
+                config CLU_LOCAL_IO_OUT_ACTIVE_LOW
+                    bool "Outputs are active low"
+                    default y
+                    help
+                        A relay is on when its PCF8575 pin is driven low. The expander powers up with all
+                        pins high, so the relays stay off until the CLU switches them.
+
+                config CLU_LOCAL_IO_IN_ACTIVE_LOW
+                    bool "Inputs are active low"
+                    default y
+                    help
+                        An input reads low when it is active (optocoupler conducting).
+
+                config CLU_LOCAL_IO_SN
+                    string "Module serial (decimal, empty = random, stored in NVS)"
+                    default ""
+                    help
+                        Like the CLU serial: a random serial is generated once and kept in NVS, so the
+                        module keeps its identity in the OM project across reboots and updates. Set it to
+                        take over the serial of a module already in the project. Overrides the NVS value
+                        when non-empty.
+
+            endif
+
+        endif
+
+    endmenu
+
 
     menuconfig CLU_RTC
         bool "Battery-backed RTC (I2C)"

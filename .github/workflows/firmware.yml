@@ -27,6 +27,11 @@ jobs:
           - { preset: gate,      target: esp32 }   # Grenton GATE (Ethernet LAN8720A)
           - { preset: f8,        target: esp32s3 } # KinCony F8 (Ethernet W5500)
           - { preset: a8v3,      target: esp32s3 } # KinCony KC868-A8v3 (Ethernet W5500)
+          # MySensors gateway variants (sdkconfig.defaults.mysensors): release images end in -mysensors.bin
+          - { preset: waveshare-mysensors, target: esp32s3 }
+          - { preset: gate-mysensors,      target: esp32 }
+          - { preset: f8-mysensors,        target: esp32s3 }
+          - { preset: a8v3-mysensors,      target: esp32s3 }
     steps:
       - uses: actions/checkout@v7
 
@@ -68,7 +73,8 @@ jobs:
 
   # Tag v*: GitHub release with, per board, the full image (what the web flasher and the README
   # commands take), the application image for network updates (-ota.bin) and the complete
-  # artifact as a zip.
+  # artifact as a zip. MySensors variants: the same with -mysensors before the extension
+  # (opengr8on-clu-<board>-<tag>-mysensors.bin, ...-ota-mysensors.bin, ...-mysensors.zip).
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -88,9 +94,11 @@ jobs:
           mkdir -p assets
           for dir in artifacts/opengr8on-clu-*; do
             preset="${dir##*/opengr8on-clu-}"
-            cp "$dir/opengr8on-clu-${preset}-full.bin" "assets/opengr8on-clu-${preset}-${tag}.bin"
-            cp "$dir/opengr8on-clu-${preset}-ota.bin" "assets/opengr8on-clu-${preset}-${tag}-ota.bin"
-            (cd "$dir" && zip -qr "../../assets/opengr8on-clu-${preset}-${tag}.zip" .)
+            board="${preset%-mysensors}"
+            variant="${preset#"$board"}" # "" or "-mysensors"
+            cp "$dir/opengr8on-clu-${preset}-full.bin" "assets/opengr8on-clu-${board}-${tag}${variant}.bin"
+            cp "$dir/opengr8on-clu-${preset}-ota.bin" "assets/opengr8on-clu-${board}-${tag}-ota${variant}.bin"
+            (cd "$dir" && zip -qr "../../assets/opengr8on-clu-${board}-${tag}${variant}.zip" .)
           done
           ls -l assets
 

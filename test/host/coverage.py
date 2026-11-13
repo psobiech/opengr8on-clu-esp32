@@ -24,7 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 OUT = os.path.join(HERE, "coverage")
 LUA_SOURCES = ["components/clu_lua/prelude.lua", "components/clu_lua/objects.lua",
-               "components/clu_mqtt/mqtt.lua"]
+               "components/clu_mqtt/mqtt.lua", "components/clu_mysensors/mysensors.lua"]
 
 
 def rel(path, cwd):

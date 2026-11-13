@@ -27,7 +27,8 @@ static const char *cfg_bssid = "";
 #define CONFIG_CLU_RS485_TX_GPIO      17
 #define CONFIG_CLU_RS485_RX_GPIO      18
 #define CONFIG_CLU_RS485_DE_GPIO      8
-#define CONFIG_CLU_RS485_BAUD         115200
+#define CONFIG_CLU_TFBUS_BAUD         115200
+#define CONFIG_CLU_MYSENSORS_BAUD     57600
 
 // storage_mount() creates the drive directories under /fs: never on the host
 static char s_mkdirs[128];
@@ -112,11 +113,20 @@ static tfbus_uart_cfg_t s_uc;
 esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *c) { s_uc = *c; L("uart"); return ESP_OK; }
 void tfbus_drivers_register_all(void) { L("drivers"); }
 void tfbus_master_init(void) { L("master_init"); }
+static const char *s_master_tag = "tfbus";
+void tfbus_master_set_log_tag(const char *t) { s_master_tag = t; }
 static void (*s_scan_cb)(void);
 void tfbus_master_on_scan(void (*cb)(void)) { s_scan_cb = cb; L("on_scan"); }
+static void (*s_refresh_cb)(void);
+void tfbus_master_on_refresh(void (*cb)(void)) { s_refresh_cb = cb; }
 void tfbus_master_start(void) { L("master_start"); }
 static bool s_reset_ok = true;
 bool tfbus_master_reset(uint32_t ms) { L("master_reset(%u)", (unsigned)ms); return s_reset_ok; }
+#if CONFIG_CLU_MYSENSORS
+static clu_mysensors_cfg_t s_msc;
+esp_err_t clu_mysensors_init(const clu_mysensors_cfg_t *c) { s_msc = *c; L("mysensors"); return ESP_OK; }
+void clu_mysensors_refresh(void) {}
+#endif
 
 bool sntp_restart(void) { L("sntp_restart"); return true; }
 
@@ -184,6 +194,8 @@ uint32_t udp_server_remote_exec(uint32_t ip, const char *s) { return 0; }
 // ---------------------------------------------------------------- tests
 #if CONFIG_CLU_TFBUS
 #define BUS_BOOT "uart drivers on_scan master_init "
+#elif CONFIG_CLU_MYSENSORS
+#define BUS_BOOT "uart mysensors drivers on_scan master_init "
 #else
 #define BUS_BOOT ""
 #endif
@@ -205,7 +217,17 @@ int main(void)
                                            s_uc.de_pin == 8 && s_uc.baud == 115200);
     check("bus scans rewrite CONFIG.JSON / config.txt", s_scan_cb == clu_state_write_config_files);
 #else
+#if !CONFIG_CLU_MYSENSORS
     check("CLU_TFBUS off: no UART, drivers or bus master", !s_scan_cb && !strstr(s_log, "uart"));
+#endif
+#endif
+#if CONFIG_CLU_MYSENSORS
+    check("MySensors gateway: RS485 pins / baud from Kconfig, imperial, emulated modules",
+          s_msc.uart_num == 1 && s_msc.tx_pin == 17 && s_msc.rx_pin == 18 && s_msc.de_pin == 8 &&
+              s_msc.baud == 57600 && !s_msc.metric && s_msc.max_modules == 2);
+    check("MySensors: TF-Bus master without a wire (emulated modules only), logging as mysensors",
+          s_uc.uart_num == -1 && s_scan_cb == clu_state_write_config_files && !strcmp(s_master_tag, "mysensors") &&
+              s_refresh_cb == clu_mysensors_refresh);
 #endif
     check("WiFi: SSID / password, WPA2-PSK minimum, SAE both, PMF capable, no BSSID lock",
           !strcmp((char *)s_wc.sta.ssid, "HomeNet") && !strcmp((char *)s_wc.sta.password, "secretpw") &&
@@ -302,7 +324,7 @@ int main(void)
 
     // Lua lifecycle hooks
     on_lua_init();
-#if CONFIG_CLU_TFBUS
+#if CONFIG_CLU_TFBUS_MASTER
     check("SYSTEM.Init: bus polling and MQTT start", !strcmp(s_log, "master_start mqtt_start ") && (s_log[0] = 0, 1));
     check("reload: bus registry reset (8 s)", on_lua_reload() && !strcmp(s_log, "master_reset(8000) "));
     s_reset_ok = false;

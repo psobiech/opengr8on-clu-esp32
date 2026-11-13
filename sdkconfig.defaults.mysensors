@@ -1,0 +1,4 @@
+# MySensors variant of any board: the RS485 pins carry a MySensors RS485 network with the CLU as
+# its gateway (MYSENSORS.md) instead of TF-Bus. Applied last by the "<board>-mysensors" presets
+# (CMakePresets.json); release images end in -mysensors.bin.
+CONFIG_CLU_MYSENSORS=y

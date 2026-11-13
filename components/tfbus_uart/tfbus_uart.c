@@ -15,15 +15,44 @@
 
 static const char *TAG = "tfbus_uart";
 static int s_uart = -1;
-static tfbus_uart_local_fn_t s_local;
+static bool s_nowire; // initialised without a UART: only local endpoints answer
+static tfbus_uart_local_fn_t s_local[TFBUS_UART_MAX_LOCAL];
+static int s_nlocal;
 
 void tfbus_uart_set_local(tfbus_uart_local_fn_t fn)
 {
-    s_local = fn;
+    s_nlocal = 0;
+    tfbus_uart_add_local(fn);
+}
+
+bool tfbus_uart_add_local(tfbus_uart_local_fn_t fn)
+{
+    if (!fn || s_nlocal == TFBUS_UART_MAX_LOCAL) {
+        return false;
+    }
+    s_local[s_nlocal++] = fn;
+    return true;
+}
+
+/** @brief Offer a frame to the local endpoints in turn: the first that owns it answers. */
+static int local(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap)
+{
+    for (int i = 0; i < s_nlocal; i++) {
+        int r = s_local[i](tx, txlen, rx, rxcap);
+        if (r != 0) {
+            return r;
+        }
+    }
+    return 0;
 }
 
 esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg)
 {
+    if (cfg->uart_num < 0) {
+        s_nowire = true;
+        ESP_LOGI(TAG, "no RS485 wire: emulated modules only");
+        return ESP_OK;
+    }
     const uart_config_t uc = {
         .baud_rate = cfg->baud,
         .data_bits = UART_DATA_8_BITS,
@@ -47,6 +76,9 @@ esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg)
 /** @brief Put a frame on the wire. */
 static esp_err_t wire_send(const uint8_t *tx, size_t txlen)
 {
+    if (s_nowire) {
+        return ESP_OK; // nobody out there
+    }
     if (s_uart < 0) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -59,9 +91,9 @@ static esp_err_t wire_send(const uint8_t *tx, size_t txlen)
 
 esp_err_t tfbus_uart_send(const uint8_t *tx, size_t txlen)
 {
-    if (s_local) {
+    for (int i = 0; i < s_nlocal; i++) {
         uint8_t rx[TFBUS_MAX_FRAME];
-        s_local(tx, txlen, rx, sizeof rx); // e.g. RESET broadcast: local modules hear it too
+        s_local[i](tx, txlen, rx, sizeof rx); // e.g. RESET broadcast: local modules hear it too
     }
     return wire_send(tx, txlen);
 }
@@ -100,11 +132,12 @@ static void on_frame(const uint8_t *f, size_t len, void *ctx)
 
 int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap, int timeout_ms)
 {
-    if (s_local) {
-        int r = s_local(tx, txlen, rx, rxcap);
-        if (r != 0) {
-            return r > 0 ? r : 0;
-        }
+    int r = local(tx, txlen, rx, rxcap);
+    if (r != 0) {
+        return r > 0 ? r : 0;
+    }
+    if (s_nowire) {
+        return 0; // no module on a wire answers
     }
     if (wire_send(tx, txlen) != ESP_OK) {
         return -1;

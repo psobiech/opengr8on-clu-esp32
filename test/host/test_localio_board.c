@@ -49,7 +49,7 @@ void clu_random(uint8_t *out, size_t len)
 }
 
 static tfbus_uart_local_fn_t s_local;
-void tfbus_uart_set_local(tfbus_uart_local_fn_t fn) { s_local = fn; }
+bool tfbus_uart_add_local(tfbus_uart_local_fn_t fn) { s_local = fn; return true; }
 
 // PCF8575: latch written by the CLU (P00-P07 = byte 0, P10-P17 = byte 1); a pin reads low when
 // the latch drives it low or the outside world pulls it low.

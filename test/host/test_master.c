@@ -368,6 +368,13 @@ static int lua_io(int cls, int module, int ch, const char *name)
 }
 
 static int s_scans;
+static int s_hook_at = -1, s_hooks;
+static void refresh_hook(void)
+{
+    s_hook_at = (int)strlen(s_log); // 0: nothing sent yet in this discovery
+    s_hooks++;
+}
+
 static void count_scan(void) { s_scans++; }
 
 static char s_deferred[1024];
@@ -584,7 +591,11 @@ int main(void)
     }
     s_sim[1].nack_assign = 0;
     log_reset();
+    s_hook_at = -1;
+    tfbus_master_on_refresh(refresh_hook);
     discover(true);
+    tfbus_master_on_refresh(NULL);
+    check("refresh hook: run once, before the RESET", s_hook_at == 0 && s_hooks == 1);
     static const char *want_refresh2 = "aaff0752 "
                                        "aaff02816cab130103 "          // A by SN
                                        "aaff02111111110255 aaff02111111110255 aaff02111111110255 " // B absent
@@ -801,11 +812,15 @@ int main(void)
     s_sim[3] = (sim_mod_t){.sn = 0x0f05f124, .present = true, .discover = true, .ident = {0x1e, 2, 1},
                            .status = {1, 0x00, 1, 1, 0x0a}, .status_len = 5};
     s_scans = 0;
+    s_hooks = 0;
     tfbus_master_on_scan(count_scan);
+    tfbus_master_on_refresh(refresh_hook);
     log_reset();
     drv_reset();
     s_discover = true; // boot
     run_bus(3);
+    tfbus_master_on_refresh(NULL);
+    check("boot discovery: no refresh hook", s_hooks == 0);
     {
         tfbus_device_t d[TFBUS_MAX_MODULES];
         int nd = tfbus_master_devices(d, TFBUS_MAX_MODULES);
@@ -853,6 +868,26 @@ int main(void)
     check("absent module: 3 missed polls, then a rejoin attempt every 20 rounds",
           s_tx_count[TFBUS_T_ADDR_ASSIGN] == 25 * 3 && !mods[2]->online && mods[2]->fails == 3);
     check_drv("absent module: offline once, no init while it is gone", "offline:3 ");
+
+    // ---- driver init while a module is offline: none for it then, once when it answers again
+    mods[2]->fails = 0; // polled normally (no rejoin), still not answering
+    drv_reset();
+    s_bus_rounds = 1;
+    tfbus_master_start();
+    check_drv("start with C offline: no init frames for it", "");
+    check("start with C offline: init pending", mods[2]->init_pending && !mods[2]->online);
+    s_sim[2].present = true;
+    drv_reset();
+    s_bus_rounds = 1;
+    xTaskNotifyGive(s_task);
+    check_drv("C answers: online, status, then its driver init", "online:3 status:3:5:01 init:3 ");
+    drv_reset();
+    s_bus_rounds = 1;
+    xTaskNotifyGive(s_task);
+    check("C answering on: init not repeated", !mods[2]->init_pending && !strstr(s_drv, "init"));
+    s_sim[2].present = false;
+    mods[2]->online = false;
+    mods[2]->fails = 3;
     mods[0]->drv = mods[4]->drv = &s_fake;
 
     // ---- req_refresh_modules: the bus task rescans, re-inits the drivers, signals completion;

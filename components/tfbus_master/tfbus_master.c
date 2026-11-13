@@ -31,7 +31,7 @@
 #include "nvs.h"
 #include "tfbus_uart.h"
 
-static const char *TAG = "tfbus";
+static const char *TAG = "tfbus"; // tfbus_master_set_log_tag()
 
 #define POLL_TIMEOUT_MS     20
 #define ACK_TIMEOUT_MS      20
@@ -88,6 +88,7 @@ static tfbus_device_t s_dev[TFBUS_MAX_MODULES];
 static int s_ndev;
 static SemaphoreHandle_t s_scan_done;
 static void (*s_scan_cb)(void);
+static void (*s_refresh_cb)(void);
 
 void tfbus_driver_register(const tfbus_driver_t *drv)
 {
@@ -575,6 +576,7 @@ static void drain_cmds(void)
 /** @brief Driver init for one module (bus task), under s_drv_lock; flushes the queued frames. */
 static void drv_init(tfbus_module_t *m)
 {
+    m->init_pending = false;
     if (!live(m) || !m->drv || !m->drv->init) {
         return;
     }
@@ -777,6 +779,9 @@ static void discover(bool refresh)
     uint8_t f[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
     size_t n;
 
+    if (refresh && s_refresh_cb) {
+        s_refresh_cb(); // e.g. emulated modules of devices that are gone removed before the RESET
+    }
     ESP_LOGI(TAG, "%s: %d module(s) in the registry", refresh ? "refresh" : "discovery", s_nmod);
     n = tfbus_reset(f, sizeof f, TFBUS_BROADCAST);
     tfbus_uart_send(f, n);
@@ -1005,7 +1010,13 @@ static void bus_task(void *arg)
             if (s_reinit) {
                 s_reinit = false;
                 for (int i = 0; i < s_nmod; i++) {
-                    drv_init(&s_mod[i]);
+                    // A module not answering (absent, not addressed, emulated module without its
+                    // network) would only collect unACKed init frames: init it once it answers.
+                    if (s_mod[i].online) {
+                        drv_init(&s_mod[i]);
+                    } else {
+                        s_mod[i].init_pending = true;
+                    }
                 }
             }
             for (int i = 0; i < s_nmod && !s_restart; i++) {
@@ -1022,16 +1033,21 @@ static void bus_task(void *arg)
                     continue;
                 }
                 poll_module(m);
+                if (m->online && m->init_pending && s_started) {
+                    ESP_LOGI(TAG, "addr %u sn=%lu answers: driver init", m->addr, (unsigned long)m->sn);
+                    drv_init(m);
+                }
             }
             round++;
             if (round % 500 == 0) { // summary only on change, else every SUMMARY_EVERY_MS
-                int online = 0;
+                int online = 0, total = 0; // modules dropped by a refresh do not count
                 for (int i = 0; i < s_nmod; i++) {
                     online += s_mod[i].online;
+                    total += live(&s_mod[i]);
                 }
                 TickType_t t = xTaskGetTickCount();
                 if (online != last_online || t - last_summary >= pdMS_TO_TICKS(SUMMARY_EVERY_MS)) {
-                    ESP_LOGI(TAG, "round %lu: %d/%d online", (unsigned long)round, online, s_nmod);
+                    ESP_LOGI(TAG, "round %lu: %d/%d online", (unsigned long)round, online, total);
                     last_online = online;
                     last_summary = t;
                 }
@@ -1058,6 +1074,11 @@ void tfbus_master_init(void)
     }
     reg_load();
     xTaskCreatePinnedToCore(bus_task, "tfbus", 6144, NULL, 10, &s_task, 1);
+}
+
+void tfbus_master_set_log_tag(const char *tag)
+{
+    TAG = tag;
 }
 
 void tfbus_master_start(void)
@@ -1112,6 +1133,11 @@ bool tfbus_master_reset(uint32_t timeout_ms)
 void tfbus_master_on_scan(void (*cb)(void))
 {
     s_scan_cb = cb;
+}
+
+void tfbus_master_on_refresh(void (*cb)(void))
+{
+    s_refresh_cb = cb;
 }
 
 bool tfbus_master_refresh(uint32_t timeout_ms)

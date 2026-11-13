@@ -25,6 +25,13 @@
 #ifndef CONFIG_CLU_TFBUS
 #define CONFIG_CLU_TFBUS 1
 #endif
+#ifndef CONFIG_CLU_TFBUS_MASTER
+#if CONFIG_CLU_TFBUS || CONFIG_CLU_MYSENSORS
+#define CONFIG_CLU_TFBUS_MASTER 1
+#else
+#define CONFIG_CLU_TFBUS_MASTER 0
+#endif
+#endif
 #ifndef CONFIG_CLU_RTC
 #define CONFIG_CLU_RTC 1
 #endif

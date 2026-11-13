@@ -146,6 +146,18 @@ static int fake_local(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap
     return tx[1] == 6 ? -1 : 0;
 }
 
+// Second endpoint: owns address 9.
+static int s_local2_calls;
+static int fake_local2(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap)
+{
+    s_local2_calls++;
+    if (tx[1] == 9 && rxcap >= 4) {
+        memcpy(rx, (const uint8_t[]){0xaa, 0x00, 0x01, 0xab}, 4);
+        return 4;
+    }
+    return 0;
+}
+
 // Module -> CLU frame: aa 00 len payload xor
 static size_t reply(uint8_t *out, const uint8_t *pl, size_t n)
 {
@@ -277,6 +289,34 @@ int main(void)
     check("local: send() shows the frame to the local endpoint and puts it on the wire",
           tfbus_uart_send(f, rstl) == ESP_OK && s_local_calls == 1 && memcmp(s_local_last, f, rstl) == 0 &&
               s_txlen == rstl);
+    tfbus_uart_set_local(NULL);
+
+    // several endpoints: offered in order, the first owner answers; all hear broadcasts
+    check("add_local: NULL refused", !tfbus_uart_add_local(NULL));
+    check("add_local: two endpoints", tfbus_uart_add_local(fake_local) && tfbus_uart_add_local(fake_local2));
+    reset();
+    s_local_calls = s_local2_calls = 0;
+    n = tfbus_uart_transact(f, tfbus_status_poll(f, sizeof f, 5), rx, sizeof rx, 20);
+    check("endpoints: first owner answers, the next not asked", n == 4 && s_local_calls == 1 && !s_local2_calls);
+    n = tfbus_uart_transact(f, tfbus_status_poll(f, sizeof f, 9), rx, sizeof rx, 20);
+    check("endpoints: second answers what the first does not own", n == 4 && s_local_calls == 2 &&
+                                                                       s_local2_calls == 1 && s_txlen == 0);
+    s_local_calls = s_local2_calls = 0;
+    tfbus_uart_send(f, tfbus_reset(f, sizeof f, TFBUS_BROADCAST));
+    check("endpoints: send() shows the frame to all", s_local_calls == 1 && s_local2_calls == 1);
+    check("add_local: at most 4", tfbus_uart_add_local(fake_local2) && tfbus_uart_add_local(fake_local2) &&
+                                      !tfbus_uart_add_local(fake_local2));
+
+    // no wire: only the endpoints answer, nothing goes out
+    const tfbus_uart_cfg_t nowire = {.uart_num = -1};
+    check("no wire: init without a UART", tfbus_uart_init(&nowire) == ESP_OK);
+    reset();
+    t0 = s_now_us;
+    n = tfbus_uart_transact(other, tfbus_status_poll(other, sizeof other, 7), rx, sizeof rx, 20);
+    check("no wire: unowned frame -> no reply at once, nothing sent", n == 0 && s_txlen == 0 && s_now_us == t0);
+    check("no wire: local module still answers", tfbus_uart_transact(f, tfbus_status_poll(f, sizeof f, 5), rx,
+                                                                     sizeof rx, 20) == 4);
+    check("no wire: send OK, nothing sent", tfbus_uart_send(f, tfbus_discover(f, sizeof f)) == ESP_OK && s_txlen == 0);
     tfbus_uart_set_local(NULL);
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

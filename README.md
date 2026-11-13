@@ -50,7 +50,7 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 |---|---|
 | `main/` | start, WiFi/Ethernet/IP (`clu_net`, `clu_eth`), czas/SNTP/RTC (`clu_time`), serwer UDP/1234 (`udp_server`), diagnostyka OM (`clu_diag`), stan CLU (`clu_state`) |
 | `components/clu_crypto` | AES-128-CBC/PKCS#7 (PSA crypto, mbedtls 4) |
-| `components/clu_proto` | wyprowadzanie kluczy, ramkowanie TF-Bus, protokół TFTP (czysty C, testowany na hoście) |
+| `components/clu_proto` | wyprowadzanie kluczy, ramkowanie TF-Bus, emulowane moduły TF-Bus, protokół TFTP, linie MySensors (czysty C, testowany na hoście) |
 | `components/clu_lua` | środowisko Lua: prelude (model obiektów OM), obiekty wirtualne (`objects.lua`) |
 | `components/lua` | Lua 5.3.6 (domyślnie, jak w CLU) i 5.5.1 (opcja `CLU_LUA_5_5`), źródła niezmodyfikowane |
 | `components/tfbus_uart` | UART RS485 half-duplex |
@@ -59,6 +59,7 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 | `components/clu_tftp` | serwer TFTP (a:\ i p:\) |
 | `components/clu_telnet` | konsola logów (TCP 23, tylko odczyt) |
 | `components/clu_mqtt` | MQTT + discovery Home Assistant |
+| `components/clu_mysensors` | kontroler MySensors, zob. [MYSENSORS.md](MYSENSORS.md) |
 | `components/clu_ota` | aktualizacja firmware przez HTTP z hasłem (`POST /ota`), potwierdzanie nowego obrazu |
 | `components/clu_rtc` | zegar RTC PCF85063 albo DS3231 na I2C (podtrzymywany bateryjnie) |
 | `components/clu_i2c` | wspólne magistrale I2C (jedna na parę pinów: RTC + ekspander IO) |
@@ -137,6 +138,7 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 - **Surowe API obiektów przez MQTT** (opcjonalne) — get/set dowolnej cechy, wywołanie dowolnej
   metody.
 - **`MQTT.*` w USER.LUA** — własne mapowania encji, ukrywanie, publikowanie dowolnych tematów.
+- **MySensors zamiast TF-Bus** (opcja kompilacji), zob. [MYSENSORS.md](MYSENSORS.md).
 - **Bez chmury Grentona** — OM nie rejestruje CLU w chmurze (zob. niżej).
 - **Aktualizacja firmware przez sieć** (OTA, HTTP z hasłem, cofanie nieudanej aktualizacji).
 - **Lua 5.5** jako opcja kompilacji.
@@ -170,6 +172,9 @@ aplikacji `opengr8on-clu-<płytka>-<wersja>-ota.bin` ([aktualizacja przez sieć]
 | Grenton GATE | `gate` | `esp32` | Ethernet (DHCP) |
 | KinCony F8 | `f8` | `esp32s3` | Ethernet (DHCP) |
 | KinCony KC868-A8v3 | `a8v3` | `esp32s3` | Ethernet (DHCP) |
+
+Wariant z bramką [MySensors](MYSENSORS.md) zamiast TF-Bus: te same obrazy z końcówką `-mysensors`
+(`…-<wersja>-mysensors.bin`, `…-<wersja>-ota-mysensors.bin`).
 
 Wgrywa się go
 **[flasherem w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/)** (Chrome / Edge na
@@ -371,13 +376,15 @@ zapisane w NVS albo losowe przy pierwszym starcie.
 
 ### TF-Bus / RS485
 
+Podmenu **RS485 bus (TF-Bus / MySensors)**.
+
 | Opcja | Domyślnie | Opis |
 |---|---|---|
-| `CLU_TFBUS` | y | master TF-Bus (moduły na RS485); wyłączony = tylko obiekty wirtualne, skrypty i usługi sieciowe |
+| `CLU_BUS` | `CLU_TFBUS` | co działa na pinach RS485 / UART: `CLU_TFBUS` (master TF-Bus), `CLU_MYSENSORS` ([MYSENSORS.md](MYSENSORS.md)) albo `CLU_BUS_NONE` (tylko obiekty wirtualne, skrypty i usługi sieciowe) |
 | `CLU_RS485_UART` | 1 | numer UART |
 | `CLU_RS485_TX_GPIO` / `RX_GPIO` | 17 / 18 | piny |
 | `CLU_RS485_DE_GPIO` | 21 | pin DE/RE, `-1` = transceiver z automatycznym kierunkiem |
-| `CLU_RS485_BAUD` | 115200 | prędkość magistrali |
+| `CLU_TFBUS_BAUD` | 115200 | prędkość TF-Bus (MySensors: własna opcja, zob. [MYSENSORS.md](MYSENSORS.md)) |
 | `CLU_LOCAL_IO` | n (y w profilach F8 / A8v3) | 8 przekaźników + 8 wejść płytki na PCF8575 jako IO_MODULE_DIN_8, zob. [DEVICES.md](DEVICES.md#kincony-f8-i-kc868-a8v3) |
 | `CLU_LOCAL_IO_SDA_GPIO` / `SCL_GPIO` | 8 / 18 | I2C ekspandera (te same piny co RTC = wspólna magistrala) |
 | `CLU_LOCAL_IO_ADDR` | 0x24 | adres PCF8575 |
@@ -571,9 +578,10 @@ make -C test/host coverage                        # pokrycie C (gcov) i Lua; FAI
 | `test_tftp` | serwer TFTP: pobieranie / wysyłanie (octet, netascii), utrata pakietów, obce hosty, limity, błędy |
 | `test_telnet` | konsola logów: historia, filtr `CLU_TELNET_ALLOW`, komendy telnet (IAC, Ctrl-C), wolni klienci |
 | `test_mqttc` | połączenie MQTT (`clu_mqtt.c`): konfiguracja klienta i TLS, subskrypcje, wiadomości przychodzące, API Lua |
+| `test_mysensors` / `test_mysensors.lua` | MySensors, zob. [MYSENSORS.md](MYSENSORS.md#kod-i-testy) |
 | `test_lua` | środowisko Lua (`clu_lua.c`): wywołania `req:`, limit czasu, zdarzenia, przeładowanie, tryb awaryjny, `BAD_M.LUA` |
 | `test_rtc` | RTC PCF85063 i DS3231: kodowanie BCD ↔ epoch (lata przestępne, zakres 2000–2099, flagi OS / OSF, tryb 12h), sterownik I2C na symulowanych układach, wspólna magistrala I2C |
-| `test_main` | kolejność startu, konfiguracja modułów, zdarzenia WiFi, mapowanie cech CLU (NTP, strefa, DNS, UseCloud) |
+| `test_main` | kolejność startu, konfiguracja modułów, zdarzenia WiFi, mapowanie cech CLU (NTP, strefa, DNS, UseCloud); `test_main_nobus` / `test_main_mysensors`: bez magistrali / z MySensors |
 
 `make coverage` zapisuje też `test/host/coverage/summary.md` (tabela Markdown) i `coverage.json`;
 wymaga tylko `gcc`/`gcov`, `python3` i `luac$(LUA)`.

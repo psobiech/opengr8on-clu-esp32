@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
@@ -14,7 +15,7 @@ extern "C" {
 
 /** @brief UART configuration. */
 typedef struct {
-    int uart_num;   /**< UART port number. */
+    int uart_num;   /**< UART port number; < 0 = no wire (only local endpoints, e.g. emulated modules). */
     int tx_pin;     /**< TX GPIO. */
     int rx_pin;     /**< RX GPIO. */
     int de_pin;     /**< RS485 driver-enable GPIO (UART RTS). */
@@ -61,8 +62,19 @@ esp_err_t tfbus_uart_send(const uint8_t *tx, size_t txlen);
  */
 typedef int (*tfbus_uart_local_fn_t)(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap);
 
+/** @brief Max local endpoints. */
+#define TFBUS_UART_MAX_LOCAL 4
+
 /**
- * @brief Install the local bus endpoint (NULL = none). Call before the bus master starts.
+ * @brief Add a local bus endpoint; frames are offered to the endpoints in the order added, the
+ * first that owns one answers it. Call before the bus master starts.
+ * @param fn Endpoint.
+ * @return false if @p fn is NULL or TFBUS_UART_MAX_LOCAL are installed.
+ */
+bool tfbus_uart_add_local(tfbus_uart_local_fn_t fn);
+
+/**
+ * @brief Replace all local endpoints with @p fn (NULL = none).
  * @param fn Endpoint.
  */
 void tfbus_uart_set_local(tfbus_uart_local_fn_t fn);

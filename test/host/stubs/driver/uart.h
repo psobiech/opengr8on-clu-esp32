@@ -11,7 +11,7 @@ typedef enum { UART_PARITY_DISABLE = 0 } uart_parity_t;
 typedef enum { UART_STOP_BITS_1 = 1 } uart_stop_bits_t;
 typedef enum { UART_HW_FLOWCTRL_DISABLE = 0 } uart_hw_flowcontrol_t;
 typedef enum { UART_SCLK_DEFAULT = 0 } uart_sclk_t;
-typedef enum { UART_MODE_RS485_HALF_DUPLEX = 1 } uart_mode_t;
+typedef enum { UART_MODE_UART = 0, UART_MODE_RS485_HALF_DUPLEX = 1 } uart_mode_t;
 #define UART_PIN_NO_CHANGE (-1)
 
 typedef struct {

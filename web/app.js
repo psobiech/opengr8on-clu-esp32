@@ -291,7 +291,7 @@ function otaFallback(base, app) {
   otaBlob = URL.createObjectURL(new Blob([app], { type: "application/octet-stream" }));
   $("ota-open").href = `${base}/`;
   $("ota-save").href = otaBlob;
-  $("ota-save").download = image.appOnly ? image.name : image.name.replace(/(\.bin)?$/i, "-ota.bin");
+  $("ota-save").download = image.appOnly ? image.name : image.name.replace(/(-mysensors)?(\.bin)?$/i, "-ota$1.bin");
   $("ota-fallback").hidden = false;
 }
 

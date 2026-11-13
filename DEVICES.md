@@ -24,8 +24,8 @@ Piny z przykładów producenta (`WS_GPIO.h`), domyślne w menuconfig:
 Podłącz A/B RS485 płytki do A/B TF-Bus oraz GND.
 
 Zegar RTC ustawia czas systemowy przy starcie, zanim ruszą skrypty, więc mają poprawny czas bez
-sieci. Każda synchronizacja SNTP i `SetDateTime` zapisuje go z powrotem. Czas przez zanik zasilania
-przetrwa tylko z ogniwem podtrzymującym w złączu baterii RTC (J7); bez niego po włączeniu RTC
+sieci. Każda synchronizacja SNTP i `SetDateTime` zapisuje go z powrotem. Czas przetrwa zanik zasilania
+tylko z ogniwem podtrzymującym w złączu baterii RTC (J7); bez niego po włączeniu RTC
 zgłasza czas jako nieważny i zegar jest błędny do pierwszej synchronizacji SNTP.
 
 ## Inne płytki ESP32-S3
@@ -71,7 +71,7 @@ Obie płytki: ESP32-S3-WROOM-1U N16R8 (16 MB flash, 8 MB PSRAM), Ethernet W5500 
   `tfbusDevices` w `a:\CONFIG.JSON`. Dodaj go do projektu w OM jak każdy wykryty moduł.
 - Numer seryjny modułu jest losowany przy pierwszym starcie i zapisywany w NVS (przestrzeń
   `localio`), jak numer CLU; `CLU_LOCAL_IO_SN` w menuconfig go nadpisuje.
-- Wyjścia i wejścia są aktywne niskim stanem (`CLU_LOCAL_IO_OUT_ACTIVE_LOW` /
+- Wyjścia i wejścia są aktywne stanem niskim (`CLU_LOCAL_IO_OUT_ACTIVE_LOW` /
   `IN_ACTIVE_LOW`), jak w konfiguracjach ESPHome producenta; niesprawdzone na sprzęcie.
 - Wejścia są próbkowane co 5 ms przy odpytywaniu modułu; zmiana liczy się po dwóch zgodnych
   próbkach. Ekspander, który nie odpowiada, oznacza moduł jako offline.
@@ -81,7 +81,7 @@ Obie płytki: ESP32-S3-WROOM-1U N16R8 (16 MB flash, 8 MB PSRAM), Ethernet W5500 
 - W5500 zajmuje GPIO43/44 (piny konsoli UART0), więc **konsola i log idą przez natywne USB
   (złącze USB-C, USB-Serial-JTAG)**; tamtędy też wgrywa się firmware.
 - Zegar RTC DS3231 (0x68) jest na tej samej magistrali I2C co PCF8575; profile go włączają
-  (`CLU_RTC_CHIP` = DS3231, SDA 8 / SCL 18). Czas przez zanik zasilania przetrwa tylko z baterią
+  (`CLU_RTC_CHIP` = DS3231, SDA 8 / SCL 18). Czas przetrwa zanik zasilania tylko z baterią
   podtrzymującą.
 - WiFi domyślnie wyłączone, można włączyć obok Ethernetu.
 - Nieużywane: wejścia analogowe, 1-wire, karta SD, EEPROM, wyświetlacz, RF 433 MHz, moduł Tuya.

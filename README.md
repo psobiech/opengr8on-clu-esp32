@@ -17,7 +17,7 @@ centralną (CLU) zgodną z systemem Grenton. Object Manager (OM) — albo rozsze
 CLU: wykrywa ją, wgrywa projekt (OM.LUA / USER.LUA), steruje obiektami i odczytuje diagnostykę.
 Po stronie RS485 CLU jest masterem magistrali TF-Bus i obsługuje prawdziwe moduły Grentona.
 
-To port w C vCLU z [opengr8on-node](https://github.com/psobiech/opengr8on-node): strona UDP/Lua
+To napisany w C port vCLU z [opengr8on-node](https://github.com/psobiech/opengr8on-node): strona UDP/Lua
 pochodzi z vCLU, strona RS485 z jego `src/tfbus`. Opis protokołów: `docs/UDP.md` i `docs/TFBUS.md`.
 Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8on-node.
 
@@ -55,7 +55,7 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 | `components/lua` | Lua 5.3.6 (domyślnie, jak w CLU) i 5.5.1 (opcja `CLU_LUA_5_5`), źródła niezmodyfikowane |
 | `components/tfbus_uart` | UART RS485 half-duplex |
 | `components/tfbus_master` | master magistrali: rejestr modułów, adresowanie, odpytywanie, discovery |
-| `components/tfbus_drivers` | sterowniki modułów TF-Bus |
+| `components/tfbus_drivers` | sterowniki modułów TF-Bus, zob. [TFBUS.md](TFBUS.md) |
 | `components/clu_tftp` | serwer TFTP (a:\ i p:\) |
 | `components/clu_telnet` | konsola logów (TCP 23, tylko odczyt) |
 | `components/clu_mqtt` | MQTT + discovery Home Assistant |
@@ -65,7 +65,7 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 | `components/clu_i2c` | wspólne magistrale I2C (jedna na parę pinów: RTC + ekspander IO) |
 | `components/clu_localio` | IO płytki (PCF8575) jako moduł IO_MODULE_DIN_8 odpowiadający na ramki TF-Bus |
 | `tools/mknvs.py` | obraz partycji `cfg` z ustawieniami dla gotowych obrazów (seryjny, PIN, WiFi, MQTT) |
-| `web/` | flasher w przeglądarce (GitHub Pages): obraz z Releases + ustawienia generowane w stronie (`web/nvs.js`) |
+| `web/` | flasher w przeglądarce (GitHub Pages): obraz z Releases + ustawienia generowane na stronie (`web/nvs.js`) |
 
 Partycje (`partitions.csv`): NVS (klucze, PIN, sieć, czas), `cfg` (12 KB pod `0x12000`, ustawienia
 z `mknvs.py`, firmware tylko je czyta), dwie partycje aplikacji po 4 MB, FAT 6 MB jako `a:\`
@@ -110,8 +110,8 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 | ROLLER_SH_DIN_3 (0x2a), ROLLER_SH_DIN (0x17) | 🟡 | maska bitowa ruch/stop niezweryfikowana |
 | TOUCH_PANEL_FM_4 (0x1c) | 🟡 | przyciski, temperatura, światło, buzzer; LED niezweryfikowane |
 | SMART_PANEL_FM_4 (0x03) | 🟡 | przyciski, czujniki, LED, PrintText/Draw/Beep; brak konfiguracji stron/gestów |
-| DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM: SetValue/Switch*/HoldValue, rampa, Min/Max, StartLevel, DistributedLogicGroup, LastValue; ramki i zachowanie metod zgodne z przechwytem, zdarzenia niezweryfikowane |
-| LED_RGBW_DIN (0x18) | 🟡 | LEDRGB (model HSV/RGB + W w CLU, korekcja bieli w module), LED_CHANNEL ×4, LED_CCT ×2 (Hold* w module), PowerSupplyVoltage; ramki i zachowanie metod zgodne z przechwytem, zdarzenia niezweryfikowane |
+| DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](TFBUS.md#dimmer_mosfet_din) |
+| LED_RGBW_DIN (0x18) | 🟡 | LEDRGB, LED_CHANNEL ×4, LED_CCT ×2, PowerSupplyVoltage; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](TFBUS.md#led_rgbw_din) |
 | Pozostałe moduły TF-Bus (ściemniacze FM, LED FM, analogowe itd.) | ❌ | brak sterowników |
 | Wbudowane IO płytki (PCF8575) jako IO_MODULE_DIN_8 | 🟡 | KinCony F8, KC868-A8v3, zob. [DEVICES.md](DEVICES.md#kincony-f8-i-kc868-a8v3); niesprawdzone na sprzęcie |
 
@@ -176,7 +176,7 @@ aplikacji `opengr8on-clu-<płytka>-<wersja>-ota.bin` ([aktualizacja przez sieć]
 Wariant z bramką [MySensors](MYSENSORS.md) zamiast TF-Bus: te same obrazy z końcówką `-mysensors`
 (`…-<wersja>-mysensors.bin`, `…-<wersja>-ota-mysensors.bin`).
 
-Wgrywa się go
+Obrazy można wgrać
 **[flasherem w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/)** (Chrome / Edge na
 komputerze, Web Serial): wybierz w nim obraz `.bin` płytki i tryb: **Instalacja**
 (kasuje cały flash), **Aktualizacja** (stan i dysk `a:\` zostają) albo **Tylko ustawienia**.
@@ -188,10 +188,10 @@ pasuje do podłączonego układu, a po wgraniu pokazuje log UART.
 
 ### Aktualizacja przez sieć (OTA)
 
-Z hasłem OTA (`--ota-pass` w `mknvs.py`, pole w flasherze w przeglądarce albo `CLU_OTA_PASSWORD`)
+Z hasłem OTA (`--ota-pass` w `mknvs.py`, pole we flasherze w przeglądarce albo `CLU_OTA_PASSWORD`)
 CLU przyjmuje nowy firmware przez HTTP — obraz aplikacji `opengr8on-clu-<płytka>-<wersja>-ota.bin`
 z wydania (w paczce / artefakcie `opengr8on-clu-<płytka>-ota.bin`, to samo co
-`opengr8on_clu_esp32.bin` z budowania; nie pełny obraz). Bez hasła serwer nie startuje.
+`opengr8on_clu_esp32.bin` z budowania; a nie pełny obraz). Bez hasła serwer nie startuje.
 
 **Z przeglądarki:** otwórz `http://IP_CLU:8080/`, wybierz plik, wpisz hasło, **Update**. Strona
 najpierw sprawdza hasło, potem wysyła obraz z paskiem postępu; po restarcie (~20 s) pokazuje nową
@@ -205,7 +205,7 @@ curl -u ota:HASLO --data-binary @opengr8on-clu-gate-v0.0.3-ota.bin http://IP_CLU
 
 Nazwa użytkownika jest dowolna. Obraz trafia do drugiego slotu OTA, jest weryfikowany (układ,
 SHA-256, nazwa projektu), a CLU restartuje się do niego; ustawienia, stan i dysk `a:\` zostają.
-Bootloader cofa do poprzedniego firmware, jeśli nowy zrestartuje się, zanim dostanie IP
+Bootloader przywraca poprzedni firmware, jeśli nowy zrestartuje się, zanim dostanie IP
 (`BOOTLOADER_APP_ROLLBACK_ENABLE`; wymaga bootloadera z tej wersji lub nowszej, wgranego raz przez
 USB/UART). Odpowiedzi: `200` — wgrane, restart; `401` — złe hasło (każda próba ~2 s); `400` — nie ten
 plik / inny układ; `411` — brak obrazu; `413` — obraz większy niż slot.
@@ -213,8 +213,8 @@ plik / inny układ; `411` — brak obrazu; `413` — obraz większy niż slot.
 **Z [flashera w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/):** tryb **Przez sieć
 (OTA)** w kroku 3 (domyślnie nadal wgrywanie przez USB) — adres CLU i hasło OTA; przyjmuje pełny
 obraz z wydania (wycina z niego aplikację) albo `…-ota.bin`. CLU wysyła nagłówki
-CORS dla `CLU_OTA_CORS_ORIGIN` (domyślnie `https://psobiech.github.io`), ale strona HTTPS dosięgnie
-adresu HTTP w sieci lokalnej tylko w przeglądarce z dostępem do sieci lokalnej (Chrome, po zgodzie
+CORS dla `CLU_OTA_CORS_ORIGIN` (domyślnie `https://psobiech.github.io`), ale strona HTTPS może połączyć się z
+adresem HTTP w sieci lokalnej tylko w przeglądarce z dostępem do sieci lokalnej (Chrome, po zgodzie
 użytkownika). Gdy połączenie zostanie zablokowane (Firefox, Safari, odmowa), flasher daje link do
 strony samej CLU i zapisuje obraz aplikacji do wybrania tam.
 
@@ -244,7 +244,7 @@ pip install "esptool>=5" esp-idf-nvs-partition-gen
 ```
 
 Port: `/dev/ttyUSB0` / `/dev/ttyACM0` na Linuksie, `/dev/cu.usbserial-…` na macOS, `COM3` na
-Windows. Jeśli esptool nie może się połączyć, wejdź w tryb pobierania ręcznie: przytrzymaj
+Windows. Jeśli esptool nie może się połączyć, wejdź w tryb programowania (download mode) ręcznie: przytrzymaj
 **BOOT** (GPIO0 do masy), naciśnij i puść **RESET**, puść BOOT.
 
 **1. Pierwsza instalacja** (kasuje cały flash, także ustawienia i dysk `a:\`):
@@ -353,7 +353,7 @@ Wszystko w `idf.py menuconfig` → **OpenGr8on ESP32 CLU** (na górze menu).
 | `CLU_ETH_SPI_*_GPIO` | piny F8 | W5500: SCLK / MOSI / MISO / CS / INT (`-1` = odpytywanie co 10 ms) / RST (`-1` = brak) |
 | `CLU_ETH_SPI_CLOCK_MHZ` | 20 | W5500: zegar SPI |
 | `CLU_WIFI` | y bez Ethernetu, n z nim | WiFi STA; z Ethernetem opcjonalne (oba równolegle) |
-| `CLU_WIFI_SSID` / `CLU_WIFI_PASSWORD` | — | sieć WiFi; `cfg/wifi_ssid` / `cfg/wifi_pass` z partycji `cfg` mają pierwszeństwo ([`mknvs.py`](#gotowe-obrazy-github-actions)); bez SSID WiFi jest wyłączone |
+| `CLU_WIFI_SSID` / `CLU_WIFI_PASSWORD` | — | sieć WiFi; `cfg/wifi_ssid` / `cfg/wifi_pass` z partycji `cfg` mają pierwszeństwo ([`mknvs.py`](#wgrywanie-z-linii-poleceń)); bez SSID WiFi jest wyłączone |
 | `CLU_WIFI_BSSID` | puste | przypięcie do konkretnego AP (`aa:bb:cc:dd:ee:ff`) |
 | `CLU_WIFI_WPA3_ONLY` | n | odrzucaj AP z WPA2 |
 | `CLU_WIFI_MAX_TX_POWER` | 0 | moc nadawania w 0,25 dBm, 0 = domyślna sterownika |
@@ -375,7 +375,7 @@ interfejsu, przez który widzi rozmówcę. Przy obu interfejsach trasa domyślna
 | `CLU_FW_VERSION` | `5.15.24-2635` | wersja raportowana do OM |
 
 Numer seryjny i PIN ustawione w menuconfig zastępują zapisane w NVS; puste = wartości z partycji
-`cfg` (gotowe obrazy, `mknvs.py`, zob. [Gotowe obrazy](#gotowe-obrazy-github-actions)), a bez nich
+`cfg` (gotowe obrazy, `mknvs.py`, zob. [Gotowe obrazy](#gotowe-obrazy)), a bez nich
 zapisane w NVS albo losowe przy pierwszym starcie.
 
 ### TF-Bus / RS485
@@ -445,7 +445,7 @@ wykrywa CLU, pokazuje moduły, wartości na żywo i logi (telnet).
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|
-| `CLU_MQTT_BROKER_URI` | puste = wyłączone | np. `mqtt://192.168.1.10`, `mqtts://broker:8883`; `cfg/mqtt_uri` z partycji `cfg` ma pierwszeństwo ([`mknvs.py`](#gotowe-obrazy-github-actions)) |
+| `CLU_MQTT_BROKER_URI` | puste = wyłączone | np. `mqtt://192.168.1.10`, `mqtts://broker:8883`; `cfg/mqtt_uri` z partycji `cfg` ma pierwszeństwo ([`mknvs.py`](#wgrywanie-z-linii-poleceń)) |
 | `CLU_MQTT_USERNAME` / `PASSWORD` | anonimowo | `cfg/mqtt_user` / `cfg/mqtt_pass` z partycji `cfg` mają pierwszeństwo |
 | `CLU_MQTT_CLIENT_ID` | `opengr8on-CLU<serial>` | |
 | `CLU_MQTT_TOPIC_BASE` | `grenton` | |
@@ -571,7 +571,7 @@ make -C test/host coverage                        # pokrycie C (gcov) i Lua; FAI
 | `test_drivers` | sekwencje sterowników bajt po bajcie vs. przechwyt prawdziwej CLU |
 | `test_master` | master magistrali na symulowanej magistrali (adresowanie, discovery, odpytywanie) |
 | `test_prelude.lua` | model obiektów Lua, obiekty wirtualne, OM.LUA z `fixtures/` |
-| `test/web/test_nvs.mjs` | obraz ustawień z flashera (`web/nvs.js`) bajt w bajt jak `tools/mknvs.py` (`node test/web/test_nvs.mjs`) |
+| `test/web/test_nvs.mjs` | obraz ustawień z flashera (`web/nvs.js`) bajt po bajcie jak `tools/mknvs.py` (`node test/web/test_nvs.mjs`) |
 | `test/web/test_ota.mjs` | aktualizacja przez sieć we flasherze (`web/ota.js`): wycinanie obrazu aplikacji z pełnego obrazu, adres CLU, Basic auth |
 | `test_mqtt.lua` | mapowanie encji HA, tematy, surowe API |
 | `test_udp` | serwer UDP (`main/udp_server.c`): discovery, klucze, `req:`, TFTP/diagnostyka, reset, wywołania zdalnych CLU, okno konfiguracji i przycisk |
@@ -615,7 +615,7 @@ wymaga tylko `gcc`/`gcov`, `python3` i `luac$(LUA)`.
   broadcastowy `req_set_clu_ip` są ignorowane bez odpowiedzi, pozostałe dostają `resp:ERROR`,
   a pakiety pod kluczem PIN nie są odszyfrowywane. Zwykła praca pod kluczem projektu (`req:`,
   `req_reset`, `req_refresh_modules`, `req_tftp_stop`) działa bez zmian. Sesja TFTP otwarta w
-  oknie trwa do `req_tftp_stop` lub limitu bezczynności. Discovery odebrane w oknie zatrzymuje je
+  oknie trwa do `req_tftp_stop` lub limitu bezczynności. Discovery odebrane w oknie utrzymuje je
   otwarte (bez limitu czasu) aż do najbliższego `req_reset` (miękkiego lub twardego) albo restartu
   układu. Miękki reset (`req_reset` przy
   `CLU_SOFT_RESET`) **nie** otwiera okna ponownie — pakiet da się odtworzyć (stały IV). **Wpływ na
@@ -671,7 +671,7 @@ Opisy protokołów, na których opiera się firmware, pochodzą z
 
 ### Object Manager
 
-Repozytorium nie zawiera ani nie rozpowszechnia Object Manager'a, firmware CLU ani innych plików
+Repozytorium nie zawiera ani nie rozpowszechnia Object Managera, firmware CLU ani innych plików
 firmy Grenton. Object Manager jest objęty
 [licencją użytkownika końcowego Grentona](https://grenton.pl/om_eula_v1/), która wiąże licencję OM
 z zakupionymi urządzeniami Grenton. Użycie OM z CLU działającą na tym firmware może wykraczać poza zakres tej licencji — oceń to samodzielnie przed użyciem. Projekt ten nie reklamuje ani nie zachęca do
@@ -702,7 +702,7 @@ Instalację elektryczną powinna wykonywać osoba z odpowiednimi uprawnieniami.
 Oprogramowanie jest dostarczane w stanie „takim, jaki jest” (as-is), bez jakichkolwiek gwarancji,
 wyraźnych ani dorozumianych, w tym między innymi bez gwarancji przydatności handlowej, przydatności
 do określonego celu ani nienaruszania praw osób trzecich. O ile wyraźnie nie zaznaczono inaczej,
-osoba która powiązała utwór z niniejszą adnotacją nie udziela żadnych gwarancji dotyczących tego
+osoba, która powiązała utwór z niniejszą adnotacją, nie udziela żadnych gwarancji dotyczących tego
 utworu i zrzeka się odpowiedzialności za wszelkie sposoby jego użycia, w najszerszym zakresie
 dopuszczalnym przez obowiązujące prawo.
 
@@ -734,7 +734,7 @@ This project is not endorsed by, directly affiliated with, maintained, authorize
 Grenton Sp. z o.o.
 
 The use of any trade name or trademark is for identification and reference purposes only and does
-not imply any association with the trademark holder of their product brand.
+not imply any association with the trademark holder or their product brand.
 
 Any product names, logos, brands, and other trademarks or images featured or referred to within this
 page are the property of their respective trademark holders.

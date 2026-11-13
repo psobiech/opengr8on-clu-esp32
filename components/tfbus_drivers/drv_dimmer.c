@@ -3,7 +3,7 @@
  * @brief DIMMER_MOSFET_DIN (hwType 26 / 0x1a): 1x DIMM (class 5).
  *
  * Interface module_2_0_DIMMER_MOSFET_DIN_fv03_02.xml (fv02 has the same features). Wire format and
- * method behaviour from captures of a real CLU driving a fwApiVer 2 module (CLU_2 addr 1):
+ * method behaviour from captures of a real CLU (CLU_2, module addr 1):
  * @verbatim
  *   SetValue / Switch* / Hold : SET_RAMP_TIME 06 [0, ms LE u16, 0, 0]  then
  *                               DIMMER_SET_VALUE 0c [0, level LE u16]   (two frames;

@@ -1,9 +1,9 @@
 # MySensors
 
-Z `CLU_BUS` = `CLU_MYSENSORS` CLU jest bramką sieci [MySensors](https://www.mysensors.org/) na
+Przy `CLU_BUS` = `CLU_MYSENSORS` CLU działa jako bramka sieci [MySensors](https://www.mysensors.org/) na
 magistrali RS485: węzły ze szkicami `MY_RS485`, CLU to węzeł 0. Ramki
 `SOH to from 'X' len STX <MyMessage> ETX suma EOT` (jak `MyTransportRS485`), prędkość
-`MY_RS485_BAUD_RATE` węzłów (tu domyślnie 57600; biblioteka domyślnie 9600). CLU sam odpowiada na to,
+`MY_RS485_BAUD_RATE` węzłów (tu domyślnie 57600; biblioteka domyślnie 9600). CLU sama odpowiada na to,
 na co odpowiada bramka (szukanie rodzica — odległość 0, ping, rejestracja, echo), resztę obsługuje
 jak kontroler. Innej bramki na tej magistrali być nie może. Węzły bez identyfikatora
 (`MY_NODE_ID` = AUTO) też dołączają: ich rozgłoszenia mają `to` = `from` = 255, które biblioteka po
@@ -22,7 +22,7 @@ i wbudowane IO (`CLU_LOCAL_IO`).
 |---|---|---|
 | `CLU_RS485_UART` / `TX_GPIO` / `RX_GPIO` | jak TF-Bus | UART i piny |
 | `CLU_RS485_DE_GPIO` | jak TF-Bus | pin DE/RE transceivera RS485; `-1` = transceiver z automatycznym kierunkiem |
-| `CLU_MYSENSORS_BAUD` | 57600 | `MY_RS485_BAUD_RATE` węzłów (osobna opcja od `CLU_TFBUS_BAUD`, zmiana protokołu jej nie rusza) |
+| `CLU_MYSENSORS_BAUD` | 57600 | `MY_RS485_BAUD_RATE` węzłów (osobna opcja od `CLU_TFBUS_BAUD`, zmiana protokołu jej nie zmienia) |
 | `CLU_MYSENSORS_METRIC` | y | odpowiedź na `I_CONFIG`: `M` (metryczne) albo `I` |
 | `CLU_MYSENSORS_TRACE` | n | każda wiadomość (w obie strony, jako linia tekstu) w logu na poziomie INFO; w skrypcie `MySensors.trace(true)` |
 | `CLU_MYSENSORS_MODULES_MAX` | 4 | najwięcej emulowanych modułów IO_MODULE_DIN_8 (0–8, 0 = brak modułów w OM); tworzone w miarę prezentacji czujników |
@@ -33,7 +33,7 @@ i wbudowane IO (`CLU_LOCAL_IO`).
 Czujniki binarne i wyjścia MySensors widać w OM jako kanały emulowanych modułów
 **IO_MODULE_DIN_8** (8 DIN + 8 DOUT). Każdy moduł należy do jednego węzła: czujniki węzła danego
 rodzaju zajmują jego moduły w kolejności identyfikatorów dzieci (DOUT 1 = wyjście o najniższym
-`child`, …). Węzeł z więcej niż 8 wyjściami / wejściami dostaje kolejny własny moduł. Czujnik
+`child`, …). Węzeł z ponad 8 wyjściami / wejściami dostaje kolejny własny moduł. Czujnik
 zaprezentowany później z niższym identyfikatorem przesuwa pozostałe kanały węzła (log `channels
 re-sorted`, stany idą za kanałami). Moduły powstają same (nowy numer seryjny, log `new module N …
 run discovery in OM`), najwyżej `CLU_MYSENSORS_MODULES_MAX`; moduł opróżniony przez
@@ -49,7 +49,7 @@ zachowują numery seryjne. Identyfikatory takich węzłów są zwalniane (NVS): 
 zwraca, a `I_ID_REQUEST` może je przydzielić nowemu węzłowi. W logu: `discovery: N of M node(s)
 answered the node check`. Gdy sprawdzanie nie skończy się w czasie, discovery niczego nie usuwa.
 Węzeł uśpiony, który nie odpowie, też traci kanały — wracają przy jego następnej prezentacji (nowy
-moduł, nowe discovery). Takie samo sprawdzanie (bez usuwania) biegnie 2 s po starcie: prezentacje
+moduł, nowe discovery). Takie samo sprawdzanie (bez usuwania) uruchamia się 2 s po starcie: prezentacje
 węzłów wypełniają rejestr.
 
 | Typ MySensors | Kanał | Wartość |

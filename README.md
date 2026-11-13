@@ -110,8 +110,8 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 | ROLLER_SH_DIN_3 (0x2a), ROLLER_SH_DIN (0x17) | 🟡 | maska bitowa ruch/stop niezweryfikowana |
 | TOUCH_PANEL_FM_4 (0x1c) | 🟡 | przyciski, temperatura, światło, buzzer; LED niezweryfikowane |
 | SMART_PANEL_FM_4 (0x03) | 🟡 | przyciski, czujniki, LED, PrintText/Draw/Beep; brak konfiguracji stron/gestów |
-| DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM: SetValue/Switch*/HoldValue, rampa, Min/Max, LastValue; ramki zgodne z przechwytem, semantyka zdarzeń/Hold niezweryfikowana |
-| LED_RGBW_DIN (0x18) | 🟡 | LEDRGB: model HSV/RGB + W w CLU, korekcja bieli, Switch*/Hold*; PowerSupplyVoltage; ramki zgodne z przechwytem, LED_CHANNEL/LED_CCT brak |
+| DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM: SetValue/Switch*/HoldValue, rampa, Min/Max, StartLevel, DistributedLogicGroup, LastValue; ramki i zachowanie metod zgodne z przechwytem, zdarzenia niezweryfikowane |
+| LED_RGBW_DIN (0x18) | 🟡 | LEDRGB (model HSV/RGB + W w CLU, korekcja bieli w module), LED_CHANNEL ×4, LED_CCT ×2 (Hold* w module), PowerSupplyVoltage; ramki i zachowanie metod zgodne z przechwytem, zdarzenia niezweryfikowane |
 | Pozostałe moduły TF-Bus (ściemniacze FM, LED FM, analogowe itd.) | ❌ | brak sterowników |
 | Wbudowane IO płytki (PCF8575) jako IO_MODULE_DIN_8 | 🟡 | KinCony F8, KC868-A8v3, zob. [DEVICES.md](DEVICES.md#kincony-f8-i-kc868-a8v3); niesprawdzone na sprzęcie |
 

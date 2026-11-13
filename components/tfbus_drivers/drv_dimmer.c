@@ -2,26 +2,36 @@
  * @file drv_dimmer.c
  * @brief DIMMER_MOSFET_DIN (hwType 26 / 0x1a): 1x DIMM (class 5).
  *
- * Interface module_2_0_DIMMER_MOSFET_DIN_fv03_02.xml. Wire format from captures of a real CLU
- * (clu firmware/tfbus_capture_20261014_180929.log, CLU_2 addr 1; docs/TFBUS_DIMMER_MOSFET_DIN.md):
+ * Interface module_2_0_DIMMER_MOSFET_DIN_fv03_02.xml (fv02 has the same features). Wire format and
+ * method behaviour from captures of a real CLU driving a fwApiVer 2 module (CLU_2 addr 1):
  * @verbatim
- *   SetValue: SET_RAMP_TIME[0, ms LE u16, 0, 0]  then  DIMMER_SET_VALUE 0x0c [0, level LE u16]
- *             (two frames; level 0-1000 = Value * 1000; the module ramps by itself)
- *   status  : 02 | 01 02 10 [level LE u16] | 00 01 01 [inputs]   (level = programmed target)
+ *   SetValue / Switch* / Hold : SET_RAMP_TIME 06 [0, ms LE u16, 0, 0]  then
+ *                               DIMMER_SET_VALUE 0c [0, level LE u16]   (two frames;
+ *                               level 0-1000 = Value * 1000; the module ramps by itself)
+ *   timed Switch* expiry      : DIMMER_SET_VALUE only
+ *   SetRampTime               : SET_RAMP_TIME at once
+ *   SetStartLevel             : 0e [0, level LE u16]
+ *   DistributedLogicGroup     : 0f [0, 1, group LE u16]
+ *   Min/MaxValue              : nothing (clamped in the CLU)
+ *   status                    : 02 | 01 02 10 [level LE u16] | 00 01 01 [inputs]  (level = target)
  * @endverbatim
- * The real CLU sends nothing to these modules at startup (refresh capture); OnInit's
- * DIMM:set(0, 0) does the first SetValue.
+ * Every call sends its frames, also when the level does not change. The real CLU sends nothing to
+ * these modules at startup (refresh capture); OnInit's DIMM:set(0, 0) does the first SetValue.
  *
- * Done in the CLU (semantics from the interface, not checked against a real CLU):
- * - Min/MaxValue clamp + OnOutOfRange; Switch/SwitchOn to MaxValue or (Mode 1) the last value
- *   above MinValue, SwitchOff to MinValue; Time > 0 reverts after Time ms.
- * - As module fw 3.0.2 (OM 5.15.24 release notes): Switch* Ramp 0 = RampTime (SetValue / Hold:
- *   0 = instant); the last value is kept in non-volatile memory (NVS "clu_light" / "d<sn hex>",
- *   level 0-1000, written LASTVAL_SAVE_MS after the last change) and survives a CLU restart.
- * - HoldValue steps the value on each call (see light_hold_step()); Ramp = full sweep time.
- * - Events: OnValueChange, OnValueRise / OnValueLower, OnSwitchOn / OnSwitchOff (crossing MinValue).
+ * Captured method semantics:
+ * - Ramp argument absent = RampTime; given (also 0) = sent as is.
+ * - Min/MaxValue clamp; Switch/SwitchOn to MaxValue or (Mode 1) the last value above MinValue,
+ *   SwitchOff to MinValue; Time > 0 reverts after Time ms.
+ * - HoldValue(Ramp): each call steps 100/Ramp of the full 0-1 range (Ramp 3000 -> 0.033), sends
+ *   SET_RAMP_TIME Ramp, clamps to [MinValue, MaxValue]; see light_hold_dir() for the direction.
+ * Not checked against a real CLU:
+ * - Events: OnValueChange, OnValueRise / OnValueLower, OnSwitchOn / OnSwitchOff (crossing MinValue),
+ *   OnOutOfRange.
+ * - As module fw 3.0.2 (OM 5.15.24 release notes): the last value is kept in non-volatile memory
+ *   (NVS "clu_light" / "d<sn hex>", level 0-1000, written LASTVAL_SAVE_MS after the last change)
+ *   and survives a CLU restart.
  * - A status level different from the target (module power cycle) is taken as the new Value.
- * - StartLevel, StatisticState, Load, DistributedLogicGroup: stored only (wire format unknown).
+ * - StatisticState, Load: stored only (nothing sent).
  */
 #include <math.h>
 #include <stdio.h>
@@ -39,7 +49,7 @@
 #define CLS_DIMM 5
 
 /** @brief DIMM feature indices. */
-enum { F_VALUE = 0, F_RAMP = 1, F_MIN = 2, F_MAX = 3 };
+enum { F_VALUE = 0, F_RAMP = 1, F_MIN = 2, F_MAX = 3, F_START = 6, F_DLG = 8 };
 /** @brief DIMM events. */
 enum { EV_CHANGE = 0, EV_ON = 1, EV_OFF = 2, EV_RISE = 3, EV_LOWER = 4, EV_RANGE = 5 };
 /** @brief DIMM execute methods. */
@@ -58,13 +68,13 @@ typedef struct {
     double value;          // target 0..1
     double last_on;        // last value above MinValue (Mode LastValue)
     double min, max;
+    double start;          // StartLevel
     uint32_t ramp;         // RampTime [ms]
     bool have_target;      // Lua set a value (re-applied by init)
     bool have_status;
     int64_t cmd_at;        // us, last DIMMER_SET_VALUE
     light_timer_t timed;   // Switch* with Time > 0
     double revert_to;
-    uint32_t revert_ramp;
     light_hold_t hold;
     light_timer_t save;    // deferred NVS write of last_on
     unsigned saved;        // last_on level in NVS (0-1000), ~0u = none
@@ -139,12 +149,21 @@ static void events(const dimm_t *c, double old, double nv)
     }
 }
 
-/** @brief Queue SET_RAMP_TIME + DIMMER_SET_VALUE for the current target. */
+/** @brief Queue a [0, level LE u16] record (0x0c DIMMER_SET_VALUE, 0x0e START_LEVEL). */
+static void queue_level(tfbus_module_t *m, uint8_t type, double v)
+{
+    unsigned lvl = (unsigned)lround(v * 1000);
+    drv_queue_record(m, type, 0x00, (uint8_t[]){0, (uint8_t)lvl, (uint8_t)(lvl >> 8)}, 3);
+}
+
+/** @brief Queue SET_RAMP_TIME (unless @p ramp is NO_RAMP) + DIMMER_SET_VALUE for the current target. */
+#define NO_RAMP UINT32_MAX
 static void send_level(tfbus_module_t *m, dimm_t *c, uint32_t ramp)
 {
-    unsigned lvl = (unsigned)lround(c->value * 1000);
-    light_queue_ramp(m, ramp);
-    drv_queue_record(m, 0x0c, 0x00, (uint8_t[]){0, (uint8_t)lvl, (uint8_t)(lvl >> 8)}, 3);
+    if (ramp != NO_RAMP) {
+        light_queue_ramp(m, ramp);
+    }
+    queue_level(m, 0x0c, c->value);
     c->cmd_at = esp_timer_get_time();
 }
 
@@ -179,11 +198,11 @@ static double clamp_req(const dimm_t *c, double v)
     return light_clamp(v, c->min, c->max);
 }
 
-/** @brief Timed switch expired (bus task): return to the previous value. */
+/** @brief Timed switch expired (bus task): return to the previous value (level only, as the real CLU). */
 static void revert(tfbus_module_t *m, void *owner)
 {
     dimm_t *c = owner;
-    apply(m, c, NULL, 0, c->revert_to, c->revert_ramp);
+    apply(m, c, NULL, 0, c->revert_to, NO_RAMP);
 }
 
 /** @brief tfbus_driver_t::deinit: stop the timer. */
@@ -203,16 +222,22 @@ static void io_new(tfbus_module_t *m, int cls, int ch, const char *name)
     }
 }
 
-/** @brief tfbus_driver_t::init: re-apply the level Lua set (module re-addressed / back online). */
+/** @brief tfbus_driver_t::init: re-apply StartLevel and the level Lua set (module re-addressed / back online). */
 static void init(tfbus_module_t *m)
 {
     dimm_t *c = ctx(m);
+    if (c->start > 0) {
+        queue_level(m, 0x0e, c->start);
+    }
     if (c->have_target) {
         send_level(m, c, 0);
     }
 }
 
-/** @brief tfbus_driver_t::io_set: Value drives the output; RampTime / Min / MaxValue are cached. */
+/**
+ * @brief tfbus_driver_t::io_set: Value drives the output, RampTime, StartLevel and
+ *        DistributedLogicGroup go to the module at once, Min / MaxValue are cached.
+ */
 static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int val)
 {
     if (cls != CLS_DIMM || ch != 0) {
@@ -226,12 +251,20 @@ static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, in
         return true;
     case F_RAMP:
         c->ramp = (uint32_t)light_clamp(luaL_checknumber(L, val), 0, LIGHT_RAMP_MAX);
+        light_queue_ramp(m, c->ramp);
         break;
     case F_MIN:
         c->min = light_clamp(luaL_checknumber(L, val), 0, 1);
         break;
     case F_MAX:
         c->max = light_clamp(luaL_checknumber(L, val), 0, 1);
+        break;
+    case F_START:
+        c->start = light_clamp(luaL_checknumber(L, val), 0, 1);
+        queue_level(m, 0x0e, c->start);
+        break;
+    case F_DLG:
+        light_queue_dlg(m, 0, (uint32_t)light_clamp(luaL_checknumber(L, val), 0, 10000));
         break;
     default:
         break;
@@ -254,29 +287,23 @@ static int io_execute(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch,
     if (idx == X_HOLD) {
         uint32_t sweep = light_ramp_arg(L, first, nargs, 0, c->ramp);
         light_timer_cancel(&c->timed);
-        uint32_t step = light_hold_step(&c->hold, esp_timer_get_time(), cur, c->min, c->max);
-        double d = sweep ? (c->max - c->min) * step / sweep : 1;
-        double v = light_clamp(cur + c->hold.dir * d, c->min, c->max);
-        if (v != cur) {
-            apply(m, c, L, obj, v, step);
-        }
+        int dir = light_hold_dir(&c->hold, esp_timer_get_time(), cur, c->min, c->max);
+        // one step = LIGHT_HOLD_STEP_MS of the sweep, in whole levels (3000 ms -> 33/1000)
+        double d = sweep ? floor(1000.0 * LIGHT_HOLD_STEP_MS / sweep) / 1000 : 1;
+        apply(m, c, L, obj, light_clamp(cur + dir * d, c->min, c->max), sweep);
         return 0;
     }
     if (idx != X_SWITCH && idx != X_ON && idx != X_OFF) {
         return -1;
     }
     double ms = light_arg(L, first, nargs, 0, 0);
-    uint32_t ramp = light_ramp_arg(L, first, nargs, 1, 0);
-    if (ramp == 0) {
-        ramp = c->ramp; // fw 3.0.2: Switch* Ramp 0 = RampTime
-    }
+    uint32_t ramp = light_ramp_arg(L, first, nargs, 1, c->ramp);
     bool last = idx != X_OFF && light_arg(L, first, nargs, 2, 0) == 1;
     double on_level = last && c->last_on > c->min ? light_clamp(c->last_on, c->min, c->max) : c->max;
     double v = idx == X_ON ? on_level : idx == X_OFF ? c->min : (cur > c->min ? c->min : on_level);
     light_timer_cancel(&c->timed);
     if (ms > 0 && v != cur) {
         c->revert_to = cur;
-        c->revert_ramp = ramp;
         light_timer_start(&c->timed, m, c, revert, (uint32_t)ms);
     }
     apply(m, c, L, obj, v, ramp);

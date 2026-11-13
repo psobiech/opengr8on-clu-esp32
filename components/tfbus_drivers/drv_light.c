@@ -1,6 +1,6 @@
 /**
  * @file drv_light.c
- * @brief Shared logic for dimmable light modules: timers, HoldValue stepping, SET_RAMP_TIME.
+ * @brief Shared logic for dimmable light modules: timers, Hold* direction, SET_RAMP_TIME.
  */
 #include "drv_light.h"
 
@@ -58,13 +58,13 @@ void light_timer_delete(light_timer_t *t)
     t->gen++;
 }
 
-uint32_t light_hold_step(light_hold_t *h, int64_t now_us, double cur, double lo, double hi)
+int light_hold_dir(light_hold_t *h, int64_t now_us, double cur, double lo, double hi)
 {
     int64_t gap_ms = (now_us - h->last_us) / 1000;
     bool fresh = h->last_us == 0 || gap_ms > LIGHT_HOLD_GAP_MS || gap_ms < 0;
     h->last_us = now_us;
     if (!fresh) {
-        return (uint32_t)gap_ms;
+        return h->dir; // within a hold the value stays at an end it reaches
     }
     h->dir = h->dir > 0 ? -1 : 1; // first hold: up
     if (cur >= hi) {
@@ -72,7 +72,7 @@ uint32_t light_hold_step(light_hold_t *h, int64_t now_us, double cur, double lo,
     } else if (cur <= lo) {
         h->dir = 1;
     }
-    return LIGHT_HOLD_FIRST_MS;
+    return h->dir;
 }
 
 double light_arg(lua_State *L, int first, int nargs, int i, double dflt)
@@ -95,4 +95,12 @@ void light_queue_ramp(tfbus_module_t *m, uint32_t ms)
         ms = LIGHT_RAMP_MAX;
     }
     drv_queue_record(m, 0x06, 0x00, (uint8_t[]){0, (uint8_t)ms, (uint8_t)(ms >> 8), 0, 0}, 5);
+}
+
+void light_queue_dlg(tfbus_module_t *m, uint8_t ch, uint32_t group)
+{
+    if (group > 10000) {
+        group = 10000;
+    }
+    drv_queue_record(m, 0x0f, 0x00, (uint8_t[]){ch, 1, (uint8_t)group, (uint8_t)(group >> 8)}, 4);
 }

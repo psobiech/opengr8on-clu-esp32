@@ -68,8 +68,13 @@ static const tfbus_driver_t *s_registered[16];
 static int s_nregistered;
 void tfbus_driver_register(const tfbus_driver_t *d) { s_registered[s_nregistered++] = d; }
 
+static double s_feat[32]; // last value stored per feature index (Lua hook path)
+
 void tfbus_obj_store(lua_State *L, int obj, int idx, lua_Number v)
 {
+    if (idx >= 0 && idx < 32) {
+        s_feat[idx] = v;
+    }
     lua_getfield(L, obj, "_f");
     lua_pushnumber(L, v);
     lua_rawseti(L, -2, idx);
@@ -1010,8 +1015,14 @@ int main(void)
                     "TL[0]=1 TL[0]=40 TL!0 TL!1 TL[0]=60 TL!0 TL!1 TL!3 ");
     }
 
-    // ---------------- DIMMER_MOSFET_DIN
+    // ---------------- DIMMER_MOSFET_DIN (expected frames: real CLU_2 -> DIM1186, addr 1)
     {
+#define D_R0    "aa01f00a01060500000000000053 "
+#define D_R500  "aa01f00a0106050000f4010000a6 "
+#define D_R1000 "aa01f00a0106050000e8030000b8 "
+#define D_R2000 "aa01f00a0106050000d007000084 "
+#define D_R3000 "aa01f00a0106050000b80b0000e0 "
+#define D_L(hex) "aa01f008010c030000" hex " "
         tfbus_module_t *m = module(&tfbus_drv_dimmer_mosfet_din, 1);
         m->sn = 0x1314874b;
         m->drv->io_new(m, 5, 0, "DIM");
@@ -1021,68 +1032,100 @@ int main(void)
         posts_reset();
         status(m, "02 01 02 10 2c 01 00 01 01 00");
         check_posts("dimmer first status: module level taken silently", "DIM[0]=0.3 ");
+        status(m, "02 01 02 10 00 00 00 01 01 00"); // the real module's level
+        posts_reset();
 
+        frames_reset();
         lua_set(m, 5, 0, 3, 0.32); // MaxValue (OM.LUA OnInit)
-        posts_reset();
-        frames_reset();
-        lua_set(m, 5, 0, 0, 0.32);
-        check_frames("dimmer SetValue(0.32) == capture (RampTime 500)",
-                     "aa01f00a0106050000f4010000a6 aa01f008010c03000040011c ");
-        check_posts("dimmer 0.3 -> 0.32: change + rise", "DIM!0 DIM!3 ");
+        check_frames("dimmer SetMaxValue: nothing sent", "");
+        lua_set(m, 5, 0, 0, 0.1);
+        lua_set(m, 5, 0, 0, 0);
+        check_frames("dimmer SetValue(0.1), SetValue(0): RampTime 500 + level",
+                     D_R500 D_L("640039") D_R500 D_L("00005d"));
+        check_posts("dimmer 0 -> 0.1 -> 0: events", "DIM!0 DIM!3 DIM!1 DIM!0 DIM!4 DIM!2 ");
 
-        posts_reset();
         frames_reset();
-        lua_set(m, 5, 0, 0, 0.9);
-        check_posts("dimmer SetValue above MaxValue -> OnOutOfRange, clamped (no change)", "DIM!5 ");
-        lua_set(m, 5, 0, 1, 0); // RampTime 0
-        frames_reset();
-        posts_reset();
-        double sw[] = {0, 1000};
-        lua_execn(m, 5, 0, 1, 2, sw); // Switch(0, 1000): on -> off
-        check_frames("dimmer Switch(0, 1000) -> 0 with ramp 1000",
-                     "aa01f00a0106050000e8030000b8 aa01f008010c03000000005d ");
-        check_posts("dimmer off: change, lower, OnSwitchOff", "DIM!0 DIM!4 DIM!2 ");
+        lua_execn(m, 5, 0, 2, 1, (double[]){0});       // SwitchOn(0)
+        lua_execn(m, 5, 0, 3, 1, (double[]){0});       // SwitchOff(0)
+        lua_execn(m, 5, 0, 2, 2, (double[]){0, 2000}); // SwitchOn(0, 2000)
+        lua_execn(m, 5, 0, 3, 2, (double[]){0, 0});    // SwitchOff(0, 0): explicit 0 sent as is
+        check_frames("dimmer SwitchOn / SwitchOff: MaxValue / 0, Ramp absent = RampTime, given = as is",
+                     D_R500 D_L("40011c") D_R500 D_L("00005d") D_R2000 D_L("40011c") D_R0 D_L("00005d"));
 
         frames_reset();
         posts_reset();
-        double on[] = {2000};
-        lua_execn(m, 5, 0, 2, 1, on); // SwitchOn(2000): MaxValue for 2 s, ramp = RampTime 0
-        check_frames("dimmer SwitchOn(2000) -> MaxValue, ramp RampTime",
-                     "aa01f00a01060500000000000053 aa01f008010c03000040011c ");
-        timers_advance(1999000);
-        check_frames("dimmer timed: still on before expiry",
-                     "aa01f00a01060500000000000053 aa01f008010c03000040011c ");
+        lua_execn(m, 5, 0, 1, 1, (double[]){1500}); // Switch(1500): on for 1.5 s
+        timers_advance(1499000);
+        check_frames("dimmer Switch(1500): on", D_R500 D_L("40011c"));
         frames_reset();
         timers_advance(1000);
-        check_frames("dimmer timed: back to 0 at expiry", "aa01f00a01060500000000000053 aa01f008010c03000000005d ");
+        check_frames("dimmer timed: back to 0 at expiry, level only (no SET_RAMP_TIME)", D_L("00005d"));
         check_posts("dimmer timed: on events, Value posted + off events at expiry",
                     "DIM!0 DIM!3 DIM!1 DIM[0]=0 DIM!0 DIM!4 DIM!2 ");
 
-        lua_set(m, 5, 0, 0, 0.1);
-        lua_set(m, 5, 0, 0, 0);
-        frames_reset();
-        double mode[] = {0, 0, 1};
-        lua_execn(m, 5, 0, 2, 3, mode); // SwitchOn LastValue
-        check_frames("dimmer SwitchOn Mode LastValue -> 0.1",
-                     "aa01f00a01060500000000000053 aa01f008010c030000640039 ");
-
-        // HoldValue: 3000 ms sweep; first call 100 ms step = 0.32/30 (max-min = 0.32)
-        lua_set(m, 5, 0, 0, 0);
-        s_now_us += 10000000;
-        frames_reset();
-        double hr[] = {3200};
-        lua_execn(m, 5, 0, 0, 1, hr);
-        s_now_us += 100000;
-        lua_execn(m, 5, 0, 0, 1, hr);
-        check_frames("dimmer HoldValue steps up (10/1000 per 100 ms at 3200 ms sweep)",
-                     "aa01f00a01060500006400000037 aa01f008010c0300000a0057 "
-                     "aa01f00a01060500006400000037 aa01f008010c030000140049 ");
+        // HoldValue(3000): 33/1000 per call, ramp 3000; a pause starts a new hold the other way
         s_now_us += 2000000;
         frames_reset();
-        lua_execn(m, 5, 0, 0, 1, hr); // new hold: reverses
-        check_frames("dimmer HoldValue: new hold reverses", "aa01f00a01060500006400000037 aa01f008010c0300000a0057 ");
+        for (int i = 0; i < 5; i++) {
+            lua_execn(m, 5, 0, 0, 1, (double[]){3000});
+            s_now_us += 230000;
+        }
+        s_now_us += 1300000;
+        for (int i = 0; i < 3; i++) {
+            lua_execn(m, 5, 0, 0, 1, (double[]){3000});
+            s_now_us += 230000;
+        }
+        check_frames("dimmer HoldValue(3000) x5, pause, x3 == capture",
+                     D_R3000 D_L("21007c") D_R3000 D_L("42001f") D_R3000 D_L("63003e") D_R3000 D_L("8400d9")
+                     D_R3000 D_L("a500f8") D_R3000 D_L("8400d9") D_R3000 D_L("63003e") D_R3000 D_L("42001f"));
+        lua_set(m, 5, 0, 0, 0);
+        s_now_us += 2000000;
+        frames_reset();
+        lua_execn(m, 5, 0, 0, 0, NULL); // Ramp absent: RampTime 500 -> 0.2 per call
+        s_now_us += 150000;
+        lua_execn(m, 5, 0, 0, 0, NULL);
+        check_frames("dimmer HoldValue() = RampTime: 0.2 per call, clamped to MaxValue",
+                     D_R500 D_L("c80095") D_R500 D_L("40011c"));
+        s_now_us += 1500000;
+        frames_reset();
+        for (int i = 0; i < 5; i++) {
+            lua_execn(m, 5, 0, 0, 1, (double[]){1000});
+            s_now_us += 180000;
+        }
+        check_frames("dimmer HoldValue(1000) from MaxValue: down, stays at 0 == capture",
+                     D_R1000 D_L("dc0081") D_R1000 D_L("780025") D_R1000 D_L("140049") D_R1000 D_L("00005d")
+                     D_R1000 D_L("00005d"));
+
+        // StartLevel / RampTime go to the module at once
+        frames_reset();
+        lua_set(m, 5, 0, 6, 0.2);
+        lua_set(m, 5, 0, 0, 0.05);
+        lua_set(m, 5, 0, 6, 0);
+        lua_set(m, 5, 0, 1, 1000);
+        lua_set(m, 5, 0, 0, 0.1);
+        lua_set(m, 5, 0, 1, 500);
+        check_frames("dimmer SetStartLevel / SetRampTime sent at once == capture",
+                     "aa01f008010e030000c80097 " D_R500 D_L("32006f") "aa01f008010e03000000005f "
+                     D_R1000 D_R1000 D_L("640039") D_R500);
+
+        // LastValue mode, clamping
+        frames_reset();
+        posts_reset();
+        lua_set(m, 5, 0, 0, 0.15);
+        lua_execn(m, 5, 0, 3, 1, (double[]){0});
+        lua_execn(m, 5, 0, 2, 3, (double[]){0, 0, 1}); // SwitchOn LastValue, Ramp 0
+        lua_execn(m, 5, 0, 1, 3, (double[]){0, 0, 1}); // Switch LastValue -> off
+        lua_set(m, 5, 0, 0, 0.5);                      // above MaxValue 0.32
+        lua_set(m, 5, 0, 0, -1);
+        check_frames("dimmer LastValue / clamping == capture",
+                     D_R500 D_L("9600cb") D_R500 D_L("00005d") D_R0 D_L("9600cb") D_R0 D_L("00005d")
+                     D_R500 D_L("40011c") D_R500 D_L("00005d"));
+        check_posts("dimmer out of range -> OnOutOfRange",
+                    "DIM!0 DIM!3 DIM!0 DIM!4 DIM!2 DIM!0 DIM!3 DIM!1 DIM!0 DIM!4 DIM!2 "
+                    "DIM!5 DIM!0 DIM!3 DIM!1 DIM!5 DIM!0 DIM!4 DIM!2 ");
 
         // Status: a level other than the target (after the hold-off) is taken over
+        lua_set(m, 5, 0, 0, 0.01);
         s_now_us += 2000000;
         posts_reset();
         status(m, "02 01 02 10 0a 00 00 01 01 00");
@@ -1094,20 +1137,14 @@ int main(void)
         posts_reset();
         status(m, "02 01 02 10 00 00 00 01 01 00");
         check_posts("dimmer stale status right after a command ignored", "");
+        lua_set(m, 5, 0, 6, 0.2);
         frames_reset();
         m->drv->init(m);
-        check_frames("dimmer init after re-addressing re-applies the level",
-                     "aa01f00a01060500000000000053 aa01f008010c030000c80095 ");
+        check_frames("dimmer init after re-addressing re-applies StartLevel and the level",
+                     "aa01f008010e030000c80097 " D_R0 D_L("c80095"));
+        lua_set(m, 5, 0, 6, 0);
         check("dimmer: other class / unknown method -> -1",
               lua_execn(m, 5, 0, 9, 0, NULL) == -1 && lua_execn(m, 4, 0, 1, 0, NULL) == -1);
-
-        // fw 3.0.2: Switch* Ramp 0 = RampTime; SetValue keeps 0 = instant
-        lua_set(m, 5, 0, 1, 700); // RampTime
-        frames_reset();
-        double r0[] = {0, 0};
-        lua_execn(m, 5, 0, 3, 2, r0); // SwitchOff(0, 0)
-        check_frames("dimmer SwitchOff(0, Ramp 0) -> RampTime 700 (fw 3.0.2)",
-                     "aa01f00a0106050000bc020000ed aa01f008010c03000000005d ");
 
         // fw 3.0.2: last value in non-volatile memory, debounced
         nvs_reset();
@@ -1133,66 +1170,155 @@ int main(void)
         m->drv_ctx = NULL;
         m->drv->io_new(m, 5, 0, "DIM"); // CLU restart: state rebuilt, last value from NVS
         frames_reset();
-        double lv[] = {0, 0, 1};
-        lua_execn(m, 5, 0, 2, 3, lv); // SwitchOn LastValue
-        check_frames("dimmer last value survives a restart (SwitchOn LastValue -> 0.27)",
-                     "aa01f00a0106050000f4010000a6 aa01f008010c0300000e0152 ");
+        lua_execn(m, 5, 0, 2, 3, (double[]){0, 0, 1}); // SwitchOn LastValue
+        check_frames("dimmer last value survives a restart (SwitchOn LastValue -> 0.27)", D_R0 D_L("0e0152"));
         lua_set(m, 5, 0, 0, 0.5);
         m->drv->deinit(m);
         check("dimmer deinit flushes a pending last-value save", nvs_commits == 2);
+#undef D_L
     }
 
-    // ---------------- LED_RGBW_DIN
+    // ---------------- LED_RGBW_DIN (expected frames: real CLU_2 -> LED3942, addr 5)
     {
+#define R_RAMP(t) "aa05f0120206050003" t "0000060500" "02" t "00004e aa05f0120206050001" t "0000060500" "00" t "00004e "
+#define R_0    R_RAMP("0000")
+#define R_V(r, g, b, w, x) "aa05f01604050210" "00" r "05021001" g "05021002" b "05021003" w x " "
         tfbus_module_t *m = module(&tfbus_drv_led_rgbw_din, 5);
         m->drv->io_new(m, 9, 0, "LED");
         m->drv->io_new(m, 12, 0, "POW");
         frames_reset();
         m->drv->init(m);
         check_frames("RGBW init: nothing sent before Lua sets a colour", "");
-        posts_reset();
-        double red[] = {0x73, 42};
-        lua_execn(m, 9, 0, 3, 2, red);
-        check_frames("RGBW SetRedValue(115, 42) == capture",
-                     "aa05f00a01060500002a0000007d aa05f0160405021000730502100100050210020005021003003e ");
-        check_posts("RGBW first colour: HSV/RGB published via the object, change/rise/on",
-                    "LED!0 LED!3 LED!1 ");
 
+        // OM.LUA OnInit / earlier state: #520000 (V 0.32)
+        lua_exec_str(m, 6, "#520000", -1);
         frames_reset();
         posts_reset();
-        lua_exec_str(m, 6, "#00FF80", 0);
-        check_frames("RGBW SetRGBvalue(#00FF80, 0)",
-                     "aa05f00a01060500000000000057 aa05f01604050210000005021001ff0502100280050210030032 ");
+        lua_execn(m, 9, 0, 0, 1, (double[]){0.5});   // SetValue(0.5)
+        lua_execn(m, 9, 0, 1, 1, (double[]){120});   // SetHue(120)
+        lua_execn(m, 9, 0, 2, 1, (double[]){0.5});   // SetSaturation(0.5)
+        check_frames("RGBW SetValue / SetHue / SetSaturation == capture (per-channel ramp, truncated values)",
+                     R_0 R_V("7f", "00", "00", "00", "32") R_0 R_V("00", "7f", "00", "00", "32")
+                     R_0 R_V("3f", "7f", "3f", "00", "32"));
+        check_posts("RGBW changes: change + rise, then change only", "LED!0 LED!3 LED!0 LED!0 ");
+        frames_reset();
+        lua_execn(m, 9, 0, 3, 1, (double[]){255});   // SetRedValue
+        check("RGBW SetRedValue(255): H 19 S 0.75 V 1 (truncated)",
+              s_feat[1] == 19 && s_feat[2] == 0.75 && s_feat[0] == 1);
+        lua_execn(m, 9, 0, 4, 1, (double[]){10});    // SetGreenValue
+        lua_execn(m, 9, 0, 5, 1, (double[]){20});    // SetBlueValue
+        check("RGBW SetBlueValue(20): H 357 S 0.96", s_feat[1] == 357 && s_feat[2] == 0.96);
+        lua_execn(m, 9, 0, 12, 1, (double[]){100});  // SetWhiteValue
+        lua_exec_str(m, 6, "#102030", -1);
+        check("RGBW SetRGBvalue(#102030): H 210 S 0.66 V 0.18",
+              s_feat[1] == 210 && s_feat[2] == 0.66 && s_feat[0] == 0.18);
+        lua_exec_str(m, 6, "#ff0000", 1000);
+        lua_execn(m, 9, 0, 0, 2, (double[]){0.3, 0}); // SetValue(0.3, 0)
+        check_frames("RGBW SetRed/Green/Blue/White, SetRGBvalue (ramp 1000 -> 100 x 10 ms) == capture",
+                     R_0 R_V("ff", "7f", "3f", "00", "f2") R_0 R_V("ff", "0a", "3f", "00", "87")
+                     R_0 R_V("ff", "0a", "14", "00", "ac") R_0 R_V("ff", "0a", "14", "64", "c8")
+                     R_0 R_V("10", "20", "30", "64", "29") R_RAMP("6400") R_V("ff", "00", "00", "64", "d6")
+                     R_0 R_V("4c", "00", "00", "64", "65"));
         check("RGBW SetRGBvalue malformed -> Lua error", !lua_exec_str(m, 6, "#12345", -1));
 
-        double val[] = {0.5};
-        frames_reset();
-        lua_execn(m, 9, 0, 0, 1, val); // SetValue(0.5): hue 150, sat 1 -> 00 80 40
-        check_frames("RGBW SetValue(0.5) keeps hue/saturation",
-                     "aa05f00a01060500000000000057 aa05f0160405021000000502100180050210024005021003008d ");
-        double hue[] = {0};
-        frames_reset();
-        lua_execn(m, 9, 0, 1, 1, hue);
-        check_frames("RGBW SetHue(0) -> red at V 0.5",
-                     "aa05f00a01060500000000000057 aa05f016040502100080050210010005021002000502100300cd ");
-        lua_set(m, 9, 0, 10, 50); // RedCorrection 50 %: re-sent at once
-        double white[] = {200};
-        lua_execn(m, 9, 0, 12, 1, white);
         frames_reset();
         posts_reset();
-        double off[] = {0};
-        lua_execn(m, 9, 0, 10, 1, off); // SwitchOff
-        check_frames("RGBW SwitchOff: all channels 0",
-                     "aa05f00a01060500000000000057 aa05f0160405021000000502100100050210020005021003004d ");
-        check_posts("RGBW off: change, lower, OnSwitchOff", "LED!0 LED!4 LED!2 ");
+        lua_execn(m, 9, 0, 10, 1, (double[]){0}); // SwitchOff: W too
+        lua_execn(m, 9, 0, 9, 1, (double[]){0});  // SwitchOn: MaxValue, W stays 0
+        check_frames("RGBW SwitchOff / SwitchOn == capture",
+                     R_0 R_V("00", "00", "00", "00", "4d") R_0 R_V("ff", "00", "00", "00", "b2"));
+        check_posts("RGBW off / on events", "LED!0 LED!4 LED!2 LED!0 LED!3 LED!1 ");
         frames_reset();
-        double sw[] = {0, 300};
-        lua_execn(m, 9, 0, 11, 2, sw); // Switch: on -> MaxValue, red (corrected 50 %), W back
-        check_frames("RGBW Switch on: MaxValue, R corrected 50 %, W restored",
-                     "aa05f00a01060500002c0100007a aa05f0160405021000800502100100050210020005021003c805 ");
+        posts_reset();
+        lua_execn(m, 9, 0, 11, 1, (double[]){1500}); // Switch(1500): off for 1.5 s
+        timers_advance(1500000);
+        check_frames("RGBW Switch(1500): off, restored at expiry without ramp frames",
+                     R_0 R_V("00", "00", "00", "00", "4d") R_V("ff", "00", "00", "00", "b2"));
+        check_posts("RGBW timed: restored, features + RGB string posted",
+                    "LED!0 LED!4 LED!2 LED[0]=1 LED[1]=0 LED[2]=1 LED[3]=255 LED[4]=0 LED[5]=0 "
+                    "LED[15]=0 LED[6]=#FF0000 LED!0 LED!3 LED!1 ");
 
-        // PowerSupplyVoltage from status (0.01 V)
+        // Hold*: one direction shared by all Hold* methods
+        s_now_us += 2000000;
+        frames_reset();
+        for (int i = 0; i < 3; i++) {
+            lua_execn(m, 9, 0, 7, 1, (double[]){3000}); // HoldValue: at MaxValue -> down 0.03
+            s_now_us += 180000;
+        }
+        s_now_us += 1500000;
+        for (int i = 0; i < 3; i++) {
+            lua_execn(m, 9, 0, 8, 1, (double[]){3000}); // HoldHue: new hold -> up 12, ramp 0
+            s_now_us += 180000;
+        }
+        s_now_us += 1500000;
+        for (int i = 0; i < 2; i++) {
+            lua_execn(m, 9, 0, 13, 1, (double[]){1000}); // HoldRedValue: new hold -> down 26
+            s_now_us += 180000;
+        }
+        s_now_us += 1500000;
+        for (int i = 0; i < 2; i++) {
+            lua_execn(m, 9, 0, 16, 1, (double[]){1000}); // HoldWhiteValue: new hold -> up 26
+            s_now_us += 180000;
+        }
+        check_frames("RGBW HoldValue / HoldHue / HoldRed / HoldWhite == capture",
+                     R_RAMP("2c01") R_V("f7", "00", "00", "00", "ba") R_RAMP("2c01") R_V("ef", "00", "00", "00", "a2")
+                     R_RAMP("2c01") R_V("e8", "00", "00", "00", "a5")
+                     R_0 R_V("e8", "2e", "00", "00", "8b") R_0 R_V("e8", "5c", "00", "00", "f9")
+                     R_0 R_V("e8", "8b", "00", "00", "2e")
+                     R_RAMP("6400") R_V("ce", "8b", "00", "00", "08") R_RAMP("6400") R_V("b4", "8b", "00", "00", "72")
+                     R_RAMP("6400") R_V("b4", "8b", "00", "1a", "68") R_RAMP("6400") R_V("b4", "8b", "00", "34", "46"));
+
+        // HoldHue wraps 0 <-> 359 (captured from #730000, after an upward hold)
+        lua_execn(m, 9, 0, 12, 1, (double[]){0});
+        lua_execn(m, 9, 0, 3, 2, (double[]){115, 420});
+        lua_execn(m, 9, 0, 4, 1, (double[]){0});
+        frames_reset();
+        s_now_us += 1500000;
+        lua_execn(m, 9, 0, 8, 1, (double[]){3000}); // new hold: down
+        s_now_us += 180000;
+        lua_execn(m, 9, 0, 8, 1, (double[]){3000});
+        s_now_us += 1500000;
+        lua_execn(m, 9, 0, 8, 1, (double[]){3000}); // new hold: up
+        s_now_us += 180000;
+        lua_execn(m, 9, 0, 8, 1, (double[]){3000});
+        check_frames("RGBW HoldHue 0 -> 359 -> 347, then 359 -> 0 == capture",
+                     R_0 R_V("72", "00", "01", "00", "3e") R_0 R_V("72", "00", "18", "00", "27")
+                     R_0 R_V("72", "00", "01", "00", "3e") R_0 R_V("72", "00", "00", "00", "3f"));
+
+        // Corrections, RampTime, Min/MaxValue
+        frames_reset();
+        lua_set(m, 9, 0, 10, 50);
+        lua_set(m, 9, 0, 11, 80);
+        lua_set(m, 9, 0, 12, 90);
+        lua_set(m, 9, 0, 7, 500);
+        lua_set(m, 9, 0, 8, 0.5);
+        lua_set(m, 9, 0, 9, 0);
+        check_frames("RGBW corrections / RampTime sent at once, Min/MaxValue not == capture",
+                     "aa05f0080107031000320070 aa05f0080107031001500013 aa05f00801070310025a001a " R_RAMP("3200"));
+        frames_reset();
         posts_reset();
+        lua_execn(m, 9, 0, 0, 1, (double[]){1});
+        check_frames("RGBW SetValue(1) above MaxValue 0.5: clamped, RampTime, values not corrected",
+                     R_RAMP("3200") R_V("7f", "00", "00", "00", "32"));
+        check_posts("RGBW out of range -> OnOutOfRange", "LED!5 LED!0 LED!3 ");
+        frames_reset();
+        m->drv->init(m);
+        check_frames("RGBW init after re-addressing re-applies corrections and the colour",
+                     "aa05f0080107031000320070 aa05f0080107031001500013 aa05f00801070310025a001a "
+                     R_0 R_V("7f", "00", "00", "00", "32"));
+
+        // black: saturation 0, SwitchOn then gives white
+        lua_set(m, 9, 0, 8, 1);
+        lua_set(m, 9, 0, 7, 0);
+        lua_exec_str(m, 6, "#000000", -1);
+        check("RGBW black: S 0, V 0", s_feat[2] == 0 && s_feat[0] == 0);
+        frames_reset();
+        lua_execn(m, 9, 0, 9, 1, (double[]){0});
+        check_frames("RGBW SwitchOn after black: white == capture", R_0 R_V("ff", "ff", "ff", "00", "b2"));
+
+        // PowerSupplyVoltage from status (0.01 V); channel echo records ignored
+        posts_reset();
+        status(m, "04 04 02 08 00 7f 04 02 08 01 00 04 02 08 02 00 04 02 08 03 00");
         status(m, "01 02 02 10 72 09"); // 24.18 (CLU_2): above default MaxValue 24 -> OnOutOfRange
         status(m, "01 02 02 10 5e 09"); // 23.98: back in range; < 0.5 V, no change event
         status(m, "01 02 02 10 34 08"); // 21.00: still in range, change -2.98
@@ -1202,17 +1328,185 @@ int main(void)
                     "POW[0]=24.18 POW[1]=100.75 POW!3 POW[0]=23.98 POW[1]=99.92 POW!6 "
                     "POW[0]=21 POW[1]=87.5 POW!0 POW!1 "
                     "POW[0]=20 POW[1]=83.33 POW!0 POW!1 POW!3 POW[0]=24 POW[1]=100 POW!0 POW!2 POW!6 ");
+        check("LED: other class / unknown method -> -1",
+              lua_execn(m, 9, 0, 99, 0, NULL) == -1 && lua_execn(m, 12, 0, 0, 0, NULL) == -1);
 
-        // Timed switch restores the previous colour (bus task -> posts incl. RGB string)
+        // ---- LED_CHANNEL 1 (class 49, ch 0), OM.LUA-style init
+#define C_OUT(t, v, x) "aa05f00f0206050000" t "0000050210" "00" v x " "
+        m->drv->io_new(m, 49, 0, "LCH");
         frames_reset();
         posts_reset();
-        double t[] = {500};
-        lua_execn(m, 9, 0, 10, 1, t); // SwitchOff for 0.5 s
-        timers_advance(500000);
-        check_posts("RGBW SwitchOff(500): restored, features + RGB string posted",
-                    "LED!0 LED!4 LED!2 LED[0]=1 LED[1]=0 LED[2]=1 LED[3]=255 LED[4]=0 LED[5]=0 "
-                    "LED[15]=200 LED[6]=#FF0000 LED!0 LED!3 LED!1 ");
+        lua_set(m, 49, 0, 1, 0);
+        lua_set(m, 49, 0, 2, 255);
+        lua_set(m, 49, 0, 3, 0);
+        lua_set(m, 49, 0, 4, 0);
+        lua_set(m, 49, 0, 5, 0);
+        lua_set(m, 49, 0, 6, 0);
+        check_frames("LED_CHANNEL init sets: only DistributedLogicGroup sent == capture", "aa05f009010f0400000100005d ");
+        frames_reset();
+        lua_execn(m, 49, 0, 0, 1, (double[]){100});
+        lua_execn(m, 49, 0, 0, 1, (double[]){300});
+        lua_execn(m, 49, 0, 0, 2, (double[]){101, 500});
+        lua_execn(m, 49, 0, 2, 1, (double[]){0});
+        lua_execn(m, 49, 0, 1, 1, (double[]){0});
+        lua_execn(m, 49, 0, 0, 1, (double[]){50});
+        lua_execn(m, 49, 0, 2, 1, (double[]){0});
+        lua_execn(m, 49, 0, 1, 3, (double[]){0, 0, 1}); // SwitchOn LastValue
+        lua_execn(m, 49, 0, 3, 1, (double[]){0});       // Switch -> off
+        check_frames("LED_CHANNEL SetValue / SwitchOff / SwitchOn (LastValue) / Switch == capture",
+                     C_OUT("0000", "64", "22") C_OUT("0000", "ff", "b9") C_OUT("6400", "65", "47")
+                     C_OUT("0000", "00", "46") C_OUT("0000", "ff", "b9") C_OUT("0000", "32", "74")
+                     C_OUT("0000", "00", "46") C_OUT("0000", "32", "74") C_OUT("0000", "00", "46"));
+        check_posts("LED_CHANNEL: SetValue(300) -> OnOutOfRange; Value only from the module", "LCH!5 ");
+        frames_reset();
+        lua_execn(m, 49, 0, 3, 1, (double[]){1500}); // Switch(1500): on, back after 1.5 s
+        timers_advance(1500000);
+        check_frames("LED_CHANNEL Switch(1500) == capture", C_OUT("0000", "ff", "b9") C_OUT("0000", "00", "46"));
+        frames_reset();
+        const double rr[][2] = {{100, 1}, {10, 200}, {100, 999}, {10, 1001}, {100, 1500}, {10, 3500}, {100, 15000}};
+        for (int i = 0; i < 7; i++) {
+            lua_execn(m, 49, 0, 0, 2, rr[i]);
+        }
+        check_frames("LED_CHANNEL ramp in whole seconds == capture",
+                     C_OUT("0000", "64", "22") C_OUT("0000", "0a", "4c") C_OUT("6400", "64", "46")
+                     C_OUT("6400", "0a", "28") C_OUT("c800", "64", "ea") C_OUT("9001", "0a", "dd")
+                     C_OUT("dc05", "64", "fb"));
+        lua_execn(m, 49, 0, 0, 1, (double[]){0});
+        status(m, "01 04 02 08 00 00");
+        // Hold: runs on the module; start once, stop ~0.5 s after the last call
+        s_now_us += 2000000;
+        frames_reset();
+        for (int i = 0; i < 3; i++) {
+            lua_execn(m, 49, 0, 4, 1, (double[]){3000});
+            timers_advance(210000);
+        }
+        timers_advance(1000000);
+        for (int i = 0; i < 2; i++) {
+            lua_execn(m, 49, 0, 5, 1, (double[]){1000});
+            timers_advance(210000);
+        }
+        timers_advance(1000000);
+        for (int i = 0; i < 2; i++) {
+            lua_execn(m, 49, 0, 6, 1, (double[]){1000});
+            timers_advance(210000);
+        }
+        timers_advance(1000000);
+        check_frames("LED_CHANNEL HoldValue / HoldValueUp / HoldValueDown == capture",
+                     "aa05f01002060500002c0100001303000001ff8d aa05f0080113030000000046 "
+                     "aa05f0100206050000640000001303000001ffc4 aa05f0080113030000000046 "
+                     "aa05f01002060500006400000013030000020038 aa05f0080113030000000046 ");
+        posts_reset();
+        status(m, "01 04 02 08 00 54");
+        status(m, "01 04 02 08 00 46");
+        check_posts("LED_CHANNEL Value + events from the module's report",
+                    "LCH[0]=84 LCH!0 LCH!1 LCH!3 LCH[0]=70 LCH!0 LCH!4 ");
+        frames_reset();
+        lua_set(m, 49, 0, 1, 1000);
+        lua_set(m, 49, 0, 2, 200);
+        lua_execn(m, 49, 0, 0, 1, (double[]){250});
+        lua_set(m, 49, 0, 3, 10);
+        lua_execn(m, 49, 0, 0, 1, (double[]){0});
+        check_frames("LED_CHANNEL RampTime / Min / MaxValue: not sent, used == capture",
+                     C_OUT("6400", "c8", "ea") C_OUT("6400", "0a", "28"));
+        m->drv->io_new(m, 49, 1, "LCH2");
+        frames_reset();
+        lua_set(m, 49, 1, 4, 5);
+        check_frames("LED_CHANNEL 2 DistributedLogicGroup 5 == capture", "aa05f009010f04000101050059 ");
+#undef C_OUT
+
+        // ---- LED_CCT 2 (class 72, ch 1: warm channel 2, cold channel 3)
+#define T_OUT(ch, t, v, x) "aa05f00f02060500" ch t "0000050210" ch v x " "
+        m->drv->io_new(m, 72, 1, "CCT");
+        lua_set(m, 72, 1, 5, 0);
+        lua_set(m, 72, 1, 6, 255);
+        lua_set(m, 72, 1, 7, 0);
+        frames_reset();
+        posts_reset();
+        lua_execn(m, 72, 1, 1, 1, (double[]){50});
+        lua_execn(m, 72, 1, 2, 1, (double[]){200});
+        status(m, "02 04 02 08 02 64 04 02 08 03 64");
+        lua_execn(m, 72, 1, 2, 2, (double[]){100, 1000});
+        status(m, "02 04 02 08 02 32 04 02 08 03 32");
+        lua_execn(m, 72, 1, 1, 2, (double[]){80, 1000});
+        status(m, "02 04 02 08 02 50 04 02 08 03 14");
+        lua_execn(m, 72, 1, 0, 2, (double[]){6500, 2000}); // no report follows (as captured)
+        lua_set(m, 72, 1, 5, 1000);
+        lua_execn(m, 72, 1, 2, 1, (double[]){50});
+        status(m, "01 04 02 08 02 00");
+        status(m, "01 04 02 08 03 32");
+        lua_execn(m, 72, 1, 0, 1, (double[]){2700});
+        status(m, "02 04 02 08 02 32 04 02 08 03 00");
+        lua_execn(m, 72, 1, 5, 1, (double[]){0}); // SwitchOff
+        check_frames("LED_CCT SetColorTemp* / SetValue / SwitchOff, per-channel ramps == capture",
+                     T_OUT("02", "0000", "00", "46") T_OUT("03", "0000", "00", "46")
+                     T_OUT("02", "0000", "64", "22") T_OUT("03", "0000", "64", "22")
+                     T_OUT("02", "c700", "32", "b3") T_OUT("03", "c700", "32", "b3")
+                     T_OUT("02", "ff00", "50", "e9") T_OUT("03", "ff00", "14", "ad")
+                     T_OUT("02", "fe01", "00", "b9") T_OUT("03", "fe01", "64", "dd")
+                     T_OUT("02", "3e00", "00", "78") T_OUT("03", "a600", "32", "d2")
+                     T_OUT("02", "fe01", "32", "8b") T_OUT("03", "fe01", "00", "b9")
+                     T_OUT("02", "6300", "00", "25") T_OUT("03", "1300", "00", "55"));
+        lua_execn(m, 72, 1, 2, 1, (double[]){200});
+        lua_execn(m, 72, 1, 0, 1, (double[]){3000});
+        check("LED_CCT SetColorTemp(3000): ColorTemp 3000, 92 %, Value 200",
+              s_feat[0] == 3000 && s_feat[1] == 92 && s_feat[2] == 200);
+        lua_execn(m, 72, 1, 1, 1, (double[]){33});
+        check("LED_CCT SetColorTempPercent(33): 5246 K", s_feat[0] == 5246 && s_feat[1] == 33);
+
+        // Hold*: on the module, towards targets from MaxValue / Value and the warm share
+        lua_set(m, 72, 1, 5, 0);
+        lua_execn(m, 72, 1, 0, 1, (double[]){4000});
+        lua_execn(m, 72, 1, 2, 1, (double[]){0});
+        status(m, "02 04 02 08 02 00 04 02 08 03 00");
+        s_now_us += 2000000;
+        frames_reset();
+        lua_execn(m, 72, 1, 6, 1, (double[]){3000});
+        timers_advance(210000);
+        lua_execn(m, 72, 1, 6, 1, (double[]){3000});
+        timers_advance(1500000);
+        lua_execn(m, 72, 1, 7, 1, (double[]){3000});
+        timers_advance(1500000);
+        lua_execn(m, 72, 1, 8, 1, (double[]){3000});
+        timers_advance(1500000);
+        check_frames("LED_CCT HoldValue / Up / Down (4000 K: 168 + 87) == capture",
+                     "aa05f01002060500022c0100001303000201a8da aa05f01002060500032c01000013030003015725 "
+                     "aa05f00e0213030002000013030003000052 "
+                     "aa05f01002060500022c0100001303000201a8da aa05f01002060500032c01000013030003015725 "
+                     "aa05f00e0213030002000013030003000052 "
+                     "aa05f01002060500022c01000013030002020071 aa05f01002060500032c01000013030003020071 "
+                     "aa05f00e0213030002000013030003000052 ");
+        posts_reset();
+        status(m, "02 04 02 08 02 1a 04 02 08 03 9c"); // after a hold: Value / colour from the module
+        check_posts("LED_CCT report after a hold: Warm/Cold, ColorTemp/%/Value, events",
+                    "CCT[3]=26 CCT[4]=156 CCT[0]=5957 CCT[1]=14 CCT[2]=182 CCT!1 CCT!0 CCT!2 ");
+        frames_reset();
+        s_now_us += 2000000;
+        lua_execn(m, 72, 1, 9, 1, (double[]){3000}); // HoldColorTemp: first = warmer
+        timers_advance(1500000);
+        status(m, "02 04 02 08 02 45 04 02 08 03 72");
+        lua_execn(m, 72, 1, 10, 1, (double[]){3000}); // HoldColorTempWarm
+        timers_advance(1500000);
+        status(m, "02 04 02 08 02 6d 04 02 08 03 4a");
+        lua_execn(m, 72, 1, 11, 1, (double[]){3000}); // HoldColorTempCool
+        timers_advance(1500000);
+        check_frames("LED_CCT HoldColorTemp / Warm / Cool (towards Value) == capture",
+                     "aa05f01002060500022c0100001303000201b6c4 aa05f01002060500032c01000013030003020071 "
+                     "aa05f00e0213030002000013030003000052 "
+                     "aa05f01002060500022c0100001303000201b7c5 aa05f01002060500032c01000013030003020071 "
+                     "aa05f00e0213030002000013030003000052 "
+                     "aa05f01002060500022c01000013030002020071 aa05f01002060500032c0100001303000301b7c5 "
+                     "aa05f00e0213030002000013030003000052 ");
+        status(m, "02 04 02 08 02 47 04 02 08 03 6f");
+        lua_set(m, 72, 1, 5, 1000);
+        frames_reset();
+        lua_execn(m, 72, 1, 2, 1, (double[]){0});
+        check_frames("LED_CCT SetValue(0) from the module's 71 + 111, RampTime 1000 == capture",
+                     T_OUT("02", "0001", "00", "47") T_OUT("03", "a300", "00", "e5"));
+#undef T_OUT
         m->drv->deinit(m);
+#undef R_RAMP
+#undef R_0
+#undef R_V
     }
 
     lua_close(L);

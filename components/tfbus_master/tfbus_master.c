@@ -2,12 +2,23 @@
  * @file tfbus_master.c
  * @brief TFBUS bus master: module registry, Lua class hooks, discovery and the polling bus task.
  *
- * Threads: the Lua task declares modules / IO objects (class hooks) and calls drivers' io_* hooks
- * under s_drv_lock; the bus task owns the UART, runs discovery, polls modules and runs deferred
- * driver work. Commands from any task go through the s_cmds queue.
+ * The CLU owns the module list: modules found by DISCOVER (or declared in OM.LUA but not answering
+ * it) are kept with their bus address in NVS, so addresses survive reboots and OM, which builds
+ * OM.LUA from the CLU's tfbusDevices, stays in sync. OM.LUA only binds names to SNs. Modules are
+ * dropped only by req_refresh_modules (not found on the bus), and even then not forgotten: the
+ * entry stays in place marked gone, keeping its address, so a module that comes back gets the
+ * same address; a new module takes a gone one's slot only when no address is left. Entries never
+ * move, since drivers and deferred calls keep pointers to them. The bus runs from boot whatever
+ * Lua does; driver init waits for SYSTEM.Init (the module configuration).
+ *
+ * Threads: the Lua task binds modules / IO objects (class hooks) and calls drivers' io_* hooks
+ * under s_drv_lock; the bus task owns the UART, runs discovery, polls modules and runs driver
+ * callbacks and deferred driver work under the same lock. Commands from any task go through the
+ * s_cmds queue.
  */
 #include "tfbus_master.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "clu_lua.h"
@@ -17,6 +28,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lauxlib.h"
+#include "nvs.h"
 #include "tfbus_uart.h"
 
 static const char *TAG = "tfbus";
@@ -32,6 +44,8 @@ static const char *TAG = "tfbus";
 #define DISCOVER_TIMEOUT_MS 40
 #define DISCOVER_RETRIES    3
 #define SUMMARY_EVERY_MS    600000 // "round N: x/y online" heartbeat (also logged on change)
+#define NVS_NS              "tfbus"
+#define NVS_KEY             "mods"
 
 /** @brief Queued CLU->module frame. */
 typedef struct {
@@ -57,15 +71,19 @@ static QueueHandle_t s_defer;
 static SemaphoreHandle_t s_drv_lock;
 static TaskHandle_t s_task;
 static volatile bool s_restart;
+static volatile bool s_discover = true; // run discovery on the next bus-task cycle (boot, refresh)
 static volatile bool s_refresh; // next discovery was requested by req_refresh_modules
-// Bus task idle and touching no module state until tfbus_master_start() (boot, Lua reload).
-static volatile bool s_park = true;
+// Bus task touching no module state (tfbus_master_reset() clearing driver state).
+static volatile bool s_park;
 static volatile bool s_parked;
+// SYSTEM.Init ran in this Lua VM: module configuration known, drivers may init the modules.
+static volatile bool s_started;
+static volatile bool s_reinit; // run driver init for all modules before the next poll round
 static const tfbus_driver_t *s_drivers[MAX_DRIVERS];
 static int s_ndrivers;
 
-// Modules found on the bus (CONFIG.JSON "tfbusDevices"): OM.LUA modules that answered plus new
-// ones reported by DISCOVER. Rebuilt by every discovery; read under s_lock.
+// Modules found on the bus (CONFIG.JSON "tfbusDevices"), in address order. Rebuilt by every
+// discovery; read under s_lock.
 static tfbus_device_t s_dev[TFBUS_MAX_MODULES];
 static int s_ndev;
 static SemaphoreHandle_t s_scan_done;
@@ -94,15 +112,21 @@ int tfbus_master_count(void)
     return s_nmod;
 }
 
+/** @brief Slot holds a module on the bus side (not empty, not gone after a refresh). */
+static bool live(const tfbus_module_t *m)
+{
+    return m->sn && !m->gone;
+}
+
 tfbus_module_t *tfbus_master_get(int i)
 {
-    return (i >= 0 && i < s_nmod) ? &s_mod[i] : NULL;
+    return (i >= 0 && i < s_nmod && live(&s_mod[i])) ? &s_mod[i] : NULL;
 }
 
 tfbus_module_t *tfbus_master_find_sn(uint32_t sn)
 {
-    for (int i = 0; i < s_nmod; i++) {
-        if (s_mod[i].sn == sn) {
+    for (int i = 0; i < s_nmod && sn; i++) {
+        if (live(&s_mod[i]) && s_mod[i].sn == sn) {
             return &s_mod[i];
         }
     }
@@ -111,12 +135,166 @@ tfbus_module_t *tfbus_master_find_sn(uint32_t sn)
 
 tfbus_module_t *tfbus_master_find_name(const char *name)
 {
-    for (int i = 0; i < s_nmod; i++) {
-        if (strcmp(s_mod[i].name, name) == 0) {
+    for (int i = 0; i < s_nmod && name[0]; i++) {
+        if (live(&s_mod[i]) && strcmp(s_mod[i].name, name) == 0) {
             return &s_mod[i];
         }
     }
     return NULL;
+}
+
+/** @brief Module as stored in NVS (blob NVS_NS/NVS_KEY, one per registry entry). */
+typedef struct __attribute__((packed)) {
+    uint32_t sn;
+    uint8_t addr; // | SAVED_GONE
+    uint8_t hw_type, fw_type, fw_api_ver;
+} saved_mod_t;
+#define SAVED_GONE 0x80
+
+/** @brief Write the registry (gone entries too) to NVS (any task, not under s_lock). */
+static void reg_save(void)
+{
+    static saved_mod_t buf[TFBUS_MAX_MODULES];
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    int n = 0;
+    for (int i = 0; i < s_nmod; i++) {
+        const tfbus_module_t *m = &s_mod[i];
+        if (m->sn) {
+            buf[n++] = (saved_mod_t){.sn = m->sn, .addr = (uint8_t)(m->addr | (m->gone ? SAVED_GONE : 0)),
+                                     .hw_type = m->hw_type, .fw_type = m->fw_type, .fw_api_ver = m->fw_api_ver};
+        }
+    }
+    xSemaphoreGive(s_lock);
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGE(TAG, "registry not saved (NVS)");
+        return;
+    }
+    if (nvs_set_blob(h, NVS_KEY, buf, (size_t)n * sizeof *buf) != ESP_OK || nvs_commit(h) != ESP_OK) {
+        ESP_LOGE(TAG, "registry not saved (NVS write)");
+    }
+    nvs_close(h);
+}
+
+/** @brief Load the registry saved by reg_save() (tfbus_master_init()). */
+static void reg_load(void)
+{
+    static saved_mod_t buf[TFBUS_MAX_MODULES];
+    size_t len = sizeof buf;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+        return;
+    }
+    if (nvs_get_blob(h, NVS_KEY, buf, &len) != ESP_OK) {
+        len = 0;
+    }
+    nvs_close(h);
+    for (size_t i = 0; i < len / sizeof *buf; i++) {
+        const saved_mod_t *e = &buf[i];
+        uint8_t addr = e->addr & ~SAVED_GONE;
+        bool dup = !e->sn || !addr || addr > TFBUS_MAX_MODULES;
+        for (int j = 0; j < s_nmod && !dup; j++) {
+            dup = s_mod[j].sn == e->sn || s_mod[j].addr == addr;
+        }
+        if (dup) {
+            continue; // corrupt entry: the module is found again by DISCOVER
+        }
+        tfbus_module_t *m = &s_mod[s_nmod++];
+        memset(m, 0, sizeof *m);
+        m->sn = e->sn;
+        m->addr = addr;
+        m->gone = (e->addr & SAVED_GONE) != 0;
+        m->hw_type = e->hw_type;
+        m->fw_type = e->fw_type;
+        m->fw_api_ver = e->fw_api_ver;
+        m->drv = driver_for(m->hw_type);
+    }
+    ESP_LOGI(TAG, "%d module(s) in the saved registry", s_nmod);
+}
+
+/**
+ * @brief Add a module to the registry, or bring a gone one back. Under s_lock.
+ *
+ * A gone entry with this SN (dropped by a refresh) comes back with its old address. A new module
+ * gets the lowest address no entry holds, in an empty slot; with none left it takes over the
+ * slot and address of a gone entry.
+ *
+ * @return The entry; NULL if all addresses are held by modules on the bus.
+ */
+static tfbus_module_t *mod_add(uint32_t sn, uint8_t hw_type)
+{
+    uint64_t used = 0;
+    int slot = s_nmod < TFBUS_MAX_MODULES ? s_nmod : -1, gone = -1;
+    for (int i = 0; i < s_nmod; i++) {
+        tfbus_module_t *m = &s_mod[i];
+        if (m->sn == sn && m->gone) {
+            m->gone = false;
+            m->hw_type = hw_type;
+            m->drv = driver_for(hw_type);
+            m->fails = 0;
+            return m;
+        }
+        if (m->sn) {
+            used |= 1ULL << m->addr;
+        } else if (slot == s_nmod || slot < 0) {
+            slot = i;
+        }
+        if (m->gone && gone < 0) {
+            gone = i;
+        }
+    }
+    int addr = 1;
+    while (addr <= TFBUS_MAX_MODULES && (used & (1ULL << addr))) {
+        addr++;
+    }
+    if (slot < 0 || addr > TFBUS_MAX_MODULES) {
+        if (gone < 0) {
+            return NULL;
+        }
+        slot = gone; // registry full: forget the first gone module for good
+        addr = s_mod[gone].addr;
+        ESP_LOGI(TAG, "sn=%lu forgotten, addr %u reused", (unsigned long)s_mod[gone].sn, addr);
+    }
+    tfbus_module_t *m = &s_mod[slot];
+    memset(m, 0, sizeof *m);
+    m->hw_type = hw_type;
+    m->addr = (uint8_t)addr;
+    m->drv = driver_for(hw_type);
+    m->sn = sn; // last: the bus task skips slots with sn 0 and reads the rest without the lock
+    if (slot == s_nmod) {
+        s_nmod++;
+    }
+    return m;
+}
+
+/**
+ * @brief req_refresh_modules: drop a module not found on the bus (bus task).
+ *
+ * Driver deinit and context freed, Lua name cleared; the entry stays in place marked gone (SN,
+ * address kept, saved) so the module gets the same address if it comes back. Its Lua objects
+ * resolve to nothing from now on (io_module() by SN).
+ */
+static void mod_forget(tfbus_module_t *m)
+{
+    ESP_LOGW(TAG, "refresh: sn=%lu addr=%u not found, dropped", (unsigned long)m->sn, m->addr);
+    xSemaphoreTake(s_drv_lock, portMAX_DELAY);
+    if (m->drv_ctx && m->drv && m->drv->deinit) {
+        m->drv->deinit(m);
+    }
+    xSemaphoreGive(s_drv_lock);
+    vTaskDelay(pdMS_TO_TICKS(20)); // a driver timer callback that fired before deinit may still run
+    xSemaphoreTake(s_drv_lock, portMAX_DELAY);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    void *ctx = m->drv_ctx;
+    m->drv_ctx = NULL;
+    m->name[0] = 0;
+    m->online = false;
+    m->assigned = false;
+    m->status_len = 0;
+    m->gone = true;
+    xSemaphoreGive(s_lock);
+    xSemaphoreGive(s_drv_lock);
+    free(ctx);
 }
 
 static void drain_cmds(void);
@@ -160,6 +338,9 @@ static void run_deferred(void)
     }
     defer_t d;
     while (xQueueReceive(s_defer, &d, 0) == pdTRUE) {
+        if (!live(d.m)) {
+            continue; // module dropped by a refresh
+        }
         d.fn(d.m, d.arg, d.tag);
     }
     xSemaphoreGive(s_drv_lock);
@@ -169,10 +350,12 @@ static void run_deferred(void)
 // Lua class 2: OBJECT:new(2, sn, hwType, "snhex")
 // ---------------------------------------------------------------------------
 /**
- * @brief Lua class 2 hook: OBJECT:new(2, sn, hwType, "snhex") declares a bus module.
+ * @brief Lua class 2 hook: OBJECT:new(2, sn, hwType, "snhex") binds a Lua name to a bus module.
  *
- * Assigns the next bus address in declaration order and stores it as obj._addr. Re-declaring an
- * existing SN only follows the new Lua name. Non-TFBUS types (> 0xFF, e.g. Z-Wave) are skipped.
+ * The module normally is in the CLU's registry already (OM.LUA is built from tfbusDevices): only
+ * its name is bound and its address stored as obj._addr. A module the CLU does not know (never
+ * answered DISCOVER, registry lost) is added at the lowest free address and saved. Non-TFBUS types
+ * (> 0xFF, e.g. Z-Wave) are skipped.
  */
 static void module_on_new(lua_State *L, int obj)
 {
@@ -188,43 +371,31 @@ static void module_on_new(lua_State *L, int obj)
         return;
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    for (int i = 0; i < s_nmod; i++) {
-        tfbus_module_t *d = &s_mod[i];
-        if (d->sn == (uint32_t)sn) {
-            // Declared again (e.g. OBJECT:new(2, ...) via req:): keep the bus entry (address,
-            // driver state), only follow the new Lua name. No new address, no leaked slot.
-            if (d->hw_type != (uint8_t)hw) {
-                ESP_LOGW(TAG, "module sn=%lu redeclared with hw 0x%02x (was 0x%02x), keeping old",
-                         (unsigned long)d->sn, (unsigned)hw, d->hw_type);
-            }
-            strlcpy(d->name, clu_obj_name(L, obj), sizeof d->name);
-            uint8_t addr = d->addr;
-            xSemaphoreGive(s_lock);
-            lua_pushinteger(L, addr);
-            lua_setfield(L, obj, "_addr");
-            ESP_LOGI(TAG, "module sn=%lu redeclared, addr=%u", (unsigned long)sn, addr);
-            return;
-        }
+    tfbus_module_t *m = tfbus_master_find_sn((uint32_t)sn);
+    bool added = !m;
+    if (m && m->hw_type != (uint8_t)hw) {
+        ESP_LOGW(TAG, "module sn=%lu declared with hw 0x%02x, bus says 0x%02x: keeping the bus type",
+                 (unsigned long)m->sn, (unsigned)hw, m->hw_type);
     }
-    if (s_nmod >= TFBUS_MAX_MODULES) {
+    if (!m) {
+        m = mod_add((uint32_t)sn, (uint8_t)hw);
+    }
+    if (!m) {
         xSemaphoreGive(s_lock);
         ESP_LOGE(TAG, "too many modules");
         return;
     }
-    tfbus_module_t *m = &s_mod[s_nmod];
-    memset(m, 0, sizeof *m);
-    m->sn = (uint32_t)sn;
-    m->hw_type = (uint8_t)hw;
-    m->addr = (uint8_t)(s_nmod + 1);
     strlcpy(m->name, clu_obj_name(L, obj), sizeof m->name);
-    m->drv = driver_for(m->hw_type);
-    s_nmod++;
+    uint8_t addr = m->addr;
     xSemaphoreGive(s_lock);
+    if (added) {
+        reg_save();
+    }
 
-    lua_pushinteger(L, m->addr);
+    lua_pushinteger(L, addr);
     lua_setfield(L, obj, "_addr");
-    ESP_LOGI(TAG, "module %u sn=%lu hw=0x%02x addr=%u driver=%s", s_nmod, (unsigned long)m->sn,
-             m->hw_type, m->addr, m->drv ? m->drv->name : "-");
+    ESP_LOGI(TAG, "module %s sn=%lu hw=0x%02x addr=%u%s driver=%s", m->name, (unsigned long)m->sn,
+             m->hw_type, addr, added ? " (new, not found on the bus)" : "", m->drv ? m->drv->name : "-");
 }
 
 static const clu_class_ops_t s_module_ops = {.on_new = module_on_new};
@@ -401,6 +572,18 @@ static void drain_cmds(void)
 }
 
 /** @brief Update the online flag and notify the driver on change. */
+/** @brief Driver init for one module (bus task), under s_drv_lock; flushes the queued frames. */
+static void drv_init(tfbus_module_t *m)
+{
+    if (!live(m) || !m->drv || !m->drv->init) {
+        return;
+    }
+    xSemaphoreTake(s_drv_lock, portMAX_DELAY);
+    m->drv->init(m);
+    xSemaphoreGive(s_drv_lock);
+    drain_cmds(); // init runs in this task: flush before the queue fills up
+}
+
 static void set_online(tfbus_module_t *m, bool on)
 {
     if (m->online == on) {
@@ -409,7 +592,9 @@ static void set_online(tfbus_module_t *m, bool on)
     m->online = on;
     ESP_LOGW(TAG, "addr %u sn=%lu %s", m->addr, (unsigned long)m->sn, on ? "online" : "OFFLINE");
     if (m->drv && m->drv->on_online) {
+        xSemaphoreTake(s_drv_lock, portMAX_DELAY);
         m->drv->on_online(m, on);
+        xSemaphoreGive(s_drv_lock);
     }
 }
 
@@ -449,16 +634,18 @@ static tfbus_device_t *dev_get(uint32_t sn)
 /**
  * @brief DISCOVER loop (broadcast type 0x08).
  *
- * Every still-unaddressed module answers SN hwType fwType fwApiVer; the CLU addresses it (OM.LUA
- * address if known, else the next free one) so the next DISCOVER reaches the remaining ones.
- * Ends on silence or an empty ACK ("SEEK - no data - finish").
+ * Every still-unaddressed module answers SN hwType fwType fwApiVer; the CLU addresses it (its
+ * registry address, a new module gets the lowest free one) so the next DISCOVER reaches the
+ * remaining ones. Ends on silence or an empty ACK ("SEEK - no data - finish").
+ *
+ * @return true if the registry changed (to be saved).
  */
-static void scan(void)
+static bool scan(void)
 {
     uint8_t f[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
     size_t n = tfbus_discover(f, sizeof f);
-    uint8_t next_addr = (uint8_t)(s_nmod + 1);
     int garbled = 0;
+    bool added = false;
     for (int found = 0; found < TFBUS_MAX_MODULES;) {
         int r = tfbus_uart_transact(f, n, rx, sizeof rx, DISCOVER_TIMEOUT_MS);
         const uint8_t *pl;
@@ -478,8 +665,18 @@ static void scan(void)
             break; // plain ACK: no (more) unaddressed modules
         }
         found++;
-        tfbus_module_t *m = tfbus_master_find_sn(id.sn);
         xSemaphoreTake(s_lock, portMAX_DELAY);
+        tfbus_module_t *m = tfbus_master_find_sn(id.sn);
+        bool is_new = !m; // or gone: back with its old address
+        if (!m) {
+            m = mod_add(id.sn, id.hw_type);
+        }
+        if (m && (m->fw_type != id.fw_type || m->fw_api_ver != id.fw_api_ver)) {
+            m->fw_type = id.fw_type;
+            m->fw_api_ver = id.fw_api_ver;
+            added = true; // identity changed (firmware update): save it
+        }
+        added |= is_new && m;
         tfbus_device_t *d = dev_get(id.sn);
         if (d) {
             d->hw_type = id.hw_type;
@@ -489,30 +686,23 @@ static void scan(void)
         }
         xSemaphoreGive(s_lock);
         ESP_LOGI(TAG, "DISCOVER: sn=%08lx hw=0x%02x fwType=%u fwApiVer=%u%s", (unsigned long)id.sn,
-                 id.hw_type, id.fw_type, id.fw_api_ver, m ? "" : " (not in OM.LUA)");
-        bool ok;
-        if (m) {
-            ok = assign(m);
-        } else if (next_addr <= TFBUS_MAX_MODULES) {
-            tfbus_module_t tmp = {.sn = id.sn, .addr = next_addr++};
-            ok = assign(&tmp);
-            if (d && ok) {
-                d->addr = tmp.addr;
-            }
-        } else {
+                 id.hw_type, id.fw_type, id.fw_api_ver, is_new ? (m ? " (new)" : "") : "");
+        if (!m) {
             ESP_LOGW(TAG, "DISCOVER: no free address");
             break;
         }
-        if (!ok) {
+        if (!assign(m)) {
             break; // it would answer the next DISCOVER again
         }
     }
+    return added;
 }
 
 /**
- * @brief Identity of an addressed OM.LUA module that DISCOVER did not report.
+ * @brief Identity of an addressed registry module that DISCOVER did not report.
  *
- * Taken from the previous scan's entry (prev, may be NULL), else from what OM.LUA says. Under s_lock.
+ * Taken from the previous scan's entry (prev, may be NULL), else from the registry (saved DISCOVER
+ * identity, or the type OM.LUA declared). Under s_lock.
  */
 static void dev_fill(tfbus_device_t *d, const tfbus_module_t *m, const tfbus_device_t *prev, int nprev)
 {
@@ -529,7 +719,8 @@ static void dev_fill(tfbus_device_t *d, const tfbus_module_t *m, const tfbus_dev
         d->have_ver = p->have_ver;
     } else {
         d->hw_type = m->hw_type;
-        d->fw_type = m->hw_type == 0x03 ? 3 : 2; // SMART_PANEL fwType 3, IO modules 2
+        d->fw_type = m->fw_type ? m->fw_type : m->hw_type == 0x03 ? 3 : 2; // SMART_PANEL 3, IO 2
+        d->fw_api_ver = m->fw_api_ver;
     }
 }
 
@@ -558,15 +749,24 @@ static void version_query(tfbus_device_t *d, uint8_t addr)
     }
 }
 
+/** @brief qsort: tfbusDevices in address order (the CLU's module order), unaddressed last. */
+static int dev_cmp(const void *a, const void *b)
+{
+    unsigned x = ((const tfbus_device_t *)a)->addr, y = ((const tfbus_device_t *)b)->addr;
+    x = x ? x : 256;
+    y = y ? y : 256;
+    return (x > y) - (x < y);
+}
+
 /**
- * @brief Full bus discovery; rebuilds s_dev.
+ * @brief Full bus discovery; rebuilds s_dev, adds new modules to the registry (saved).
  *
- * Boot / reload: RESET, SEEK, DISCOVER loop, then ADDR_ASSIGN by SN for the OM.LUA modules that
- * did not answer DISCOVER.
+ * Boot: RESET, SEEK, DISCOVER loop, then ADDR_ASSIGN by SN for the registry modules that did not
+ * answer DISCOVER.
  *
  * Refresh (req_refresh_modules, OM "Clear CLU"): what the real CLU sends (capture
  * test/host/fixtures/capture_refresh_modules_clu2.txt): RESET, ~1.2 s, no SEEK, ADDR_ASSIGN by
- * SN for the OM.LUA modules first, then DISCOVER for whatever is still unaddressed (new modules;
+ * SN for the registry modules first, then DISCOVER for whatever is still unaddressed (new modules;
  * known ones that missed their ADDR_ASSIGN), then the rest again, then VERSION_QUERY. Assigning
  * first also means only leftovers answer DISCOVER, instead of every module colliding after RESET.
  *
@@ -577,7 +777,7 @@ static void discover(bool refresh)
     uint8_t f[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
     size_t n;
 
-    ESP_LOGI(TAG, "%s: %d module(s) in OM.LUA", refresh ? "refresh" : "discovery", s_nmod);
+    ESP_LOGI(TAG, "%s: %d module(s) in the registry", refresh ? "refresh" : "discovery", s_nmod);
     n = tfbus_reset(f, sizeof f, TFBUS_BROADCAST);
     tfbus_uart_send(f, n);
     vTaskDelay(pdMS_TO_TICKS(refresh ? REFRESH_SETTLE_MS : RESET_SETTLE_MS));
@@ -591,12 +791,15 @@ static void discover(bool refresh)
 
     for (int i = 0; i < s_nmod; i++) {
         tfbus_module_t *m = &s_mod[i];
+        if (!live(m)) {
+            continue;
+        }
         m->online = false;
         m->fails = 0;
         m->status_len = 0;
         m->assigned = false;
     }
-    // Identity from the previous scan. On refresh the OM.LUA modules are addressed before
+    // Identity from the previous scan. On refresh the registry modules are addressed before
     // DISCOVER, so they never report hwType/fwType/fwApiVer, and old SMART_PANELs (fwApiVer < 5)
     // do not answer VERSION_QUERY either: without this, config.txt would say fwApiVer 0 and OM
     // finds no device interface ("fv00"). The real CLU keeps reporting 03:03:04 after a refresh.
@@ -608,25 +811,36 @@ static void discover(bool refresh)
     xSemaphoreGive(s_lock);
     if (refresh) {
         for (int i = 0; i < s_nmod; i++) {
-            assign(&s_mod[i]); // failures retried after DISCOVER
+            if (live(&s_mod[i])) {
+                assign(&s_mod[i]); // failures retried after DISCOVER
+            }
         }
     }
-    scan();
-    // OM.LUA modules that did not answer DISCOVER (e.g. real Grenton modules): by SN, as before.
+    bool changed = scan();
+    // Registry modules that did not answer DISCOVER (e.g. real Grenton modules): by SN, as before.
     for (int i = 0; i < s_nmod; i++) {
         tfbus_module_t *m = &s_mod[i];
-        if (!m->assigned && !assign(m)) {
+        if (live(m) && !m->assigned && !assign(m)) {
             ESP_LOGW(TAG, "ADDR_ASSIGN sn=%lu addr=%u: no ACK", (unsigned long)m->sn, m->addr);
         }
     }
+    // req_refresh_modules is the only way out of the registry: what is not on the bus now is
+    // dropped (a module that is merely offline for a while stays until then; OM blacklists it
+    // meanwhile), keeping its address for when it comes back.
+    for (int i = 0; refresh && i < s_nmod; i++) {
+        if (live(&s_mod[i]) && !s_mod[i].assigned) {
+            mod_forget(&s_mod[i]);
+            changed = true;
+        }
+    }
     for (int i = 0; i < s_nmod; i++) {
         tfbus_module_t *m = &s_mod[i];
-        if (!m->assigned) {
+        if (!live(m) || !m->assigned) {
             continue;
         }
         xSemaphoreTake(s_lock, portMAX_DELAY);
         tfbus_device_t *d = dev_get(m->sn);
-        if (d && !d->hw_type) { // not reported by DISCOVER: last scan's identity, else OM.LUA
+        if (d && !d->hw_type) { // not reported by DISCOVER: last scan's identity, else the registry
             dev_fill(d, m, prev, nprev);
         }
         if (d) {
@@ -639,6 +853,12 @@ static void discover(bool refresh)
         if (s_dev[i].addr) {
             version_query(&s_dev[i], s_dev[i].addr);
         }
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    qsort(s_dev, (size_t)s_ndev, sizeof *s_dev, dev_cmp);
+    xSemaphoreGive(s_lock);
+    if (changed) {
+        reg_save();
     }
     ESP_LOGI(TAG, "discovery: %d module(s) on the bus", s_ndev);
 }
@@ -661,9 +881,8 @@ static void rejoin(tfbus_module_t *m)
         return;
     }
     ESP_LOGI(TAG, "addr %u sn=%lu rejoined", m->addr, (unsigned long)m->sn);
-    if (m->drv && m->drv->init) {
-        m->drv->init(m);
-        drain_cmds();
+    if (s_started) {
+        drv_init(m);
     }
     // Absent at the last discovery (plugged in later): list it in tfbusDevices now, so
     // CONFIG.JSON / config.txt do not wait for the next req_refresh_modules.
@@ -730,20 +949,24 @@ static void poll_module(tfbus_module_t *m)
     }
     // Button events etc. arrive as repeated queued records: drivers see every reply.
     if (m->drv && m->drv->on_status) {
+        xSemaphoreTake(s_drv_lock, portMAX_DELAY);
         m->drv->on_status(m, pl, plen);
+        xSemaphoreGive(s_drv_lock);
     }
 }
 
 /**
- * @brief Bus task: park until started, discover, init drivers, then poll round-robin until restarted.
+ * @brief Bus task: discover, then poll the registry round-robin until restarted.
  *
- * Queued commands and deferred driver calls are serviced between polls; offline modules get a
- * rejoin attempt every OFFLINE_POLL_EVERY rounds.
+ * Runs from tfbus_master_init(), whatever Lua does. Driver init runs once SYSTEM.Init gave the
+ * module configuration (tfbus_master_start()), and again after every discovery (RESET) from then
+ * on. Queued commands and deferred driver calls are serviced between polls; offline modules get a
+ * rejoin attempt every OFFLINE_POLL_EVERY rounds. Parked only while tfbus_master_reset() frees
+ * the driver state.
  */
 static void bus_task(void *arg)
 {
     for (;;) {
-        // Wait for SYSTEM.Init (modules are known only after OM.LUA ran).
         if (s_park) {
             s_parked = true;
             while (s_park) {
@@ -752,38 +975,46 @@ static void bus_task(void *arg)
             s_parked = false;
         }
         s_restart = false;
-        bool refresh = s_refresh;
-        s_refresh = false;
-        discover(refresh);
-        if (s_scan_cb) {
-            s_scan_cb();
+        if (s_discover) {
+            s_discover = false;
+            bool refresh = s_refresh;
+            s_refresh = false;
+            discover(refresh);
+            if (s_scan_cb) {
+                s_scan_cb();
+            }
+            xSemaphoreGive(s_scan_done);
+            // First round before init, like the real CLU.
+            for (int i = 0; i < s_nmod; i++) {
+                if (live(&s_mod[i])) {
+                    poll_module(&s_mod[i]);
+                }
+            }
+            s_reinit |= s_started; // the RESET cleared the modules' configuration
         }
-        xSemaphoreGive(s_scan_done);
         if (s_nmod == 0) {
-            ESP_LOGI(TAG, "no modules in OM.LUA, bus idle");
+            ESP_LOGI(TAG, "no modules, bus idle");
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
             continue;
-        }
-
-        // First round before init, like the real CLU.
-        for (int i = 0; i < s_nmod; i++) {
-            poll_module(&s_mod[i]);
-        }
-        for (int i = 0; i < s_nmod; i++) {
-            if (s_mod[i].drv && s_mod[i].drv->init) {
-                s_mod[i].drv->init(&s_mod[i]);
-                drain_cmds(); // init runs in this task: flush before the queue fills up
-            }
         }
 
         uint32_t round = 0;
         int last_online = -1;
         TickType_t last_summary = 0;
         while (!s_restart) {
+            if (s_reinit) {
+                s_reinit = false;
+                for (int i = 0; i < s_nmod; i++) {
+                    drv_init(&s_mod[i]);
+                }
+            }
             for (int i = 0; i < s_nmod && !s_restart; i++) {
                 run_deferred(); // driver timer work queues frames: send them right after
                 drain_cmds();
                 tfbus_module_t *m = &s_mod[i];
+                if (!live(m)) {
+                    continue; // dropped by a refresh
+                }
                 if (!m->online && m->fails >= OFFLINE_AFTER) {
                     if (round % OFFLINE_POLL_EVERY == 0) {
                         rejoin(m);
@@ -825,18 +1056,21 @@ void tfbus_master_init(void)
             clu_lua_register_class(c, &s_io_ops);
         }
     }
+    reg_load();
     xTaskCreatePinnedToCore(bus_task, "tfbus", 6144, NULL, 10, &s_task, 1);
 }
 
 void tfbus_master_start(void)
 {
-    s_park = false;
-    s_restart = true;
-    xTaskNotifyGive(s_task);
+    s_started = true;
+    s_reinit = true;
+    xTaskNotifyGive(s_task); // wakes an idle bus (modules only just declared)
 }
 
 bool tfbus_master_reset(uint32_t timeout_ms)
 {
+    s_started = false;
+    s_reinit = false;
     s_park = true;
     s_restart = true;
     xTaskNotifyGive(s_task);
@@ -857,16 +1091,21 @@ bool tfbus_master_reset(uint32_t timeout_ms)
     // A driver esp_timer callback that fired just before deinit may still be running and using
     // its context: let it finish before the context goes away.
     vTaskDelay(pdMS_TO_TICKS(20));
+    // Free the driver state and the Lua names; the modules and their addresses stay (removed only
+    // by req_refresh_modules).
     xSemaphoreTake(s_lock, portMAX_DELAY);
     for (int i = 0; i < s_nmod; i++) {
-        free(s_mod[i].drv_ctx);
-        memset(&s_mod[i], 0, sizeof s_mod[i]);
+        tfbus_module_t *m = &s_mod[i];
+        free(m->drv_ctx);
+        m->drv_ctx = NULL;
+        m->name[0] = 0;
     }
-    s_nmod = 0;
     xSemaphoreGive(s_lock);
-    xQueueReset(s_cmds); // frames queued for the old module set
+    xQueueReset(s_cmds); // frames queued for the old drivers
     xQueueReset(s_defer); // deferred calls point at the freed driver contexts
-    ESP_LOGI(TAG, "reset: module registry cleared");
+    ESP_LOGI(TAG, "reset: driver state cleared");
+    s_park = false; // polling goes on; driver init waits for the next tfbus_master_start()
+    xTaskNotifyGive(s_task);
     return true;
 }
 
@@ -882,6 +1121,7 @@ bool tfbus_master_refresh(uint32_t timeout_ms)
     }
     xSemaphoreTake(s_scan_done, 0); // drop a stale completion
     s_refresh = true;
+    s_discover = true;
     s_restart = true;
     xTaskNotifyGive(s_task);
     return xSemaphoreTake(s_scan_done, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;

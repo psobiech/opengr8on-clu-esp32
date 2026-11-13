@@ -164,7 +164,7 @@ uint32_t udp_server_remote_exec(uint32_t ip, const char *s) { return 0; }
 
 // ---------------------------------------------------------------- tests
 #if CONFIG_CLU_TFBUS
-#define BUS_BOOT "uart drivers master_init on_scan "
+#define BUS_BOOT "uart drivers on_scan master_init "
 #else
 #define BUS_BOOT ""
 #endif
@@ -223,9 +223,9 @@ int main(void)
     ip_event_got_ip_t ip = {.ip_info.ip.addr = 0x1401a8c0};
     s_log[0] = 0;
     s_ip_handler(NULL, IP_EVENT, IP_EVENT_STA_GOT_IP, &ip);
-    check_log("WiFi got IP: setup window armed, SNTP polls now", "net_up sntp_restart ");
+    check_log("WiFi got IP: setup window armed, SNTP polls now", "net_up sntp_restart mqtt_start ");
     s_ip_handler(NULL, IP_EVENT, IP_EVENT_ETH_GOT_IP, &ip);
-    check_log("Ethernet got IP: the same", "net_up sntp_restart ");
+    check_log("Ethernet got IP: the same", "net_up sntp_restart mqtt_start ");
     wifi_event_sta_disconnected_t dis = {.reason = 201, .rssi = -80};
     s_log[0] = 0;
     s_wifi_handler(NULL, WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &dis);

@@ -387,6 +387,17 @@ int main(void)
     check("empty CA file: certificate bundle", !s_mc.broker.verification.certificate);
     unlink(ca);
 
+    // ---- network up before clu_mqtt_init() (IP event first): remembered, connected by init
+    reconfigure("mqtt://early.lan");
+    s_lock = NULL;
+    int inits = s_inits;
+    clu_mqtt_start();
+    check("start before init: nothing yet", s_inits == inits && !s_running);
+    clu_mqtt_init(&cfg);
+    check("init after an early start: connects", s_inits == inits + 1 && s_running);
+    clu_mqtt_start(); // SYSTEM.Init later
+    check("SYSTEM.Init after the IP event: no second client", s_inits == inits + 1 && host_mutex_held == 0);
+
     lua_close(L);
     free(s_ca_pem);
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

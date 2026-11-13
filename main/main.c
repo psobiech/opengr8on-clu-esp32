@@ -53,7 +53,7 @@ static const char *TAG = "main";
 #endif
 
 /**
- * @brief IP event handler (WiFi STA / Ethernet got an address): arm the setup window, poll SNTP.
+ * @brief IP event handler (WiFi STA / Ethernet got an address): arm the setup window, poll SNTP, start MQTT.
  */
 static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -61,6 +61,7 @@ static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
     ESP_LOGI(TAG, "%s IP " IPSTR, id == IP_EVENT_STA_GOT_IP ? "WiFi" : "Ethernet", IP2STR(&e->ip_info.ip));
     udp_server_net_up();
     esp_sntp_restart(); // first poll now instead of at the next retry after a failed early one
+    clu_mqtt_start(); // MQTT does not wait for the Lua scripts (SYSTEM.Init)
 }
 
 #if CONFIG_CLU_WIFI
@@ -220,7 +221,8 @@ static void on_clu_feature(int idx, const char *str, double num)
 }
 
 /**
- * @brief clu_lua_cfg_t::on_reload: forget the bus modules so the next OM.LUA declares them again.
+ * @brief clu_lua_cfg_t::on_reload: drop the bus drivers' state and Lua names (modules and their
+ * addresses stay; polling goes on).
  *
  * Allows for a full discovery (RESET settle, ADDR_ASSIGN retries, first round) still in progress.
  */
@@ -234,7 +236,7 @@ static bool on_lua_reload(void)
 }
 
 /**
- * @brief clu_lua_cfg_t::on_init (SYSTEM.Init): OM.LUA has declared everything -> start bus and MQTT.
+ * @brief clu_lua_cfg_t::on_init (SYSTEM.Init): OM.LUA has configured everything -> driver init, start MQTT.
  */
 static void on_lua_init(void)
 {
@@ -282,8 +284,8 @@ void app_main(void)
     clu_localio_start(); // answers the bus frames for the on-board IO modules
 #endif
     tfbus_drivers_register_all();
-    tfbus_master_init();
     tfbus_master_on_scan(clu_state_write_config_files); // CONFIG.JSON tfbusDevices
+    tfbus_master_init(); // bus scan starts now, independent of MAIN.LUA / OM.LUA
 #endif
 
     net_start(); // does not wait for an IP: see the file comment

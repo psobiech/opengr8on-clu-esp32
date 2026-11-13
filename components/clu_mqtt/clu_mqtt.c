@@ -18,6 +18,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "mqtt_client.h"
 #include "sdkconfig.h"
 
@@ -61,6 +62,7 @@ static char s_client_id[48];
 static char *s_ca_pem;
 static bool s_enabled = true; // UseCloud interface default
 static bool s_started;
+static SemaphoreHandle_t s_lock; // apply(): Lua task (UseCloud, SYSTEM.Init) vs IP event
 static bool s_running;
 static volatile bool s_connected;
 static volatile int s_gen; // bumped on every (re)connect: the Lua side republishes everything
@@ -221,8 +223,8 @@ static bool client_create(void)
     return true;
 }
 
-/** @brief Start or stop the connection to match started && UseCloud && broker configured. */
-static void apply(void)
+/** @brief Start or stop the connection to match started && UseCloud && broker configured. Under s_lock. */
+static void apply_locked(void)
 {
     bool want = s_started && s_enabled && CONFIG_CLU_MQTT_BROKER_URI[0];
     if (want == s_running) {
@@ -246,6 +248,17 @@ static void apply(void)
     }
 }
 
+/** @brief apply_locked() under s_lock; no-op before clu_mqtt_init() (which applies itself). */
+static void apply(void)
+{
+    if (!s_lock) {
+        return;
+    }
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    apply_locked();
+    xSemaphoreGive(s_lock);
+}
+
 void clu_mqtt_set_enabled(bool on)
 {
     s_enabled = on;
@@ -254,8 +267,9 @@ void clu_mqtt_set_enabled(bool on)
 
 void clu_mqtt_start(void)
 {
+    bool first = !s_started;
     s_started = true;
-    if (!CONFIG_CLU_MQTT_BROKER_URI[0]) {
+    if (first && !CONFIG_CLU_MQTT_BROKER_URI[0]) {
         ESP_LOGI(TAG, "no broker configured (menuconfig CLU_MQTT_BROKER_URI), MQTT off");
     }
     apply();
@@ -355,4 +369,8 @@ void clu_mqtt_init(const clu_mqtt_cfg_t *cfg)
     }
     s_rx = xQueueCreate(RX_QUEUE, sizeof(rx_msg_t *));
     clu_lua_register_ext(s_fns, mqtt_lua_start, mqtt_lua_end - mqtt_lua_start - 1, "=mqtt");
+    s_lock = xSemaphoreCreateMutex();
+    if (s_started) {
+        apply(); // network came up before init
+    }
 }

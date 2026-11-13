@@ -52,9 +52,12 @@ int clu_diag_write(const char *ip)
             CLU_HW_VERSION, CLU_FW_TYPE, CLU_FW_API_VER, CONFIG_CLU_FW_VERSION);
     tfbus_device_t *dev = calloc(TFBUS_MAX_MODULES, sizeof *dev);
     int ndev = dev ? tfbus_master_devices(dev, TFBUS_MAX_MODULES) : 0;
-    int n = tfbus_master_count();
+    int n = tfbus_master_count(), out = 0;
     for (int i = 0; i < n; i++) {
         const tfbus_module_t *m = tfbus_master_get(i);
+        if (!m) {
+            continue; // slot freed by req_refresh_modules
+        }
         const tfbus_device_t *d = NULL;
         for (int j = 0; j < ndev && !d; j++) {
             d = dev[j].sn == m->sn ? &dev[j] : NULL;
@@ -67,7 +70,7 @@ int clu_diag_write(const char *ip)
                 "%s{\n\t\t\t\"sn\":\t%lu,\n\t\t\t\"status\":\t\"%s\",\n\t\t\t\"voltage\":\t0,\n\t\t\t\"fails\":\t%lu,\n"
                 "\t\t\t\"banned\":\tfalse,\n\t\t\t\"hwType\":\t%d,\n\t\t\t\"hwVer\":\t%u,\n"
                 "\t\t\t\"fwType\":\t%u,\n\t\t\t\"fwApiVer\":\t%u,\n\t\t\t\"fwVer\":\t\"%u.%u.%u\"\n\t\t}",
-                i ? ", " : "", (unsigned long)m->sn, m->online ? "OK" : "DISCONNECTED",
+                out++ ? ", " : "", (unsigned long)m->sn, m->online ? "OK" : "DISCONNECTED",
                 (unsigned long)m->fails_total, m->hw_type, hw_ver, fw_type, fw_api,
                 v ? d->ver[0] : 0, v ? d->ver[1] : 0, v ? d->ver[2] : 0);
     }

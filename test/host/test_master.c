@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "../../components/tfbus_master/tfbus_master.c"
+#include "fake_nvs.h"
 
 static int failures;
 
@@ -146,7 +147,7 @@ typedef struct {
     bool garble;       // DISCOVER reply with a bad XOR (several modules answering at once)
 } sim_mod_t;
 
-static sim_mod_t s_sim[4];
+static sim_mod_t s_sim[6];
 static int s_nsim;
 static char s_log[8192];
 static size_t s_loglen;
@@ -474,6 +475,7 @@ int main(void)
     lua_settop(L, 0);
 
     // ---- discovery: A present, B absent, C ignores the first ADDR_ASSIGN
+    s_started = true; // SYSTEM.Init ran: driver init allowed (rejoin)
     s_nsim = 2;
     s_sim[0] = (sim_mod_t){.sn = 0x13ab6c81, .present = true, .status = {1, 0x00, 1, 1, 0x05}, .status_len = 5};
     s_sim[1] = (sim_mod_t){.sn = 0x22222222, .present = true, .nack_assign = 1,
@@ -527,11 +529,15 @@ int main(void)
     {
         tfbus_device_t d[8];
         int nd = tfbus_master_devices(d, 8);
-        check("devices: C + new panel (DISCOVER ident) + A (VQ -> fwApiVer 2, fwVer 2.2.4, hwVer 3)",
-              nd == 3 && d[0].sn == 0x22222222 && d[0].hw_type == 3 && d[0].fw_type == 3 && d[0].fw_api_ver == 4 &&
-                  d[0].known && d[1].sn == 0x0f05f123 && !d[1].known && d[1].addr == 4 && d[1].hw_type == 3 &&
-                  d[2].sn == 0x13ab6c81 && d[2].have_ver && d[2].fw_api_ver == 2 && d[2].hw_ver == 3 &&
-                  d[2].ver[1] == 2 && d[2].ver[2] == 4);
+        check("devices in address order: A (VQ -> fwApiVer 2, fwVer 2.2.4, hwVer 3), C + new panel (DISCOVER ident)",
+              nd == 3 && d[0].sn == 0x13ab6c81 && d[0].have_ver && d[0].fw_api_ver == 2 && d[0].hw_ver == 3 &&
+                  d[0].ver[1] == 2 && d[0].ver[2] == 4 && d[1].sn == 0x22222222 && d[1].hw_type == 3 &&
+                  d[1].fw_type == 3 && d[1].fw_api_ver == 4 && d[1].known && d[2].sn == 0x0f05f123 &&
+                  d[2].known && d[2].addr == 4 && d[2].hw_type == 3);
+        check("new panel added to the registry at the lowest free address",
+              tfbus_master_count() == 4 && tfbus_master_get(3)->sn == 0x0f05f123 && tfbus_master_get(3)->addr == 4 &&
+                  tfbus_master_get(3)->fw_type == 3 && tfbus_master_get(3)->fw_api_ver == 4 &&
+                  !tfbus_master_get(3)->name[0]);
     }
     // ---- req_refresh_modules: real CLU order (no SEEK, ADDR_ASSIGN first, then DISCOVER).
     // C misses its first ADDR_ASSIGN (3 tries) and is picked up by DISCOVER; B is absent.
@@ -545,18 +551,31 @@ int main(void)
                                       "aaff02816cab130103 "          // A by SN
                                       "aaff02111111110255 aaff02111111110255 aaff02111111110255 " // B absent
                                       "aaff02222222220354 aaff02222222220354 aaff02222222220354 " // C no ACK
+                                      "aaff0223f1050f048b "          // panel (registry since last scan) by SN
                                       "aaff085d aaff02222222220354 " // C answers DISCOVER -> addr 3
-                                      "aaff085d aaff0223f1050f048b " // new panel -> next free address 4
                                       "aaff085d "                    // silence
                                       "aaff02111111110255 aaff02111111110255 aaff02111111110255 " // B retried
                                       "aa01f952 ";                   // VQ (panels fwApiVer 4 skipped)
-    check("refresh: RESET, ADDR_ASSIGN for OM.LUA modules, DISCOVER for leftovers, retry, VERSION_QUERY",
+    check("refresh: RESET, ADDR_ASSIGN for registry modules, DISCOVER for leftovers, retry, VERSION_QUERY",
           strcmp(s_log, want_refresh) == 0);
     if (strcmp(s_log, want_refresh) != 0) {
         printf("  got  %s\n", s_log);
     }
-    check("refresh: A, C, new panel addressed", tfbus_master_get(0)->assigned && !tfbus_master_get(1)->assigned &&
-                                                     tfbus_master_get(2)->assigned && s_sim[2].addr == 4);
+    {
+        const nvs_entry_t *e = nvs_peek(NVS_NS, NVS_KEY);
+        const saved_mod_t *sb = e ? (const saved_mod_t *)e->val + 1 : NULL;
+        check("refresh: A, C, new panel addressed; absent B dropped but kept (gone, address 2, saved)",
+              tfbus_master_get(0)->assigned && !tfbus_master_get(1) && tfbus_master_get(2)->assigned &&
+                  s_sim[2].addr == 4 && tfbus_master_count() == 4 && !tfbus_master_find_sn(0x11111111) &&
+                  s_mod[1].gone && s_mod[1].sn == 0x11111111 && s_mod[1].addr == 2 && !s_mod[1].name[0] &&
+                  e && e->len == 4 * sizeof(saved_mod_t) && sb->sn == 0x11111111 && sb->addr == (2 | SAVED_GONE));
+    }
+    // OM.LUA still declares B: back in its entry, with its old address
+    lua_module(0x11111111, 0x99, "mm_B");
+    check("dropped module declared again: same entry, address 2",
+          tfbus_master_get(1) && tfbus_master_get(1)->sn == 0x11111111 && tfbus_master_get(1)->addr == 2 &&
+              !s_mod[1].gone && tfbus_master_count() == 4);
+    lua_settop(L, 0);
     // ---- refresh where the OM.LUA panel C takes its ADDR_ASSIGN: it never answers DISCOVER, and
     // a SMART_PANEL < fwApiVer 5 does not answer VERSION_QUERY. Its identity must come from the
     // previous scan (03:03:04), not fall back to fwApiVer 0 (OM: no "fv00" device interface).
@@ -570,7 +589,7 @@ int main(void)
                                        "aaff02816cab130103 "          // A by SN
                                        "aaff02111111110255 aaff02111111110255 aaff02111111110255 " // B absent
                                        "aaff02222222220354 "          // C acks: no DISCOVER from it
-                                       "aaff085d aaff0223f1050f048b " // new panel
+                                       "aaff0223f1050f048b "          // panel by SN
                                        "aaff085d "
                                        "aaff02111111110255 aaff02111111110255 aaff02111111110255 "
                                        "aa01f952 ";                   // VQ for A only: C still fwApiVer 4
@@ -589,6 +608,9 @@ int main(void)
         check("refresh 2: C keeps hwType 3 / fwType 3 / fwApiVer 4 from the previous scan",
               c && c->hw_type == 3 && c->fw_type == 3 && c->fw_api_ver == 4 && c->known && c->addr == 3);
     }
+    check("refresh 2: B dropped again", !tfbus_master_get(1) && s_mod[1].gone);
+    lua_module(0x11111111, 0x99, "mm_B");
+    lua_settop(L, 0);
 
     s_nsim = 2;
     s_sim[0].ver_len = 0;
@@ -701,70 +723,156 @@ int main(void)
     drain_cmds();
     s_task = saved;
 
-    // ---- registry reset (Lua reload): driver deinit, contexts freed, queue dropped, bus parked
-    check("bus parked until tfbus_master_start()", s_park);
-    tfbus_master_start();
-    check("start unparks the bus", !s_park);
+    // ---- Lua reload: driver deinit, contexts and names freed, queue dropped; every module keeps
+    // its slot and address (offline C and the new panel too); the bus keeps running
+    check("registry: A, B, C and the new panel found by DISCOVER", tfbus_master_count() == 4 &&
+                                                                       tfbus_master_get(3)->sn == 0x0f05f123);
+    check("bus never parked outside a reset (independent of Lua)", !s_park);
     s_parked = false;
-    check("reset times out while the bus task is still running", !tfbus_master_reset(30) && tfbus_master_count() == 3);
+    check("reset times out while the bus task is still running", !tfbus_master_reset(30) && tfbus_master_count() == 4);
     s_parked = true; // the stubbed bus task never runs: pretend it parked
     tfbus_master_get(0)->drv_ctx = strdup("A");
     tfbus_master_get(1)->drv_ctx = strdup("B"); // driverless: freed without deinit
     tfbus_master_queue(f, n);
     drv_reset();
-    check("reset: registry cleared", tfbus_master_reset(30) && tfbus_master_count() == 0 && s_park);
+    nvs_reset();
+    check("reset: all modules kept with their address (offline ones too), bus running",
+          tfbus_master_reset(30) && tfbus_master_count() == 4 && tfbus_master_get(0)->addr == 1 &&
+              tfbus_master_get(1)->addr == 2 && tfbus_master_get(2)->addr == 3 && !tfbus_master_get(2)->online &&
+              tfbus_master_get(3)->addr == 4 && !s_park && !s_started && !nvs_peek(NVS_NS, NVS_KEY));
+    check("reset: driver contexts and Lua names freed",
+          !tfbus_master_get(0)->drv_ctx && !tfbus_master_get(1)->drv_ctx && !tfbus_master_get(0)->name[0]);
     check_drv("reset: deinit only for modules with a driver and a context", "deinit:1:A ");
     check("reset: queued frames dropped", s_cmds->n == 0);
     int A2 = lua_module(0x22222222, 0x1e, "mm_C");
+    int A3 = lua_module(0x13ab6c81, 0x1e, "mm_A");
     lua_getfield(L, A2, "_addr");
-    check("reload: modules addressed from 1 again", tfbus_master_count() == 1 && lua_tointeger(L, -1) == 1 &&
-                                                       tfbus_master_get(0)->drv_ctx == NULL);
+    lua_getfield(L, A3, "_addr");
+    check("reload: OM.LUA binds names to the kept modules, nothing added",
+          tfbus_master_count() == 4 && lua_tointeger(L, -1) == 1 && lua_tointeger(L, -2) == 3 &&
+              !strcmp(tfbus_master_get(0)->name, "mm_A") && !strcmp(tfbus_master_get(2)->name, "mm_C") &&
+              !nvs_peek(NVS_NS, NVS_KEY));
     lua_settop(L, 0);
+    // the panel leaves only through a refresh (white-box: its removal step)
+    tfbus_master_get(3)->drv_ctx = strdup("P");
+    tfbus_master_get(3)->drv = &s_fake;
+    drv_reset();
+    mod_forget(tfbus_master_get(3));
+    reg_save();
+    check_drv("refresh drop: driver deinit", "deinit:4:P ");
+    {
+        const nvs_entry_t *e = nvs_peek(NVS_NS, NVS_KEY);
+        check("refresh drop: entry kept as gone (SN, address 4), context freed, saved",
+              tfbus_master_count() == 4 && !tfbus_master_get(3) && !tfbus_master_find_sn(0x0f05f123) &&
+                  s_mod[3].gone && s_mod[3].sn == 0x0f05f123 && s_mod[3].addr == 4 && !s_mod[3].drv_ctx &&
+                  e && e->len == 4 * sizeof(saved_mod_t));
+    }
 
-    // ---- bus task: parked until tfbus_master_start()
+    // ---- reboot: the registry comes back from NVS with the same addresses, no names
+    {
+        tfbus_module_t saved_mod[4];
+        memcpy(saved_mod, s_mod, sizeof saved_mod);
+        s_nmod = 0;
+        reg_load();
+        check("reboot: registry restored (SN, address, type, driver), gone panel too",
+              s_nmod == 4 && s_mod[3].gone && s_mod[3].addr == 4 && s_mod[3].sn == 0x0f05f123 &&
+                  !s_mod[0].gone && s_mod[0].sn == 0x13ab6c81 && s_mod[0].addr == 1 && s_mod[1].addr == 2 &&
+                  s_mod[1].hw_type == 0x99 && !s_mod[1].drv && s_mod[2].sn == 0x22222222 && s_mod[2].addr == 3 &&
+                  s_mod[2].drv == &s_fake && !s_mod[0].name[0]);
+        // a corrupt blob (duplicate SN / address, address 0) is skipped entry by entry
+        nvs_entry_t *e = (nvs_entry_t *)nvs_peek(NVS_NS, NVS_KEY);
+        saved_mod_t bad[3] = {{.sn = 0x13ab6c81, .addr = 9}, {.sn = 0x55555555, .addr = 2}, {.sn = 0x66666666}};
+        memcpy(e->val + e->len, bad, sizeof bad);
+        e->len += sizeof bad;
+        s_nmod = 0;
+        reg_load();
+        check("reboot: corrupt entries skipped", s_nmod == 4);
+        memcpy(s_mod, saved_mod, sizeof saved_mod);
+        reg_save();
+    }
+
+    // ---- bus task at boot, no SYSTEM.Init (no / broken MAIN.LUA): discovery, new module added
+    // at the lowest free address and saved, CONFIG.JSON callback, polling; no driver init
     s_parked = false;
-    run_bus(10);
-    check("bus task: parks (waits for a notification) until started", s_bus_blocked && s_parked);
-
-    // ---- start: discovery, scan callback + completion, first round, driver init, polling rounds,
-    // deferred driver calls run between polls
-    s_deferred[0] = 0;
-    check("defer: call queued", tfbus_master_defer(defer_fn, tfbus_master_get(0), "t1", 7));
-    s_nsim = 2;
-    s_sim[0].present = false;
-    s_sim[1] = (sim_mod_t){.sn = 0x22222222, .present = true, .status = {1, 0x00, 1, 1, 0x07}, .status_len = 5};
+    s_nsim = 4;
+    s_sim[0] = (sim_mod_t){.sn = 0x13ab6c81, .present = true, .status = {1, 0x00, 1, 1, 0x05}, .status_len = 5};
+    s_sim[1] = (sim_mod_t){.sn = 0x11111111, .present = true, .status = {1, 0x00, 1, 1, 0x09}, .status_len = 5};
+    s_sim[2] = (sim_mod_t){.sn = 0x22222222, .present = true, .status = {1, 0x00, 1, 1, 0x07}, .status_len = 5};
+    s_sim[3] = (sim_mod_t){.sn = 0x0f05f124, .present = true, .discover = true, .ident = {0x1e, 2, 1},
+                           .status = {1, 0x00, 1, 1, 0x0a}, .status_len = 5};
     s_scans = 0;
     tfbus_master_on_scan(count_scan);
+    log_reset();
+    drv_reset();
+    s_discover = true; // boot
+    run_bus(3);
+    {
+        tfbus_device_t d[TFBUS_MAX_MODULES];
+        int nd = tfbus_master_devices(d, TFBUS_MAX_MODULES);
+        const nvs_entry_t *e = nvs_peek(NVS_NS, NVS_KEY);
+        check("boot: discovery (RESET, SEEK) without SYSTEM.Init, scan callback, completion signalled",
+              !s_parked && strncmp(s_log, "aaff0752 aaff2a7f ", 18) == 0 && s_scans == 1 && host_binary_given);
+        check("boot: new module added at address 5 (4 kept for the gone panel) and saved",
+              tfbus_master_count() == 5 && tfbus_master_get(4)->sn == 0x0f05f124 && tfbus_master_get(4)->addr == 5 &&
+                  tfbus_master_get(4)->fw_type == 2 && s_sim[3].addr == 5 && e && e->len == 5 * sizeof(saved_mod_t));
+        check("boot: tfbusDevices in address order, all known, gone panel not listed",
+              nd == 4 && d[0].addr == 1 && d[1].addr == 2 && d[2].addr == 3 && d[3].addr == 5 && d[3].known);
+        check("boot: modules polled without Lua, no driver init",
+              tfbus_master_get(4)->online && tfbus_master_get(0)->online && !strstr(s_drv, "init"));
+    }
+    s_scans = 0;
+    tfbus_master_on_scan(NULL);
+
+    // ---- SYSTEM.Init: driver init for all modules, no rediscovery; deferred calls between polls
+    strcpy(tfbus_master_get(2)->name, "mm_C");
+    s_deferred[0] = 0;
+    check("defer: call queued", tfbus_master_defer(defer_fn, tfbus_master_get(2), "t1", 7));
     drv_reset();
     log_reset();
-    s_while_blocked = tfbus_master_start; // the Lua task starts the bus while it is parked
-    run_bus(3);
-    s_bus_on_notify = true;
-    check("start: bus task unparked, discovery (RESET, SEEK), scan callback, completion signalled",
-          !s_parked && strncmp(s_log, "aaff0752 aaff2a7f ", 18) == 0 && s_scans == 1 && host_binary_given);
-    check_drv("start: first round before driver init, then one poll per round",
-              "online:1 status:1:5:01 init:1 status:1:5:01 status:1:5:01 status:1:5:01 ");
+    tfbus_master_start();
+    check("start: SYSTEM.Init flags the driver init", s_started && s_reinit);
+    run_bus(1);
+    check("start: no RESET / DISCOVER, polling goes on", !s_tx_count[TFBUS_T_DISCOVER] && !count_in_log("aaff0752 "));
+    check_drv("start: driver init for the modules with a driver, then the poll round",
+              "init:1 init:3 init:5 status:1:5:01 status:3:5:01 status:5:5:01 ");
     check("start: deferred call run by the bus task", strcmp(s_deferred, "mm_C:t1:7 ") == 0);
 
     // ---- module gone: offline after 3 missed polls, then only rejoin attempts every 20 rounds
     // (rounds 20..500 = 25 x 3 ADDR_ASSIGN tries); the "x/y online" summary runs at round 500
-    s_sim[1].present = false;
+    s_sim[2].present = false;
+    tfbus_module_t *mods[5];
+    for (int i = 0; i < 5; i++) {
+        mods[i] = &s_mod[i];
+    }
+    mods[0]->drv = mods[4]->drv = NULL; // keep the driver log small: only C reports
     drv_reset();
     log_reset();
     s_bus_rounds = 501;
-    tfbus_master_start();
+    s_bus_on_notify = true;
+    xTaskNotifyGive(s_task);
     check("absent module: 3 missed polls, then a rejoin attempt every 20 rounds",
-          s_tx_count[TFBUS_T_STATUS_POLL] == 3 && s_tx_count[TFBUS_T_ADDR_ASSIGN] == 3 + 25 * 3 &&
-              !tfbus_master_get(0)->online && tfbus_master_get(0)->fails == 3);
-    check_drv("absent module: driver init still runs, no online event", "init:1 ");
+          s_tx_count[TFBUS_T_ADDR_ASSIGN] == 25 * 3 && !mods[2]->online && mods[2]->fails == 3);
+    check_drv("absent module: offline once, no init while it is gone", "offline:3 ");
+    mods[0]->drv = mods[4]->drv = &s_fake;
 
-    // ---- req_refresh_modules: the bus task rescans and signals completion
-    s_sim[1].present = true;
-    s_sim[1].addr = 0;
+    // ---- req_refresh_modules: the bus task rescans, re-inits the drivers, signals completion;
+    // the gone panel is back and gets its old address 4
+    s_sim[2].present = true;
+    s_nsim = 5;
+    s_sim[4] = (sim_mod_t){.sn = 0x0f05f123, .present = true, .discover = true, .ident = {3, 3, 4}};
+    for (int i = 0; i < s_nsim; i++) {
+        s_sim[i].addr = 0;
+    }
     log_reset();
+    drv_reset();
     s_bus_rounds = 1;
     check("refresh: completed by the bus task", tfbus_master_refresh(1000));
-    check("refresh: RESET, then ADDR_ASSIGN first (no SEEK)", strncmp(s_log, "aaff0752 aaff022222222201", 25) == 0);
+    check("refresh: RESET, then ADDR_ASSIGN by SN first (no SEEK)",
+          strncmp(s_log, "aaff0752 aaff02816cab130103 ", 28) == 0);
+    check("refresh: driver init again (the RESET cleared the modules)", strstr(s_drv, "init:3 ") != NULL);
+    check("refresh: gone panel found again: same entry, address 4",
+          tfbus_master_get(3) && tfbus_master_get(3)->sn == 0x0f05f123 && tfbus_master_get(3)->addr == 4 &&
+              s_sim[4].addr == 4 && tfbus_master_count() == 5);
     s_bus_on_notify = false;
     xSemaphoreGive(s_scan_done); // completion left over from an earlier scan
     check("refresh: bus task not answering -> timeout (stale completion ignored)", !tfbus_master_refresh(10));
@@ -788,11 +896,13 @@ int main(void)
     host_mutex_busy = 0;
     run_deferred();
     check("defer: calls run in order once the lock is free",
-          s_defer->n == 0 && strncmp(s_deferred, "mm_C:q:0 mm_C:q:1 ", 18) == 0 && strstr(s_deferred, "mm_C:q:31 "));
+          s_defer->n == 0 && strncmp(s_deferred, "mm_A:q:0 mm_A:q:1 ", 18) == 0 && strstr(s_deferred, "mm_A:q:31 "));
 
-    // ---- no modules in OM.LUA: one discovery, then the bus idles
+    // ---- empty registry (new CLU, nothing on the bus): one discovery, then the bus idles
     s_parked = true;
-    check("reset before the empty-registry run", tfbus_master_reset(30) && tfbus_master_count() == 0);
+    check("reset before the empty-registry run", tfbus_master_reset(30));
+    s_nmod = 0;
+    s_nsim = 0;
     log_reset();
     s_bus_on_notify = true;
     tfbus_master_start();
@@ -831,6 +941,25 @@ int main(void)
     lua_getfield(L, over, "_addr");
     check("49th module: rejected (no address)", tfbus_master_count() == TFBUS_MAX_MODULES && lua_isnil(L, -1));
     lua_settop(L, 0);
+    {   // full registry, one slot freed by a refresh: the next module takes that slot and address
+        uint8_t freed = s_mod[5].addr;
+        memset(&s_mod[5], 0, sizeof s_mod[5]);
+        int re = lua_module(0x4ffffffe, 0x99, "mm_re");
+        lua_getfield(L, re, "_addr");
+        check("full registry: freed slot and its address reused",
+              tfbus_master_count() == TFBUS_MAX_MODULES && s_mod[5].sn == 0x4ffffffe &&
+                  lua_tointeger(L, -1) == freed);
+        lua_settop(L, 0);
+        // every address held, one by a gone module: a new module takes over the gone entry
+        uint8_t gone_addr = s_mod[6].addr;
+        s_mod[6].gone = true;
+        re = lua_module(0x4ffffffd, 0x99, "mm_new");
+        lua_getfield(L, re, "_addr");
+        check("full registry: gone module forgotten, its slot and address taken",
+              s_mod[6].sn == 0x4ffffffd && !s_mod[6].gone && lua_tointeger(L, -1) == gone_addr &&
+                  tfbus_master_count() == TFBUS_MAX_MODULES);
+        lua_settop(L, 0);
+    }
 
     // all 48 addresses taken: a new module found by DISCOVER is listed but not addressed
     s_sim[0].garble = false;
@@ -851,7 +980,7 @@ int main(void)
         check("driverless module: status cached", m->online && m->status_len == 2 && m->status[1] == 0xaa);
     }
     s_parked = true;
-    check("final reset", tfbus_master_reset(30) && tfbus_master_count() == 0);
+    check("final reset: registry kept", tfbus_master_reset(30) && tfbus_master_count() == TFBUS_MAX_MODULES);
 
     lua_close(L);
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

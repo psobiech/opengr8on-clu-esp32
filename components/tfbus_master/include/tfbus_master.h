@@ -1,10 +1,16 @@
 /**
  * @file tfbus_master.h
- * @brief TFBUS bus master: module registry (from OM.LUA), address assignment, status polling.
+ * @brief TFBUS bus master: module registry, address assignment, status polling.
+ *
+ * The CLU owns the module list: every module found by DISCOVER gets the lowest free address and
+ * is kept (SN, address, identity) in NVS, so addresses survive reboots. OM builds OM.LUA from the
+ * CLU's tfbusDevices (address order); OM.LUA only binds names to SNs. Modules are dropped only by
+ * tfbus_master_refresh() (not found on the bus), keeping their address for when they come back. The bus runs from boot, with or
+ * without Lua scripts.
  *
  * Startup sequence matches captures of a real CLU:
- *   RESET bcast, ~2 s, SEEK bcast (ACK), [DISCOVER loop for unaddressed modules,]
- *   ADDR_ASSIGN(sn, addr) per module in OM.LUA order (ACK),
+ *   RESET bcast, ~2 s, SEEK bcast (ACK), DISCOVER loop for unaddressed modules,
+ *   ADDR_ASSIGN(sn, addr) for registry modules that did not answer (ACK),
  *   then continuous STATUS_POLL round-robin with queued commands sent between polls.
  */
 #pragma once
@@ -25,13 +31,16 @@ extern "C" {
 
 struct tfbus_driver;
 
-/** @brief A module declared in OM.LUA. */
+/** @brief A module in the CLU's registry. */
 typedef struct tfbus_module {
     uint32_t sn;              /**< Serial number. */
     uint8_t  hw_type;         /**< Module hardware type; selects the driver. */
-    uint8_t  addr;            /**< 1..48, assigned in OM.LUA order. */
-    char     name[24];        /**< Lua global name, e.g. "mm_330017203". */
+    uint8_t  fw_type;         /**< From DISCOVER (0 = not seen yet). */
+    uint8_t  fw_api_ver;      /**< From DISCOVER. */
+    uint8_t  addr;            /**< 1..48: lowest free when first found; persistent. */
+    char     name[24];        /**< Lua global name, e.g. "mm_330017203" ("" = not in OM.LUA). */
     bool     assigned;        /**< ACKed ADDR_ASSIGN. */
+    bool     gone;            /**< Dropped by a refresh: address kept for when it comes back. */
     bool     online;          /**< Answering polls. */
     uint8_t  fails;           /**< Consecutive missed polls. */
     uint32_t fails_total;     /**< Missed polls since boot (diagnostic pack "fails"). */
@@ -87,19 +96,26 @@ void tfbus_obj_store(lua_State *L, int obj, int idx, lua_Number v);
  */
 void tfbus_driver_register(const tfbus_driver_t *drv);
 
-/** @brief Register the class-2 (module) Lua hook. Call before clu_lua_start(). */
+/**
+ * @brief Load the saved registry, register the Lua class hooks and start the bus task.
+ *
+ * Call after nvs_flash_init(), before clu_lua_start(). The bus (discovery, polling,
+ * tfbus_master_refresh()) runs independently of the Lua scripts. Set tfbus_master_on_scan() first
+ * to see the boot scan.
+ */
 void tfbus_master_init(void);
 
-/** @brief Start (or restart) discovery + polling. Called on SYSTEM.Init(). */
+/** @brief SYSTEM.Init(): the module configuration is known, run driver init (also after rediscovery). */
 void tfbus_master_start(void);
 
 /**
- * @brief Stop the bus and forget all modules.
+ * @brief Lua reload: drop the driver state and Lua names.
  *
- * Driver deinit is called and drv_ctx freed, so a reloaded OM.LUA can declare them again; the bus
- * stays idle until tfbus_master_start(). Not from the bus task.
+ * The bus task is paused while driver deinit runs and drv_ctx is freed; the modules and their
+ * addresses stay. Polling then goes on; driver init waits for tfbus_master_start().
+ * Not from the bus task.
  *
- * @param timeout_ms How long to wait for the bus task to stop.
+ * @param timeout_ms How long to wait for the bus task to pause.
  * @return false (registry untouched) if the bus task did not stop in time.
  */
 bool tfbus_master_reset(uint32_t timeout_ms);
@@ -110,7 +126,7 @@ typedef struct {
     uint8_t  hw_type, hw_ver, fw_type, fw_api_ver;
     uint8_t  ver[3];          /**< VERSION_QUERY bytes -> fwVer "v0.v1.v2" ("0.0.0" if !have_ver). */
     bool     have_ver;        /**< @ref ver is valid. */
-    bool     known;           /**< Declared in OM.LUA. */
+    bool     known;           /**< In the registry (false: no free address). */
     uint8_t  addr;            /**< Bus address (0 = none). */
 } tfbus_device_t;
 
@@ -131,6 +147,8 @@ void tfbus_master_on_scan(void (*cb)(void));
 /**
  * @brief Re-run discovery (RESET, SEEK, DISCOVER, ADDR_ASSIGN, VERSION_QUERY) and wait for it.
  *
+ * Registry modules not found on the bus are dropped (tfbus_master_get() / find NULL); their entry
+ * keeps the address, reused if the module comes back.
  * Not from the bus task.
  *
  * @param timeout_ms Max wait.
@@ -180,7 +198,7 @@ tfbus_module_t *tfbus_master_find_sn(uint32_t sn);
 tfbus_module_t *tfbus_master_find_name(const char *name);
 /** @brief Number of declared modules. */
 int tfbus_master_count(void);
-/** @brief Module @p i (0 <= i < tfbus_master_count()), NULL if out of range. */
+/** @brief Module in slot @p i (0 <= i < tfbus_master_count()), NULL if out of range or dropped by a refresh. */
 tfbus_module_t *tfbus_master_get(int i);
 /** @} */
 

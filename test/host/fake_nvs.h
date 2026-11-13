@@ -7,7 +7,7 @@
 typedef struct {
     char ns[16], key[16];
     char type; // 'u' u32, 'i' i32, 's' str, 'b' blob
-    uint8_t val[128];
+    uint8_t val[512];
     size_t len;
 } nvs_entry_t;
 static nvs_entry_t nvs_db[64];

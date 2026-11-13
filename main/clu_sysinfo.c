@@ -78,13 +78,16 @@ static int l_sys_info(lua_State *L)
         }
     }
 
-    // Registry is fixed after OM.LUA; online/fails are single words written by the bus task.
-    int n = tfbus_master_count(), online = 0;
+    // online/fails are single words written by the bus task; freed slots (refresh) are NULL.
+    int n = 0, online = 0;
     lua_Integer fails = 0;
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < tfbus_master_count(); i++) {
         const tfbus_module_t *m = tfbus_master_get(i);
-        online += m->online;
-        fails += m->fails_total;
+        if (m) {
+            n++;
+            online += m->online;
+            fails += m->fails_total;
+        }
     }
     set_int(L, "tfbus_total", n);
     set_int(L, "tfbus_online", online);

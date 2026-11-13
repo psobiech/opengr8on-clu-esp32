@@ -263,6 +263,16 @@ Wartości z NVS mają pierwszeństwo — zmiana w menuconfig nie nadpisze już z
 Projekt wgrywa się normalnie z Object Managera (OM.LUA, USER.LUA przez TFTP). Moduły TF-Bus
 wykrywa się w OM przyciskiem odświeżania modułów; lista trafia do `a:\CONFIG.JSON`.
 
+Listą modułów zarządza CLU: każdy moduł wykryty na magistrali dostaje najniższy wolny adres,
+zapamiętany w NVS razem z numerem seryjnym, więc adresy nie zmieniają się po restarcie.
+Magistrala działa od startu, także bez MAIN.LUA / OM.LUA (wykrywanie, odpytywanie,
+`tfbusDevices`); OM.LUA tylko przypisuje modułom nazwy po numerze seryjnym, a inicjalizacja
+modułów (sterowniki) rusza po `SYSTEM.Init`. Moduł z OM.LUA, którego CLU nie zna, jest
+dopisywany do listy. Moduły znikają z listy tylko przy odświeżeniu modułów
+(`req_refresh_modules`), gdy nie ma ich na magistrali; moduł chwilowo offline zostaje. Usunięty
+moduł zachowuje jednak swój adres: gdy wróci, dostaje ten sam, a nowe moduły zajmują go dopiero,
+gdy nie ma już innych wolnych adresów.
+
 Zamiast Object Managera można użyć rozszerzenia VS Code
 [opengr8on-vscode](https://github.com/psobiech/opengr8on-vscode): projekt jako pliki YAML + Lua
 w gicie, z których generuje te same OM.LUA / USER.LUA co Object Manager i wysyła je przez TFTP;
@@ -288,8 +298,9 @@ wykrywa CLU, pokazuje moduły, wartości na żywo i logi (telnet).
 | `CLU_MQTT_DIAG_INTERVAL` | 30 s | próbkowanie diagnostyki |
 | `CLU_MQTT_OBJECT_API` | **n** | surowe API obiektów (zob. niżej) |
 
-Klient startuje w `SYSTEM.Init` (po OM.LUA), gdy cecha lokalnej CLU **UseCloud (18)** = 1 —
-domyślnie w OM; OM.LUA zapisuje `CLUxxx:set(18, 1)`. `CLUxxx:set(18, 0)` (z OM, `req:` lub skryptu)
+Klient łączy się, gdy CLU dostanie adres IP (bez czekania na skrypty Lua), o ile cecha lokalnej
+CLU **UseCloud (18)** = 1 — domyślnie w OM; OM.LUA zapisuje `CLUxxx:set(18, 1)`. Discovery Home
+Assistanta jest wysyłane po `SYSTEM.Init` (po OM.LUA). `CLUxxx:set(18, 0)` (z OM, `req:` lub skryptu)
 publikuje `offline` i rozłącza, `set(18, 1)` łączy ponownie. `CLUxxx:get(19)` (CloudConnection) = 1,
 gdy broker jest połączony.
 

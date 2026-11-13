@@ -6,8 +6,8 @@
  * the local CLU feature UseCloud (18) switches the connection on/off and CloudConnection (19)
  * reports it.
  *
- * Threading: clu_mqtt_set_enabled() and clu_mqtt_start() must be called from the Lua task (they
- * arrive through the clu_feature / on_init callbacks), the rest is thread-safe.
+ * Threading: all functions are thread-safe (clu_mqtt_set_enabled() comes from the Lua task,
+ * clu_mqtt_start() from the IP event and SYSTEM.Init).
  */
 #pragma once
 
@@ -37,7 +37,12 @@ void clu_mqtt_init(const clu_mqtt_cfg_t *cfg);
  */
 void clu_mqtt_set_enabled(bool on);
 
-/** @brief Called from SYSTEM.Init: OM.LUA has declared every object and applied UseCloud; connect now. */
+/**
+ * @brief Connect (if UseCloud and a broker is configured). Idempotent; may come before clu_mqtt_init().
+ *
+ * Called when the network gets an IP, independent of the Lua scripts, and again from SYSTEM.Init
+ * (OM.LUA applied UseCloud). Home Assistant discovery waits for SYSTEM.Init on the Lua side.
+ */
 void clu_mqtt_start(void);
 
 /** @brief CloudConnection: broker connected. */

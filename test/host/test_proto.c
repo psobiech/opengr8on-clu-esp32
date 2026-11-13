@@ -377,6 +377,7 @@ int main(void)
         n = http_format_head(out, sizeof out, 42, NULL, 0);
         check("http bad status -> 500", n > 0 && strncmp(out, "HTTP/1.1 500 Internal Server Error\r\n", 36) == 0);
         check("http head too small", http_format_head(out, 20, 200, NULL, 0) == -1);
+        check("http reason 431", strcmp(http_reason(431), "Request Header Fields Too Large") == 0);
         check("http reason unknown", strcmp(http_reason(299), "Status") == 0);
     }
 

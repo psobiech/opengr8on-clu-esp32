@@ -123,6 +123,7 @@ const char *http_reason(int status)
     case 410: return "Gone";
     case 411: return "Length Required";
     case 413: return "Payload Too Large";
+    case 431: return "Request Header Fields Too Large";
     case 500: return "Internal Server Error";
     case 503: return "Service Unavailable";
     case 504: return "Gateway Timeout";

@@ -63,3 +63,15 @@ void clu_state_factory_keys(void);
  * placeholders and a CLOUD-PUBLIC.CRT placeholder (skips Grenton cloud enrollment in OM).
  */
 void clu_state_write_config_files(void);
+
+/**
+ * @brief Device setting from NVS (namespace "cfg", string key), for prebuilt firmware.
+ *
+ * Keys: wifi_ssid, wifi_pass, mqtt_uri, mqtt_user, mqtt_pass (see tools/mknvs.py). A value
+ * present in NVS wins over the menuconfig default. Call after nvs_flash_init().
+ *
+ * @param key      NVS key.
+ * @param fallback Returned when the key is not set (may be NULL).
+ * @return The stored value (heap copy, kept for the program's lifetime) or @p fallback.
+ */
+const char *clu_state_setting(const char *key, const char *fallback);

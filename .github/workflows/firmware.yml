@@ -1,9 +1,13 @@
-# Firmware image built with the ESP-IDF version the project is developed on (see dependencies.lock).
+# Prebuilt firmware for every supported device (CMakePresets.json), built with the ESP-IDF
+# version the project is developed on. Each artifact holds a full image for a first install,
+# the separate images for updates that keep the settings (NVS), and tools/mknvs.py to make
+# the settings image. Flashing: README, "Gotowe obrazy (GitHub Actions)".
 name: Firmware
 
 on:
   push:
     branches: [ "develop", "main" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "develop", "main" ]
   workflow_dispatch:
@@ -13,11 +17,16 @@ permissions:
 
 jobs:
   build:
-    name: ESP-IDF build (${{ matrix.target }})
+    name: Firmware (${{ matrix.preset }})
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
-        target: [esp32s3, esp32]
+        include:
+          - { preset: waveshare, target: esp32s3 } # Waveshare ESP32-S3-RS485-CAN (WiFi)
+          - { preset: gate,      target: esp32 }   # Grenton GATE (Ethernet LAN8720A)
+          - { preset: f8,        target: esp32s3 } # KinCony F8 (Ethernet W5500)
+          - { preset: a8v3,      target: esp32s3 } # KinCony KC868-A8v3 (Ethernet W5500)
     steps:
       - uses: actions/checkout@v4
 
@@ -27,14 +36,30 @@ jobs:
           esp_idf_version: v6.0.2
           target: ${{ matrix.target }}
           path: '.'
+          command: idf.py --preset ${{ matrix.preset }} build merge-bin
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          bdir=$(jq -r --arg p "${{ matrix.preset }}" \
+            '.configurePresets[] | select(.name == $p) | .binaryDir' CMakePresets.json)
+          out=dist/opengr8on-clu-${{ matrix.preset }}
+          mkdir -p "$out/bootloader" "$out/partition_table"
+          # full image from 0x0: bootloader, partition table, OTA data, app (NVS area erased)
+          cp "$bdir/merged-binary.bin" "$out/opengr8on-clu-${{ matrix.preset }}-full.bin"
+          # update without touching NVS: esptool write-flash @flash_args (paths as in flash_args)
+          cp "$bdir/bootloader/bootloader.bin" "$out/bootloader/"
+          cp "$bdir/partition_table/partition-table.bin" "$out/partition_table/"
+          cp "$bdir/ota_data_initial.bin" "$bdir/opengr8on_clu_esp32.bin" "$bdir/opengr8on_clu_esp32.elf" \
+             "$bdir/flash_args" "$bdir/flasher_args.json" "$out/"
+          cp tools/mknvs.py "$out/"
+          echo "${{ matrix.target }}" > "$out/CHIP"
+          git describe --tags --always --dirty > "$out/VERSION"
+          ls -lR "$out"
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ matrix.target }}
-          path: |
-            build/*.bin
-            build/*.elf
-            build/bootloader/bootloader.bin
-            build/partition_table/partition-table.bin
-            build/flasher_args.json
+          name: opengr8on-clu-${{ matrix.preset }}
+          path: dist/opengr8on-clu-${{ matrix.preset }}
+          if-no-files-found: error

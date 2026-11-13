@@ -63,6 +63,11 @@ static char *s_ca_pem;
 static bool s_enabled = true; // UseCloud interface default
 static bool s_started;
 static SemaphoreHandle_t s_lock; // apply(): Lua task (UseCloud, SYSTEM.Init) vs IP event
+
+/** @brief Broker URI / credentials: clu_mqtt_cfg_t (NVS settings) when set, else menuconfig. */
+static const char *broker_uri(void) { return s_cfg.broker_uri ? s_cfg.broker_uri : CONFIG_CLU_MQTT_BROKER_URI; }
+static const char *username(void) { return s_cfg.username ? s_cfg.username : CONFIG_CLU_MQTT_USERNAME; }
+static const char *password(void) { return s_cfg.password ? s_cfg.password : CONFIG_CLU_MQTT_PASSWORD; }
 static bool s_running;
 static volatile bool s_connected;
 static volatile int s_gen; // bumped on every (re)connect: the Lua side republishes everything
@@ -135,7 +140,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     esp_mqtt_event_handle_t e = data;
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "connected to %s", CONFIG_CLU_MQTT_BROKER_URI);
+        ESP_LOGI(TAG, "connected to %s", broker_uri());
         esp_mqtt_client_publish(e->client, s_status, "online", 0, 1, 1);
         subscribe_all(e->client);
         s_gen++;
@@ -193,19 +198,19 @@ static char *read_file(const char *path, size_t max)
 static bool client_create(void)
 {
     esp_mqtt_client_config_t mc = {
-        .broker.address.uri = CONFIG_CLU_MQTT_BROKER_URI,
+        .broker.address.uri = broker_uri(),
         .credentials.client_id = s_client_id,
         .session.keepalive = CONFIG_CLU_MQTT_KEEPALIVE,
         .session.last_will = {.topic = s_status, .msg = "offline", .qos = 1, .retain = 1},
         .network.reconnect_timeout_ms = 5000,
         .buffer.size = 2048,
     };
-    if (CONFIG_CLU_MQTT_USERNAME[0]) {
-        mc.credentials.username = CONFIG_CLU_MQTT_USERNAME;
-        mc.credentials.authentication.password = CONFIG_CLU_MQTT_PASSWORD;
+    if (username()[0]) {
+        mc.credentials.username = username();
+        mc.credentials.authentication.password = password();
     }
-    if (strncmp(CONFIG_CLU_MQTT_BROKER_URI, "mqtts://", 8) == 0 ||
-        strncmp(CONFIG_CLU_MQTT_BROKER_URI, "wss://", 6) == 0) {
+    if (strncmp(broker_uri(), "mqtts://", 8) == 0 ||
+        strncmp(broker_uri(), "wss://", 6) == 0) {
         s_ca_pem = read_file(s_cfg.ca_path, CA_MAX);
         if (s_ca_pem) {
             ESP_LOGI(TAG, "TLS: CA from %s", s_cfg.ca_path);
@@ -216,7 +221,7 @@ static bool client_create(void)
     }
     s_client = esp_mqtt_client_init(&mc);
     if (!s_client) {
-        ESP_LOGE(TAG, "client init failed (URI %s)", CONFIG_CLU_MQTT_BROKER_URI);
+        ESP_LOGE(TAG, "client init failed (URI %s)", broker_uri());
         return false;
     }
     esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID, on_event, NULL);
@@ -226,7 +231,7 @@ static bool client_create(void)
 /** @brief Start or stop the connection to match started && UseCloud && broker configured. Under s_lock. */
 static void apply_locked(void)
 {
-    bool want = s_started && s_enabled && CONFIG_CLU_MQTT_BROKER_URI[0];
+    bool want = s_started && s_enabled && broker_uri()[0];
     if (want == s_running) {
         return;
     }
@@ -234,7 +239,7 @@ static void apply_locked(void)
         if (!s_client && !client_create()) {
             return;
         }
-        ESP_LOGI(TAG, "UseCloud on: connecting to %s as %s", CONFIG_CLU_MQTT_BROKER_URI, s_client_id);
+        ESP_LOGI(TAG, "UseCloud on: connecting to %s as %s", broker_uri(), s_client_id);
         s_running = esp_mqtt_client_start(s_client) == ESP_OK;
     } else {
         ESP_LOGI(TAG, "UseCloud off: disconnecting");
@@ -269,8 +274,8 @@ void clu_mqtt_start(void)
 {
     bool first = !s_started;
     s_started = true;
-    if (first && !CONFIG_CLU_MQTT_BROKER_URI[0]) {
-        ESP_LOGI(TAG, "no broker configured (menuconfig CLU_MQTT_BROKER_URI), MQTT off");
+    if (first && !broker_uri()[0]) {
+        ESP_LOGI(TAG, "no broker configured (NVS cfg/mqtt_uri or menuconfig CLU_MQTT_BROKER_URI), MQTT off");
     }
     apply();
 }

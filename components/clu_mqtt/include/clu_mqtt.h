@@ -23,6 +23,9 @@ typedef struct {
     const char *fw_version;  /**< Firmware version reported to Home Assistant. */
     const char *ca_path;  /**< PEM CA for mqtts:// brokers (e.g. "/fs/a/MQTT_CA.PEM"); missing
                                file = built-in certificate bundle. */
+    const char *broker_uri; /**< Broker URI ("" = MQTT off); NULL = CONFIG_CLU_MQTT_BROKER_URI. */
+    const char *username;   /**< "" = anonymous; NULL = CONFIG_CLU_MQTT_USERNAME. */
+    const char *password;   /**< NULL = CONFIG_CLU_MQTT_PASSWORD. */
 } clu_mqtt_cfg_t;
 
 /**

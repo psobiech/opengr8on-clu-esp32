@@ -42,6 +42,26 @@ static bool config_iv(uint8_t out[16])
     return true;
 }
 
+const char *clu_state_setting(const char *key, const char *fallback)
+{
+    nvs_handle_t h;
+    if (nvs_open("cfg", NVS_READONLY, &h) != ESP_OK) {
+        return fallback; // namespace never written: nothing provisioned
+    }
+    size_t len = 0;
+    char *v = NULL;
+    if (nvs_get_str(h, key, NULL, &len) == ESP_OK && len > 0 && (v = malloc(len)) != NULL &&
+        nvs_get_str(h, key, v, &len) != ESP_OK) {
+        free(v);
+        v = NULL;
+    }
+    nvs_close(h);
+    if (v) {
+        ESP_LOGI(TAG, "setting %s from NVS", key); // never the value: may be a password
+    }
+    return v ? v : fallback;
+}
+
 void clu_state_factory_keys(void)
 {
     clu_default_key((const uint8_t *)g_clu.pin, g_clu.project.key);

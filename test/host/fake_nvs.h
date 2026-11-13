@@ -64,6 +64,10 @@ static esp_err_t nvs_get_raw(nvs_handle_t h, const char *k, char type, void *v, 
     if (!e || e->type != type) {
         return ESP_ERR_NVS_NOT_FOUND;
     }
+    if (!v && len) { // length query, as in ESP-IDF
+        *len = e->len;
+        return ESP_OK;
+    }
     if (len) {
         if (*len < e->len) {
             return ESP_FAIL;

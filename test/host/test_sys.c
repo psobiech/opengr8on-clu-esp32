@@ -453,6 +453,35 @@ static const char *nvs_str(const char *ns, const char *k)
     return e && e->type == 's' ? (const char *)e->val : NULL;
 }
 
+/** @brief Prebuilt firmware provisioned with an NVS image (tools/mknvs.py): identity + cfg settings. */
+static void test_provisioned(void)
+{
+    const char *sv_serial = host_cfg_serial, *sv_pin = host_cfg_pin, *sv_iv = host_cfg_iv;
+    host_cfg_serial = host_cfg_pin = host_cfg_iv = ""; // prebuilt: nothing in menuconfig
+    nvs_reset();
+    check("setting: nothing provisioned -> fallback (also NULL)",
+          !strcmp(clu_state_setting("wifi_ssid", "dflt"), "dflt") && !clu_state_setting("mqtt_uri", NULL));
+    nvs_handle_t h;
+    nvs_open("clu", NVS_READWRITE, &h);
+    nvs_set_u32(h, "sn", 221010155);
+    nvs_set_str(h, "pin", "QWER5678");
+    nvs_open("cfg", NVS_READWRITE, &h);
+    nvs_set_str(h, "wifi_ssid", "NvsNet");
+    nvs_set_str(h, "mqtt_uri", "mqtts://broker.lan:8883");
+    memset(&g_clu, 0, sizeof g_clu);
+    clu_state_load();
+    uint8_t k[16];
+    clu_default_key((const uint8_t *)"QWER5678", k);
+    check("provisioned: serial and PIN from the NVS image, factory key derived from the PIN",
+          g_clu.sn == 221010155u && !strcmp(g_clu.pin, "QWER5678") && !memcmp(g_clu.project.key, k, 16) &&
+              nvs_peek("clu", "key"));
+    check("setting: provisioned values win, other keys fall back",
+          !strcmp(clu_state_setting("wifi_ssid", "dflt"), "NvsNet") &&
+              !strcmp(clu_state_setting("mqtt_uri", NULL), "mqtts://broker.lan:8883") &&
+              !strcmp(clu_state_setting("wifi_pass", "pw"), "pw") && !clu_state_setting("mqtt_user", NULL));
+    host_cfg_serial = sv_serial, host_cfg_pin = sv_pin, host_cfg_iv = sv_iv;
+}
+
 static void test_state(void)
 {
     nvs_reset();
@@ -715,6 +744,7 @@ int main(void)
     test_net();
     test_time();
     test_time_rtc();
+    test_provisioned();
     test_state();
     test_config_files();
     test_diag();

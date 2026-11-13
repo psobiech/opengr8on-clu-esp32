@@ -76,6 +76,16 @@ esp_err_t nvs_flash_init(void) { L("nvs_init"); return s_nvs_init[s_nvs_inits++ 
 esp_err_t nvs_flash_erase(void) { L("nvs_erase"); return ESP_OK; }
 esp_err_t clu_crypto_init(void) { L("crypto"); return ESP_OK; }
 void clu_state_load(void) { L("state_load"); }
+// NVS cfg/* settings: key -> value (NULL = not provisioned)
+static const char *s_set_wifi_ssid, *s_set_wifi_pass, *s_set_mqtt_uri = "mqtt://10.0.0.5", *s_set_mqtt_user;
+const char *clu_state_setting(const char *key, const char *fallback)
+{
+    const char *v = !strcmp(key, "wifi_ssid") ? s_set_wifi_ssid
+                  : !strcmp(key, "wifi_pass") ? s_set_wifi_pass
+                  : !strcmp(key, "mqtt_uri")  ? s_set_mqtt_uri
+                  : !strcmp(key, "mqtt_user") ? s_set_mqtt_user : NULL;
+    return v ? v : fallback;
+}
 static clu_telnet_cfg_t s_tc;
 void clu_telnet_init(const clu_telnet_cfg_t *c) { s_tc = *c; L("telnet_init"); }
 void clu_telnet_start(void) { L("telnet_start"); }
@@ -194,6 +204,8 @@ int main(void)
               s_wc.sta.pmf_cfg.capable && !s_wc.sta.bssid_set);
     check("MQTT: serial, firmware version, CA path on a:\\",
           s_mc.sn == 330017203 && !strcmp(s_mc.fw_version, "1.0.0") && !strcmp(s_mc.ca_path, "/fs/a/MQTT_CA.PEM"));
+    check("MQTT: broker URI from NVS, unset user / password left to menuconfig (NULL)",
+          s_mc.broker_uri && !strcmp(s_mc.broker_uri, "mqtt://10.0.0.5") && !s_mc.username && !s_mc.password);
     check("Lua: root a:\\, serial, transport / feature / reload hooks wired",
           !strcmp(s_lc.root, "/fs/a") && s_lc.sn == 330017203 && s_lc.report == udp_server_send_report &&
               s_lc.remote == udp_server_remote_exec && s_lc.cloud_connected == clu_mqtt_connected &&
@@ -226,6 +238,25 @@ int main(void)
     check_log("WiFi got IP: setup window armed, SNTP polls now", "net_up sntp_restart mqtt_start ");
     s_ip_handler(NULL, IP_EVENT, IP_EVENT_ETH_GOT_IP, &ip);
     check_log("Ethernet got IP: the same", "net_up sntp_restart mqtt_start ");
+
+#if CONFIG_CLU_WIFI
+    // ---- prebuilt firmware: WiFi credentials from NVS win over menuconfig; no SSID -> WiFi off
+    s_set_wifi_ssid = "NvsNet";
+    s_set_wifi_pass = "nvspass1";
+    memset(&s_wc, 0, sizeof s_wc);
+    wifi_start();
+    check("WiFi: SSID / password from NVS",
+          !strcmp((char *)s_wc.sta.ssid, "NvsNet") && !strcmp((char *)s_wc.sta.password, "nvspass1"));
+    s_log[0] = 0;
+    s_scan_rc = ESP_OK;
+    s_wifi_handler(NULL, WIFI_EVENT, WIFI_EVENT_STA_START, NULL);
+    check_log("WiFi: diagnostic scan for the NVS SSID", "scan(NvsNet,1) ");
+    s_set_wifi_ssid = "";
+    s_log[0] = 0;
+    wifi_start();
+    check_log("WiFi: no SSID anywhere -> WiFi stays off", "");
+    s_set_wifi_ssid = s_set_wifi_pass = NULL;
+#endif
     wifi_event_sta_disconnected_t dis = {.reason = 201, .rssi = -80};
     s_log[0] = 0;
     s_wifi_handler(NULL, WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &dis);

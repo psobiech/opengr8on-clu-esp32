@@ -65,6 +65,9 @@ static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 }
 
 #if CONFIG_CLU_WIFI
+// SSID / password: NVS cfg/wifi_ssid, cfg/wifi_pass (prebuilt firmware), else menuconfig.
+static const char *s_wifi_ssid = CONFIG_CLU_WIFI_SSID;
+
 /**
  * @brief WiFi event handler: scan-then-connect, reconnect on disconnect.
  */
@@ -72,13 +75,13 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         // Debug: one scan first to log matching APs (security, channel), then connect.
-        wifi_scan_config_t sc = {.ssid = (uint8_t *)CONFIG_CLU_WIFI_SSID, .show_hidden = true};
+        wifi_scan_config_t sc = {.ssid = (uint8_t *)s_wifi_ssid, .show_hidden = true};
         if (esp_wifi_scan_start(&sc, false) != ESP_OK) esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_SCAN_DONE) {
         uint16_t n = 8;
         wifi_ap_record_t ap[8];
         esp_wifi_scan_get_ap_records(&n, ap);
-        ESP_LOGW(TAG, "scan: %u AP(s) named [%s]", n, CONFIG_CLU_WIFI_SSID);
+        ESP_LOGW(TAG, "scan: %u AP(s) named [%s]", n, s_wifi_ssid);
         for (int i = 0; i < n; i++) {
             // authmode: 3=WPA2_PSK 6=WPA3_PSK 7=WPA2_WPA3_PSK; cipher 3=CCMP
             ESP_LOGW(TAG, "  " MACSTR " ch %d rssi %d authmode %d pairwise %d group %d 11b%d g%d n%d ax%d",
@@ -102,19 +105,25 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 }
 
 /**
- * @brief Initialise the WiFi STA netif + driver from menuconfig (WPA2-PSK minimum, optional BSSID lock)
- * and start it.
+ * @brief Initialise the WiFi STA netif + driver (SSID / password from NVS or menuconfig, WPA2-PSK
+ * minimum, optional BSSID lock) and start it. Without an SSID WiFi stays off.
  */
 static void wifi_start(void)
 {
+    s_wifi_ssid = clu_state_setting("wifi_ssid", CONFIG_CLU_WIFI_SSID);
+    const char *pass = clu_state_setting("wifi_pass", CONFIG_CLU_WIFI_PASSWORD);
+    if (!s_wifi_ssid[0]) {
+        ESP_LOGE(TAG, "no WiFi SSID (NVS cfg/wifi_ssid or menuconfig CLU_WIFI_SSID): WiFi off");
+        return;
+    }
     clu_net_init(CLU_NET_WIFI, esp_netif_create_default_wifi_sta());
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi, NULL));
 
     wifi_config_t wc = {0};
-    strlcpy((char *)wc.sta.ssid, CONFIG_CLU_WIFI_SSID, sizeof wc.sta.ssid);
-    strlcpy((char *)wc.sta.password, CONFIG_CLU_WIFI_PASSWORD, sizeof wc.sta.password);
+    strlcpy((char *)wc.sta.ssid, s_wifi_ssid, sizeof wc.sta.ssid);
+    strlcpy((char *)wc.sta.password, pass, sizeof wc.sta.password);
     // Never join open/WEP/WPA networks (a spoofed AP with the same SSID could otherwise
     // downgrade us); WPA2-PSK minimum, or WPA3-SAE only.
 #if CONFIG_CLU_WIFI_WPA3_ONLY
@@ -297,6 +306,10 @@ void app_main(void)
         .sn = g_clu.sn,
         .fw_version = CONFIG_CLU_FW_VERSION,
         .ca_path = CLU_FS_ROOT "/a/MQTT_CA.PEM",
+        // NVS (prebuilt firmware) over menuconfig; NULL = the menuconfig value
+        .broker_uri = clu_state_setting("mqtt_uri", NULL),
+        .username = clu_state_setting("mqtt_user", NULL),
+        .password = clu_state_setting("mqtt_pass", NULL),
     };
     clu_mqtt_init(&mc);
     clu_sysinfo_init();

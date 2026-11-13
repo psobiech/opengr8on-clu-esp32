@@ -398,6 +398,24 @@ int main(void)
     clu_mqtt_start(); // SYSTEM.Init later
     check("SYSTEM.Init after the IP event: no second client", s_inits == inits + 1 && host_mutex_held == 0);
 
+    // ---- broker / credentials from NVS settings (clu_mqtt_cfg_t) win over menuconfig
+    reconfigure("mqtt://kconfig.lan");
+    cfg_user = "kuser";
+    s_cfg.broker_uri = "mqtt://nvs.lan";
+    s_cfg.username = "nvsuser";
+    s_cfg.password = "nvspass";
+    clu_mqtt_start();
+    check("NVS broker URI and credentials used",
+          s_running && !strcmp(s_mc.broker.address.uri, "mqtt://nvs.lan") &&
+              !strcmp(s_mc.credentials.username, "nvsuser") &&
+              !strcmp(s_mc.credentials.authentication.password, "nvspass"));
+    reconfigure("mqtt://kconfig.lan");
+    s_cfg.broker_uri = "";
+    s_cfg.username = s_cfg.password = NULL;
+    clu_mqtt_start();
+    check("NVS broker URI empty: MQTT off even with a menuconfig broker", !s_running);
+    s_cfg.broker_uri = NULL;
+
     lua_close(L);
     free(s_ca_pem);
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

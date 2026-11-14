@@ -1,0 +1,90 @@
+name: Build firmware
+
+on:
+  workflow_call:
+    inputs:
+      preset:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+      capture-build-log:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cache compiler results
+        uses: actions/cache@v6
+        with:
+          path: .ccache
+          key: ccache-firmware-${{ runner.os }}-${{ runner.arch }}-esp-idf-v6.0.2-${{ inputs.target }}-${{ inputs.preset }}-${{ hashFiles('CMakePresets.json', 'sdkconfig.defaults*', 'sdkconfig.*', 'dependencies.lock', 'components/**/idf_component.yml', 'main/idf_component.yml') }}-${{ github.sha }}
+          restore-keys: |
+            ccache-firmware-${{ runner.os }}-${{ runner.arch }}-esp-idf-v6.0.2-${{ inputs.target }}-${{ inputs.preset }}-${{ hashFiles('CMakePresets.json', 'sdkconfig.defaults*', 'sdkconfig.*', 'dependencies.lock', 'components/**/idf_component.yml', 'main/idf_component.yml') }}-
+
+      - name: ESP-IDF build
+        if: ${{ !inputs.capture-build-log }}
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.2
+          target: ${{ inputs.target }}
+          path: '.'
+          extra_docker_args: -v ./.ccache:/root/.ccache -e CCACHE_DIR=/root/.ccache -e CCACHE_BASEDIR=/project -e CCACHE_MAXSIZE=2G
+          command: idf.py --ccache --preset ${{ inputs.preset }} build merge-bin
+
+      - name: ESP-IDF build with log capture
+        if: ${{ inputs.capture-build-log }}
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.2
+          target: ${{ inputs.target }}
+          path: '.'
+          extra_docker_args: -v ./.ccache:/root/.ccache -e CCACHE_DIR=/root/.ccache -e CCACHE_BASEDIR=/project -e CCACHE_MAXSIZE=2G
+          command: |
+            set -euo pipefail
+            idf.py --ccache --preset ${{ inputs.preset }} build merge-bin 2>&1 | tee idf-build.log
+
+      - name: Upload build log
+        if: ${{ always() && inputs.capture-build-log }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.preset }}-${{ inputs.target }}-build-log
+          path: idf-build.log
+          if-no-files-found: ignore
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          bdir=$(jq -r --arg p "${{ inputs.preset }}" \
+            '.configurePresets[] | select(.name == $p) | .binaryDir' CMakePresets.json)
+          out=dist/opengr8on-clu-${{ inputs.preset }}
+          mkdir -p "$out/bootloader" "$out/partition_table"
+          # full image from 0x0: bootloader, partition table, OTA data, app (NVS area erased)
+          cp "$bdir/merged-binary.bin" "$out/opengr8on-clu-${{ inputs.preset }}-full.bin"
+          # application image only: network update (POST /ota, web flasher "over the network")
+          cp "$bdir/opengr8on_clu_esp32.bin" "$out/opengr8on-clu-${{ inputs.preset }}-ota.bin"
+          # update without touching NVS: esptool write-flash @flash_args (paths as in flash_args)
+          cp "$bdir/bootloader/bootloader.bin" "$out/bootloader/"
+          cp "$bdir/partition_table/partition-table.bin" "$out/partition_table/"
+          cp "$bdir/ota_data_initial.bin" "$bdir/opengr8on_clu_esp32.bin" "$bdir/opengr8on_clu_esp32.elf" \
+             "$bdir/flash_args" "$bdir/flasher_args.json" "$out/"
+          cp tools/mknvs.py "$out/"
+          echo "${{ inputs.target }}" > "$out/CHIP"
+          git describe --tags --always --dirty > "$out/VERSION"
+          ls -lR "$out"
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v7
+        with:
+          name: opengr8on-clu-${{ inputs.preset }}
+          path: dist/opengr8on-clu-${{ inputs.preset }}
+          if-no-files-found: error

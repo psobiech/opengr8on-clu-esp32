@@ -52,6 +52,26 @@
             }
         },
         {
+            "name": "gate-http-N8R8",
+            "displayName": "GATE HTTP on ESP32-S3 N8R8 (8 MB flash, 8 MB octal PSRAM)",
+            "binaryDir": "build-gate-http-N8R8",
+            "cacheVariables": {
+                "IDF_TARGET": "esp32s3",
+                "SDKCONFIG": "${sourceDir}/sdkconfig.gate-http-N8R8",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.gate-http;${sourceDir}/sdkconfig.defaults.N8R8"
+            }
+        },
+        {
+            "name": "gate-http-low-memory",
+            "displayName": "GATE HTTP on ESP32-S3 (4 MB flash, 2 MB PSRAM)",
+            "binaryDir": "build-gate-http-low-memory",
+            "cacheVariables": {
+                "IDF_TARGET": "esp32s3",
+                "SDKCONFIG": "${sourceDir}/build-gate-http-low-memory/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.gate-http;${sourceDir}/sdkconfig.defaults.gate-http-low-memory"
+            }
+        },
+        {
             "name": "waveshare-mysensors",
             "displayName": "Waveshare ESP32-S3-RS485-CAN — MySensors gateway",
             "binaryDir": "build-waveshare-mysensors",

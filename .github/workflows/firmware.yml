@@ -16,9 +16,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  firmware:
     name: Firmware (${{ matrix.preset }})
-    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -27,50 +26,242 @@ jobs:
           - { preset: gate,      target: esp32 }   # Grenton GATE (Ethernet LAN8720A)
           - { preset: f8,        target: esp32s3 } # KinCony F8 (Ethernet W5500)
           - { preset: a8v3,      target: esp32s3 } # KinCony KC868-A8v3 (Ethernet W5500)
-          - { preset: gate-http, target: esp32s3 } # GATE HTTP emulation on an ESP32-S3 (WiFi, no TF-Bus)
           # MySensors gateway variants (sdkconfig.defaults.mysensors): release images end in -mysensors.bin
           - { preset: waveshare-mysensors, target: esp32s3 }
           - { preset: gate-mysensors,      target: esp32 }
           - { preset: f8-mysensors,        target: esp32s3 }
           - { preset: a8v3-mysensors,      target: esp32s3 }
+    uses: ./.github/workflows/build-firmware.yml
+    with:
+      preset: ${{ matrix.preset }}
+      target: ${{ matrix.target }}
+
+  gate-http:
+    name: Firmware (gate-http)
+    uses: ./.github/workflows/build-firmware.yml
+    with:
+      preset: gate-http
+      target: esp32s3
+      capture-build-log: true
+
+  gate-http-N8R8:
+    name: Firmware (gate-http-N8R8)
+    uses: ./.github/workflows/build-firmware.yml
+    with:
+      preset: gate-http-N8R8
+      target: esp32s3
+      capture-build-log: true
+
+  gate-http-low-memory:
+    name: Firmware (gate-http-low-memory)
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    uses: ./.github/workflows/build-firmware.yml
+    with:
+      preset: gate-http-low-memory
+      target: esp32s3
+      capture-build-log: true
+
+  coverage:
+    name: Host tests and coverage
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-24.04
+    env:
+      COVERAGE_MIN: 95
+      MBEDTLS_VERSION: 3.6.2
     steps:
       - uses: actions/checkout@v7
 
-      - name: ESP-IDF build
-        uses: espressif/esp-idf-ci-action@v1
-        with:
-          esp_idf_version: v6.0.2
-          target: ${{ matrix.target }}
-          path: '.'
-          command: idf.py --preset ${{ matrix.preset }} build merge-bin
-
-      - name: Package
+      - name: Install host tools
         run: |
-          set -euo pipefail
-          bdir=$(jq -r --arg p "${{ matrix.preset }}" \
-            '.configurePresets[] | select(.name == $p) | .binaryDir' CMakePresets.json)
-          out=dist/opengr8on-clu-${{ matrix.preset }}
-          mkdir -p "$out/bootloader" "$out/partition_table"
-          # full image from 0x0: bootloader, partition table, OTA data, app (NVS area erased)
-          cp "$bdir/merged-binary.bin" "$out/opengr8on-clu-${{ matrix.preset }}-full.bin"
-          # application image only: network update (POST /ota, web flasher "over the network")
-          cp "$bdir/opengr8on_clu_esp32.bin" "$out/opengr8on-clu-${{ matrix.preset }}-ota.bin"
-          # update without touching NVS: esptool write-flash @flash_args (paths as in flash_args)
-          cp "$bdir/bootloader/bootloader.bin" "$out/bootloader/"
-          cp "$bdir/partition_table/partition-table.bin" "$out/partition_table/"
-          cp "$bdir/ota_data_initial.bin" "$bdir/opengr8on_clu_esp32.bin" "$bdir/opengr8on_clu_esp32.elf" \
-             "$bdir/flash_args" "$bdir/flasher_args.json" "$out/"
-          cp tools/mknvs.py "$out/"
-          echo "${{ matrix.target }}" > "$out/CHIP"
-          git describe --tags --always --dirty > "$out/VERSION"
-          ls -lR "$out"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc libc6-dev make python3 lua5.3
 
-      - name: Upload firmware
+      # ASan's shadow memory does not fit with the runners' default 32-bit mmap randomisation.
+      - name: Allow AddressSanitizer
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Cache mbedtls
+        id: mbedtls-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/mbedtls3
+          key: mbedtls-${{ env.MBEDTLS_VERSION }}-${{ runner.os }}
+
+      - name: Build mbedtls
+        if: steps.mbedtls-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fsSL -o /tmp/mbedtls.tar.bz2 \
+            "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-${MBEDTLS_VERSION}/mbedtls-${MBEDTLS_VERSION}.tar.bz2"
+          tar -xjf /tmp/mbedtls.tar.bz2 -C /tmp
+          make -C "/tmp/mbedtls-${MBEDTLS_VERSION}" -j"$(nproc)" lib
+          mkdir -p ~/mbedtls3/lib
+          cp -r "/tmp/mbedtls-${MBEDTLS_VERSION}/include" ~/mbedtls3/include
+          cp "/tmp/mbedtls-${MBEDTLS_VERSION}"/library/*.a ~/mbedtls3/lib/
+
+      - name: Cache Python downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ runner.arch }}-esp-idf-nvs-partition-gen
+
+      # web/nvs.js (settings image built by the web flasher) against the ESP-IDF generator
+      - name: Web flasher settings image
+        run: |
+          python3 -m pip install --user --break-system-packages esp-idf-nvs-partition-gen
+          node test/web/test_nvs.mjs
+
+      # web/ota.js (network update: application image out of the full image, CLU address, auth)
+      - name: Web flasher network update
+        run: node test/web/test_ota.mjs
+
+      - name: Tests with coverage
+        run: |
+          make -C test/host coverage \
+            MBEDTLS3_INC="$HOME/mbedtls3/include" MBEDTLS3_LIB="$HOME/mbedtls3/lib" \
+            FAIL_UNDER="$COVERAGE_MIN"
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f test/host/coverage/summary.md ]; then
+            { echo "## Host test coverage"; echo; cat test/host/coverage/summary.md; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload coverage report
+        if: always()
         uses: actions/upload-artifact@v7
         with:
+          name: coverage
+          path: |
+            test/host/coverage/summary.md
+            test/host/coverage/coverage.json
+          if-no-files-found: ignore
+
+  emulator:
+    name: Emulator integration (${{ matrix.preset }})
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    needs: [ gate-http, gate-http-low-memory ]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: gate-http
+            build_dir: build-gate-http
+            flash_size: 16MB
+            psram_size: 8M
+          - preset: gate-http-low-memory
+            build_dir: build-gate-http-low-memory
+            flash_size: 4MB
+            psram_size: 2M
+    env:
+      ESP_EMU_VERSION: 1.0.0
+      ESP_EMU_SHA256: bbc05bcbee298ac66070cd16d688de51721c828ad4a77f382ab4d4b25e6f42b5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download gate-http firmware
+        uses: actions/download-artifact@v8
+        with:
           name: opengr8on-clu-${{ matrix.preset }}
-          path: dist/opengr8on-clu-${{ matrix.preset }}
-          if-no-files-found: error
+          path: ${{ matrix.build_dir }}
+
+      - name: Ensure emulator files are runner-owned
+        run: sudo chown -R "$(id -u):$(id -g)" "${{ matrix.build_dir }}"
+
+      - name: Prepare emulator firmware
+        run: cp "${{ matrix.build_dir }}/opengr8on-clu-${{ matrix.preset }}-full.bin" "${{ matrix.build_dir }}/merged-binary.bin"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Cache Python downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ runner.arch }}-py3.12-cryptography-44.0.2-nvs-partition-gen
+          restore-keys: |
+            pip-${{ runner.os }}-${{ runner.arch }}-py3.12-
+
+      - name: Install Python test dependencies and generate settings images
+        run: |
+          python -m pip install --disable-pip-version-check cryptography==44.0.2 esp-idf-nvs-partition-gen
+          python3 tools/mknvs.py --serial 221010155 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o "${{ matrix.build_dir }}/udp-cfg-a.bin"
+          python3 tools/mknvs.py --serial 221010156 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o "${{ matrix.build_dir }}/udp-cfg-b.bin"
+
+      - name: Test emulator runners
+        run: python3 -m unittest discover -s test -t . -v
+
+      - name: Cache pinned esp-emu
+        id: esp-emu-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/esp-emu-${{ env.ESP_EMU_VERSION }}-x86_64-unknown-linux-gnu
+          key: esp-emu-${{ runner.os }}-${{ runner.arch }}-${{ env.ESP_EMU_VERSION }}-${{ env.ESP_EMU_SHA256 }}
+
+      - name: Install pinned esp-emu
+        if: steps.esp-emu-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/esp-emu-${ESP_EMU_VERSION}.tar.gz"
+          url="https://github.com/espressif/esp-emulator/releases/download/v${ESP_EMU_VERSION}/esp-emu-${ESP_EMU_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$url" -o "$archive"
+          printf '%s  %s\n' "$ESP_EMU_SHA256" "$archive" | sha256sum --check --status
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+
+      - name: Set esp-emu path
+        run: echo "ESP_EMU=$RUNNER_TEMP/esp-emu-${ESP_EMU_VERSION}-x86_64-unknown-linux-gnu/esp-emu" >> "$GITHUB_ENV"
+
+      - name: Boot firmware and check readiness
+        run: |
+          python3 -m test.emulator.boot.run_boot \
+            --emulator "$ESP_EMU" \
+            --firmware "${{ matrix.build_dir }}/merged-binary.bin" \
+            --elf "${{ matrix.build_dir }}/opengr8on_clu_esp32.elf" \
+            --flash-size "${{ matrix.flash_size }}" \
+            --psram-size "${{ matrix.psram_size }}" \
+            --log "${{ matrix.build_dir }}/esp-emu.log"
+
+      - name: Test native CLU UDP between two emulators
+        run: |
+          python3 -m test.emulator.udp.run_udp \
+            --emulator "$ESP_EMU" \
+            --firmware "${{ matrix.build_dir }}/merged-binary.bin" \
+            --elf "${{ matrix.build_dir }}/opengr8on_clu_esp32.elf" \
+            --cfg-a "${{ matrix.build_dir }}/udp-cfg-a.bin" \
+            --cfg-b "${{ matrix.build_dir }}/udp-cfg-b.bin" \
+            --psram-size "${{ matrix.psram_size }}" \
+            --out-dir "${{ matrix.build_dir }}/udp-test"
+
+      - name: Test HttpRequest and HttpListener between two emulators
+        run: |
+          python3 -m test.emulator.http.run_http \
+            --emulator "$ESP_EMU" \
+            --firmware "${{ matrix.build_dir }}/merged-binary.bin" \
+            --elf "${{ matrix.build_dir }}/opengr8on_clu_esp32.elf" \
+            --cfg-a "${{ matrix.build_dir }}/udp-cfg-a.bin" \
+            --cfg-b "${{ matrix.build_dir }}/udp-cfg-b.bin" \
+            --psram-size "${{ matrix.psram_size }}" \
+            --out-dir "${{ matrix.build_dir }}/http-test"
+
+      - name: Upload build and emulator logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.preset }}-esp32s3-emulator-logs
+          path: |
+            ${{ matrix.build_dir }}/esp-emu.log
+            ${{ matrix.build_dir }}/udp-test/*.log
+            ${{ matrix.build_dir }}/udp-test/*.LUA
+            ${{ matrix.build_dir }}/udp-test/packets.json
+            ${{ matrix.build_dir }}/udp-test/result.txt
+            ${{ matrix.build_dir }}/http-test/*.log
+            ${{ matrix.build_dir }}/http-test/*.LUA
+            ${{ matrix.build_dir }}/http-test/result.txt
+          if-no-files-found: ignore
 
   # Tag v*: GitHub release with, per board and variant, the full image (what the web flasher and
   # the README commands take) and the application image for network updates (-ota.bin); MySensors
@@ -78,12 +269,12 @@ jobs:
   # ...-ota-mysensors.bin). One zip per board holds both complete artifacts, unchanged, as
   # tfbus/ and mysensors/ (flash_args paths stay relative to each).
   # Grenton GATE (preset gate, gate-mysensors): zip only, no .bin assets.
-  # GATE HTTP (preset gate-http, one variant): opengr8on-gate-http-esp32s3-<tag>.bin, -ota.bin and a
-  # zip with the artifact as firmware/.
+  # GATE HTTP: opengr8on-gate-http-esp32s3-<tag>.bin, -ota.bin and a zip with the artifact as
+  # firmware/. The 8 MB flash / 8 MB PSRAM variant adds -N8R8 before the extension.
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [ firmware, gate-http, gate-http-N8R8 ]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -91,6 +282,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
+          pattern: opengr8on-clu-*
 
       - name: Assets
         run: |
@@ -99,13 +291,15 @@ jobs:
           mkdir -p assets
           for dir in artifacts/opengr8on-clu-*; do
             preset="${dir##*/opengr8on-clu-}"
-            if [[ "$preset" == gate-http ]]; then
+            [[ "$preset" == gate-http-low-memory ]] && continue
+            if [[ "$preset" == gate-http || "$preset" == gate-http-N8R8 ]]; then
               name=opengr8on-gate-http-esp32s3
-              cp "$dir/opengr8on-clu-${preset}-full.bin" "assets/${name}-${tag}.bin"
-              cp "$dir/opengr8on-clu-${preset}-ota.bin" "assets/${name}-${tag}-ota.bin"
-              mkdir -p "single/$name"
-              cp -r "$dir" "single/$name/firmware"
-              (cd "single/$name" && zip -qr "../../assets/${name}-${tag}.zip" firmware)
+              suffix="${preset#gate-http}" # "" or "-N8R8"
+              cp "$dir/opengr8on-clu-${preset}-full.bin" "assets/${name}-${tag}${suffix}.bin"
+              cp "$dir/opengr8on-clu-${preset}-ota.bin" "assets/${name}-${tag}-ota${suffix}.bin"
+              mkdir -p "single/${name}${suffix}"
+              cp -r "$dir" "single/${name}${suffix}/firmware"
+              (cd "single/${name}${suffix}" && zip -qr "../../assets/${name}-${tag}${suffix}.zip" firmware)
               continue
             fi
             board="${preset%-mysensors}"

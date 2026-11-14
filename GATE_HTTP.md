@@ -12,6 +12,10 @@ Zachowanie obiektów według
 
 Gotowy obraz: preset `gate-http` (ESP32-S3, 16 MB flash / 8 MB PSRAM, WiFi), w wydaniach
 `opengr8on-gate-http-esp32s3-<wersja>.bin` / `…-ota.bin`.
+Dla ESP32-S3 N8R8 (8 MB flash / 8 MB octal PSRAM): preset `gate-http-N8R8`, obrazy
+`opengr8on-gate-http-esp32s3-<wersja>-N8R8.bin` / `…-<wersja>-ota-N8R8.bin`.
+Wariant N8R8 ma dwa sloty OTA po 3 MB i FAT 1920 KB. Zmiana układu partycji wymaga pełnej
+instalacji przez USB z kasowaniem danych, nie aktualizacji OTA.
 
 GATE nie ma magistrali: przy tym typie `CLU_BUS` ma do wyboru tylko `CLU_BUS_NONE` (UART i piny RS485
 nieużywane), w OM nie ma modułów TF-Bus.

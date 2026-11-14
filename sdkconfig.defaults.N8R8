@@ -1,0 +1,4 @@
+# ESP32-S3 N8R8: 8 MB flash, 8 MB octal PSRAM. Applied after the target defaults.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_8mb.csv"
+CONFIG_SPIRAM_MODE_OCT=y

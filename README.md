@@ -1,7 +1,6 @@
 # opengr8on-clu-esp32 — sprzętowa CLU Grentona na ESP32-S3
 
-[![Tests](https://github.com/psobiech/opengr8on-clu-esp32/actions/workflows/tests.yml/badge.svg?branch=develop)](https://github.com/psobiech/opengr8on-clu-esp32/actions/workflows/tests.yml)
-[![Firmware](https://github.com/psobiech/opengr8on-clu-esp32/actions/workflows/firmware.yml/badge.svg?branch=develop)](https://github.com/psobiech/opengr8on-clu-esp32/actions/workflows/firmware.yml)
+[![CI](https://github.com/psobiech/opengr8on-clu-esp32/actions/workflows/firmware.yml/badge.svg?branch=develop)](https://github.com/psobiech/opengr8on-clu-esp32/actions/workflows/firmware.yml)
 
 > **Uwaga / Note:** Dokumentacja, opisy protokołów i zachowanie firmware w tym repozytorium mogą
 > zawierać błędy, nieścisłości lub domysły. Nie gwarantujemy ich dokładności ani kompletności.
@@ -15,20 +14,12 @@ Firmware, który z ESP32-S3 (R8: 16 MB flash, 8 MB PSRAM) i transceivera RS485 r
 centralną (CLU) zgodną z systemem Grenton. Object Manager (OM) — albo rozszerzenie VS Code
 [opengr8on-vscode](https://github.com/psobiech/opengr8on-vscode) w jego roli — widzi ją jak zwykłą
 CLU: wykrywa ją, wgrywa projekt (OM.LUA / USER.LUA), steruje obiektami i odczytuje diagnostykę.
-Po stronie RS485 CLU jest masterem magistrali TF-Bus i obsługuje prawdziwe moduły Grentona.
+Po stronie RS485 CLU jest masterem magistrali TF-Bus i obsługuje prawdziwe moduły Grentona lub moduły oparte na MySensors, np. Nippy.
 
-To napisany w C port vCLU z [opengr8on-node](https://github.com/psobiech/opengr8on-node): strona UDP/Lua
-pochodzi z vCLU, strona RS485 z jego `src/tfbus`. Opis protokołów: `docs/UDP.md` i `docs/TFBUS.md`.
-Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8on-node.
+Aby rozpocząć wystarczy płyka z ESP32S3 (np. https://kamami.pl/xiao/1184486-xiao-esp32s3-plytka-z-modulem-wifi-i-ble-esp32-s3-5906623414963.html) i przęglądarka Chrome wraz z **[flasherem w przeglądarce](https://psobiech.github.io/opengr8on-clu-esp32/)**
 
 > **Wczesna faza rozwoju.** Większość funkcji jest przetestowana na hoście (testy jednostkowe,
-> porównanie z przechwytem prawdziwej CLU), ale część zachowań jest odgadnięta i niezweryfikowana na
-> sprzęcie.
->
-> **Pokrycie testami** (`make -C test/host coverage`, mierzone też w CI): ok. 98% linii całego kodu C
-> firmware (każdy plik `components/` i `main/` ma testy hosta; bez zewnętrznej biblioteki Lua) i ok.
-> 97% kodu Lua (prelude, obiekty wirtualne, MQTT). Testy hosta zastępują ESP-IDF zaślepkami: nie
-> sprawdzają WiFi, FAT, UART ani zegarów na prawdziwym sprzęcie.
+> porównanie z przechwytem prawdziwej CLU), ale część zachowań jest odgadnięta i może zachowywać się nieco inaczej
 
 ## Spis treści
 
@@ -49,21 +40,26 @@ Wszystkie ścieżki `docs/...` w tym pliku odnoszą się do repozytorium opengr8
 ### Gotowe obrazy
 
 Bez instalowania ESP-IDF. Każde wydanie na stronie
-[Releases](https://github.com/psobiech/opengr8on-clu-esp32/releases) ma dla każdej płytki pełny
+[Releases](https://github.com/psobiech/opengr8on-clu-esp32/releases) ma dla każdej płytki CLU pełny
 obraz `opengr8on-clu-<płytka>-<wersja>.bin` (instalacja / aktualizacja przez USB) i sam obraz
 aplikacji `opengr8on-clu-<płytka>-<wersja>-ota.bin` ([aktualizacja przez sieć](#aktualizacja-przez-sieć-ota)):
 
-| Płytka | `<płytka>` | Układ | Sieć |
+| Płytka | Pełny obraz z wydania (USB) | Układ | Sieć |
 |---|---|---|---|
-| Waveshare ESP32-S3-RS485-CAN | `waveshare` | `esp32s3` | WiFi |
-| KinCony F8 | `f8` | `esp32s3` | Ethernet (DHCP) |
-| KinCony KC868-A8v3 | `a8v3` | `esp32s3` | Ethernet (DHCP) |
+| [Waveshare ESP32-S3-RS485-CAN (sklep Kamami)](https://kamami.pl/moduly-wifi/1201081-industrial-esp32-s3-control-board-with-rs485-and-can-communication-interfaces-supports-wi-fi-blue-5902186330269.html) | `opengr8on-clu-waveshare-<wersja>.bin` | `esp32s3` | WiFi |
+| [KinCony F8 (strona produktu)](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html) | `opengr8on-clu-f8-<wersja>.bin` | `esp32s3` | Ethernet (DHCP) |
+| [KinCony KC868-A8v3 (strona produktu)](https://www.kincony.com/esp32-s3-8-channel-relay-module.html) | `opengr8on-clu-a8v3-<wersja>.bin` | `esp32s3` | Ethernet (DHCP) |
+| [ESP32-S3 N8R8 (sklep Kamami)](https://kamami.pl/esp32/1184834-esp32-s3-microcontroller-2-4ghz-wi-fi-development-board-240mhz-dual-core-processor-esp32-s3-wroom-5906623423545.html) — GATE HTTP, 8 MB flash / 8 MB PSRAM | `opengr8on-gate-http-esp32s3-<wersja>-N8R8.bin` | `esp32s3` | WiFi |
 
-Wariant z bramką [MySensors](MYSENSORS.md) zamiast TF-Bus: te same obrazy z końcówką `-mysensors`
+Wariant CLU z bramką [MySensors](MYSENSORS.md) zamiast TF-Bus: obrazy CLU z końcówką `-mysensors`
 (`…-<wersja>-mysensors.bin`, `…-<wersja>-ota-mysensors.bin`).
 
 [GATE HTTP](GATE_HTTP.md) na ESP32-S3 (16 MB flash, 8 MB PSRAM, WiFi, bez TF-Bus):
 `opengr8on-gate-http-esp32s3-<wersja>.bin` i `opengr8on-gate-http-esp32s3-<wersja>-ota.bin`.
+Wariant 8 MB flash / 8 MB octal PSRAM ma końcówkę `-N8R8`: `…-<wersja>-N8R8.bin`,
+`…-<wersja>-ota-N8R8.bin` i `…-<wersja>-N8R8.zip`.
+Przejście między układami partycji 16 MB i 8 MB wymaga pełnej instalacji przez USB
+(kasuje dane); OTA nie zmienia tablicy partycji.
 
 Dla [Grenton GATE](DEVICES.md#grenton-gate) wydanie ma tylko `opengr8on-clu-gate-<wersja>.zip`
 (zob. [Wgrywanie z linii poleceń](#wgrywanie-z-linii-poleceń)), bez osobnych `.bin`.
@@ -191,10 +187,12 @@ Grenton GATE: `--chip esp32`, w pozostałych przykładach bez zmian. Wariant MyS
 
 ### Obrazy z GitHub Actions
 
-Workflow **Firmware** buduje każdy push na `develop` / `main` (bez wydania): zakładka **Actions** →
-przebieg *Firmware* → **Artifacts**, osobny artefakt na płytkę i wariant (zawartość jak katalog
-`tfbus/` / `mysensors/` w `.zip` wydania, zob. wyżej); do flashera wybierz z
-niego `…-full.bin` (USB) albo `…-ota.bin` (przez sieć).
+Workflow **Firmware** uruchamia równolegle kompilacje płytek i testy hosta, a testy emulatora używają
+już zbudowanego obrazu `gate-http`. Przy pushu lub pull requeście na `develop` (oraz przy ręcznym
+uruchomieniu) artefakty znajdziesz w **Actions** → przebieg *Firmware* → **Artifacts**; jest osobny
+artefakt na płytkę i wariant (zawartość jak katalog `tfbus/` / `mysensors/` w `.zip` wydania, zob.
+wyżej). Do flashera wybierz z niego `…-full.bin` (USB) albo `…-ota.bin` (przez sieć); tagi `v*`
+publikują wydanie.
 
 ### Wymagania do budowania
 
@@ -217,6 +215,7 @@ plik `sdkconfig`, więc można przełączać się między płytkami bez `set-tar
 | `f8` | [KinCony F8](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-f8/` | `sdkconfig.f8` |
 | `a8v3` | [KinCony KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-a8v3/` | `sdkconfig.a8v3` |
 | `gate-http` | [GATE HTTP](GATE_HTTP.md) na ESP32-S3 (WiFi) | `build-gate-http/` | `sdkconfig.gate-http` |
+| `gate-http-N8R8` | [GATE HTTP](GATE_HTTP.md) na ESP32-S3 N8R8 (8 MB flash, 8 MB PSRAM, WiFi) | `build-gate-http-N8R8/` | `sdkconfig.gate-http-N8R8` |
 
 ```bash
 . /opt/esp-idf/export.sh        # ścieżka do Twojej instalacji ESP-IDF
@@ -259,6 +258,12 @@ pierwszym `req_set_key`. Linia z PIN-em trafia tylko na UART, nie na telnet.
 Partycje (`partitions.csv`): NVS (klucze, PIN, sieć, czas), `cfg` (12 KB pod `0x12000`, ustawienia
 z `mknvs.py`, firmware tylko je czyta), dwie partycje aplikacji po 4 MB, FAT 6 MB jako `a:\`
 (projekt, CONFIG.JSON, STORAGE.DAT, certyfikaty).
+Dla `gate-http-N8R8`: `partitions_8mb.csv`, dwie partycje aplikacji po 3 MB i FAT 1920 KB.
+
+> **Pokrycie testami** (`make -C test/host coverage`, mierzone też w CI): ok. 98% linii całego kodu C
+> firmware (każdy plik `components/` i `main/` ma testy hosta; bez zewnętrznej biblioteki Lua) i ok.
+> 97% kodu Lua (prelude, obiekty wirtualne, MQTT). Testy hosta zastępują ESP-IDF zaślepkami: nie
+> sprawdzają WiFi, FAT, UART ani zegarów na prawdziwym sprzęcie.
 
 ## Zgodność z CLU_ZWAVE_2
 
@@ -347,6 +352,13 @@ Piny, profile i uwagi do każdej płytki: [DEVICES.md](DEVICES.md). Wymagany PSR
 | [Inne płytki ESP32-S3](DEVICES.md#inne-płytki-esp32-s3) | ESP32-S3, 16 MB / 8 MB PSRAM | WiFi | własny transceiver RS485 |
 | [KinCony F8, KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3) | ESP32-S3 N16R8 | Ethernet W5500 | 8 przekaźników + 8 wejść jako IO_MODULE_DIN_8 |
 | [Grenton GATE](DEVICES.md#grenton-gate) | ESP32-WROVER-B | Ethernet LAN8720A | target `esp32` |
+
+Płytki dostępne w sklepach:
+
+- [Waveshare ESP32-S3-RS485-CAN — Kamami](https://kamami.pl/moduly-wifi/1201081-industrial-esp32-s3-control-board-with-rs485-and-can-communication-interfaces-supports-wi-fi-blue-5902186330269.html)
+- [KinCony F8 — KinCony](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html)
+- [KinCony KC868-A8v3 — KinCony](https://www.kincony.com/esp32-s3-8-channel-relay-module.html)
+- [ESP32-S3 Mini N8R8 — Kamami](https://kamami.pl/esp32/1203762-esp32-s3-mini-development-board-based-on-esp32-s3fh4r2-esp32-s3-pico-1-n8r8-dual-core-processor-24.html) (wariant N8R8 ma 8 MB flash; wymagane jest 16 MB)
 
 ## Konfiguracja
 

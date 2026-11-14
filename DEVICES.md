@@ -10,8 +10,9 @@ Budowanie i opcje menuconfig: [README](README.md).
 `http.lua`), a projekt OM, skrypty i treści HTTP / MQTT dochodzą do tego. ESP32 bez PSRAM (np.
 moduły ESP32-WROOM-32) ma po starcie WiFi i usług ok. 65 KB wolnego wewnętrznego RAM, więc Lua się
 na nim nie uruchomi (w logu `Lua VM setup: not enough memory`; sieć, OTA i telnet działają dalej).
-Obsługiwane płytki mają 8 MB PSRAM (ESP32-S3) albo PSRAM modułu WROVER (ESP32). Flash: 4 MB
-wystarcza (`partitions_4mb.csv`), na ESP32-S3 profile zakładają 16 MB.
+Obsługiwane płytki mają 8 MB PSRAM. Flash: 4 MB
+wystarcza (`partitions_4mb.csv`), na ESP32-S3 profile domyślnie zakładają 16 MB;
+`gate-http-N8R8` obsługuje 8 MB flash i 8 MB octal PSRAM (`partitions_8mb.csv`).
 
 - [Waveshare ESP32-S3-RS485-CAN](#waveshare-esp32-s3-rs485-can) — zalecana płytka (z zewnętrzną anteną)
 - [Inne płytki ESP32-S3](#inne-płytki-esp32-s3) — własny transceiver RS485
@@ -20,7 +21,7 @@ wystarcza (`partitions_4mb.csv`), na ESP32-S3 profile zakładają 16 MB.
 
 ## Waveshare ESP32-S3-RS485-CAN
 
-Zalecana płytka: **[Waveshare ESP32-S3-RS485-CAN](https://www.waveshare.com/wiki/ESP32-S3-RS485-CAN)** (ESP32-S3R8, 16 MB flash, 8 MB PSRAM, RS485 na płytce).
+Zalecana płytka: **[Waveshare ESP32-S3-RS485-CAN](https://www.waveshare.com/wiki/ESP32-S3-RS485-CAN)** (ESP32-S3R8, 16 MB flash, 8 MB PSRAM, RS485 na płytce; [sklep Kamami](https://kamami.pl/moduly-wifi/1201081-industrial-esp32-s3-control-board-with-rs485-and-can-communication-interfaces-supports-wi-fi-blue-5902186330269.html)).
 Piny z przykładów producenta (`WS_GPIO.h`), domyślne w menuconfig:
 
 | Sygnał | GPIO |
@@ -43,6 +44,10 @@ zgłasza czas jako nieważny i zegar jest błędny do pierwszej synchronizacji S
 Wymagane: ESP32-S3 z 16 MB flash i 8 MB PSRAM (octal), transceiver RS485 3,3 V, zasilanie z 24 V
 magistrali przez przetwornicę.
 
+Przykładowa płytka: [ESP32-S3 N8R8 z Kamami](https://kamami.pl/esp32/1184834-esp32-s3-microcontroller-2-4ghz-wi-fi-development-board-240mhz-dual-core-processor-esp32-s3-wroom-5906623423545.html).
+Wariant N8R8 ma 8 MB flash: dla GATE HTTP użyj presetu `gate-http-N8R8` i obrazów wydania
+z końcówką `-N8R8` (bez RS485). Pozostałe profile ESP32-S3 nadal wymagają 16 MB flash.
+
 ```
  ESP32-S3                3.3 V RS485 transceiver            TFBUS cable
  GPIO17 (TX) ─────────── DI                          A ──── A
@@ -64,6 +69,9 @@ magistrali przez przetwornicę.
 Obie płytki: ESP32-S3-WROOM-1U N16R8 (16 MB flash, 8 MB PSRAM), Ethernet W5500 na SPI, RS485 i
 8 przekaźników + 8 wejść na jednym ekspanderze PCF8575. Profile `sdkconfig.defaults.f8` i
 `sdkconfig.defaults.a8v3`, presety `f8` / `a8v3` (zob. [Budowanie](README.md#budowanie)):
+
+- [KinCony F8 — strona produktu](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html)
+- [KinCony KC868-A8v3 — strona produktu](https://www.kincony.com/esp32-s3-8-channel-relay-module.html)
 
 | Funkcja | KinCony F8 | KC868-A8v3 | Opcja |
 |---|---|---|---|

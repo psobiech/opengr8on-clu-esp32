@@ -506,6 +506,10 @@ które zniknęły po zmianie OM.LUA, są czyszczone (lista w `a:\STORAGE.DAT`).
 |---|---|---|
 | DOUT (4) | `switch` | ON/OFF → SwitchOn/SwitchOff |
 | DIN (3) | `binary_sensor` + `event` | — |
+| DIMM (5) | `light` (schemat JSON, `brightness`) | jasność → Value; ON → SwitchOn (ostatnia wartość), OFF → SwitchOff; `transition` → Ramp (ON/OFF) |
+| LED_CHANNEL (49) | `light` (schemat JSON, `brightness`) | jasność → SetValue; ON → SwitchOn (ostatnia wartość), OFF → SwitchOff; `transition` → Ramp |
+| LED_CCT (72) | `light` (schemat JSON, `color_temp`, 2700–6500 K) | jak LED_CHANNEL + temperatura → SetColorTemp |
+| LEDRGB (9) | `light` (schemat JSON, `rgbw`) | kolor/jasność → SetRGBvalue + SetWhiteValue; ON → ostatni kolor, OFF → SwitchOff; `transition` → Ramp |
 | BUTTON (7), PANEL_BUTTON (30) | `event` (press, release, short_press, long_press, hold, click) | — |
 | ROLLER_SHUTTER (24) | `cover` (0 zamknięta … 100 otwarta) | OPEN/CLOSE → HoldUp/HoldDown, STOP, pozycja → SetPosition |
 | PANELSENSTEMP (20) / PANELSENSLIGHT (21) | `sensor` °C / % | — |
@@ -563,7 +567,7 @@ MQTT.hide("system")                                  -- no firmware entities
 MQTT.publish("custom/topic", "payload", true)        -- retained; MQTT.connected(), MQTT.root
 ```
 
-- Rodzaje: `switch`, `light`, `binary_sensor`, `sensor`, `cover`, `event`, `button`, `module`.
+- Rodzaje: `switch`, `light` (DIMM / LED_CHANNEL: jasność, LED_CCT: jasność + temperatura, LEDRGB: RGBW, inne: ON/OFF), `binary_sensor`, `sensor`, `cover`, `event`, `button`, `module`.
 - Opcje: `name`, `feature`, `unit`, `device_class`, `state_class`, `icon`, `entity_category`,
   `events`; czujniki także `text = true` (stan tekstowy), `map = {[v] = "label"}` (enum); przyciski
   `execute = idx` (lub `press = function(o) … end`).

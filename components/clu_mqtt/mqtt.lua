@@ -86,9 +86,192 @@ local function on_off_kind(comp)
   end
 end
 
+-- ---------------------------------------------------------------------------------------------
+-- Dimmable lights: HA JSON schema (state/command payload {"state":"ON","brightness":0-255,
+-- "color":{"r","g","b","w"},"transition":s}). Plain ON / OFF commands are accepted too.
+-- ---------------------------------------------------------------------------------------------
+local CLS_DIMM, CLS_LEDRGB = 5, 9
+local jdecode = __json.decode -- objects.lua
+
+local function b255(x)
+  x = math.floor((tonumber(x) or 0) + 0.5)
+  return x < 0 and 0 or x > 255 and 255 or x
+end
+
+-- Command payload -> table with .state "ON" / "OFF" (nil = not a light command).
+local function light_cmd(p)
+  local c = jdecode(p)
+  if type(c) ~= "table" then
+    p = p:upper()
+    c = { state = TRUE[p] and "ON" or FALSE[p] and "OFF" or nil }
+  end
+  if type(c.state) == "string" then c.state = c.state:upper() end
+  if c.state ~= "ON" and c.state ~= "OFF" then return nil end
+  return c
+end
+
+-- "transition" [s] -> ramp [ms] (nil = the object's RampTime).
+local function ramp_ms(c)
+  local t = tonumber(c.transition)
+  if t and t >= 0 then return math.floor(t * 1000 + 0.5) end
+end
+
+local function light_disc(mode)
+  return { schema = "json", state_topic = "~/state", command_topic = "~/set", brightness = true,
+           supported_color_modes = { mode } }
+end
+
+-- DIMM: feature 0 Value (0..1) <-> brightness. ON without brightness = SwitchOn with Mode
+-- LastValue, OFF = SwitchOff (both take the transition); brightness = set Value (RampTime).
+local function dimm_light(o)
+  return {
+    comp = "light",
+    raw = true,
+    disc = light_disc("brightness"),
+    states = {
+      state = function()
+        local v = tonumber(feat(o, 0)) or 0
+        if v <= 0 then return json({ state = "OFF", color_mode = "brightness" }) end
+        return json({ state = "ON", color_mode = "brightness", brightness = math.max(1, b255(v * 255)) })
+      end,
+    },
+    cmds = {
+      set = function(p)
+        local c = light_cmd(p)
+        if not c then return end
+        local ramp = ramp_ms(c)
+        if c.state == "OFF" then
+          o:execute(3, 0, ramp)                                     -- SwitchOff(Time, Ramp)
+        elseif tonumber(c.brightness) then
+          o:set(0, b255(c.brightness) / 255)
+        else
+          o:execute(2, 0, ramp or tonumber(feat(o, 1)), 1)        -- SwitchOn(Time, Ramp, Mode)
+        end
+      end,
+    },
+  }
+end
+
+-- LEDRGB: the output is R/G/B (features 3-5, already scaled by Value) + W (15), 0-255 each.
+-- HA sees brightness = the brightest channel and color = the output scaled up to that; commands
+-- go out as SetRGBvalue("#rrggbb", Ramp) + SetWhiteValue(w, Ramp). ON without a colour restores
+-- the last lit colour (SwitchOn before there was one), OFF = SwitchOff.
+local function rgbw_light(o)
+  local last -- last lit output {r, g, b, w}
+  local function output()
+    return { b255(feat(o, 3)), b255(feat(o, 4)), b255(feat(o, 5)), b255(feat(o, 15)) }
+  end
+  local function peak(c) return math.max(c[1], c[2], c[3], c[4]) end
+  return {
+    comp = "light",
+    raw = true,
+    disc = light_disc("rgbw"),
+    states = {
+      state = function()
+        local out = output()
+        local m = peak(out)
+        if m == 0 then return json({ state = "OFF", color_mode = "rgbw" }) end
+        last = out
+        return json({ state = "ON", color_mode = "rgbw", brightness = m,
+                      color = { r = b255(out[1] * 255 / m), g = b255(out[2] * 255 / m),
+                                b = b255(out[3] * 255 / m), w = b255(out[4] * 255 / m) } })
+      end,
+    },
+    cmds = {
+      set = function(p)
+        local c = light_cmd(p)
+        if not c then return end
+        local ramp = ramp_ms(c)
+        if c.state == "OFF" then o:execute(10, 0, ramp); return end -- SwitchOff(Time, Ramp)
+        local out = output()
+        local m = peak(out)
+        local base = m > 0 and out or last
+        local col = type(c.color) == "table" and c.color
+        if not col and not tonumber(c.brightness) then
+          if m > 0 then return end
+          if not base then o:execute(9, 0, ramp); return end       -- SwitchOn(Time, Ramp)
+        end
+        local bm = base and peak(base) or 0
+        local rgbw
+        if col then
+          rgbw = { b255(col.r), b255(col.g), b255(col.b), b255(col.w) }
+        elseif bm > 0 then
+          rgbw = { base[1] * 255 / bm, base[2] * 255 / bm, base[3] * 255 / bm, base[4] * 255 / bm }
+        else
+          rgbw = { 255, 255, 255, 0 }
+        end
+        local br = tonumber(c.brightness) and b255(c.brightness) or (bm > 0 and bm) or 255
+        for i = 1, 4 do rgbw[i] = b255(rgbw[i] * br / 255) end
+        o:execute(6, string.format("#%02x%02x%02x", rgbw[1], rgbw[2], rgbw[3]), ramp) -- SetRGBvalue
+        o:execute(12, rgbw[4], ramp)                                                   -- SetWhiteValue
+      end,
+    },
+  }
+end
+
+-- LED_CHANNEL (one channel of LED_RGBW, e.g. a separate lamp) and LED_CCT (warm + cold channel
+-- pair): Value (0-255) = brightness. brightness = SetValue(v, Ramp), ON without brightness =
+-- SwitchOn with Mode LastValue, OFF = SwitchOff; all take the transition. LED_CCT also maps
+-- ColorTemp (2700-6500 K, HA in kelvin) <-> SetColorTemp(K, Ramp).
+local CLS_LEDCH, CLS_LEDCCT = 49, 72
+local LEDCH = { value = 0, set = 0, on = 1, off = 2 }               -- feature / method indices
+local LEDCCT = { value = 2, set = 2, on = 4, off = 5, ct = 0, set_ct = 0 }
+local CT_MIN, CT_MAX = 2700, 6500
+
+local function channel_light(o, ix)
+  local mode = ix.ct and "color_temp" or "brightness"
+  local disc = light_disc(mode)
+  if ix.ct then
+    disc.color_temp_kelvin, disc.min_kelvin, disc.max_kelvin = true, CT_MIN, CT_MAX
+  end
+  return {
+    comp = "light",
+    raw = true,
+    disc = disc,
+    states = {
+      state = function()
+        local v = b255(feat(o, ix.value))
+        local st = { state = v > 0 and "ON" or "OFF", color_mode = mode }
+        if v > 0 then st.brightness = v end
+        if ix.ct then st.color_temp = math.tointeger(tonumber(feat(o, ix.ct))) end
+        return json(st)
+      end,
+    },
+    cmds = {
+      set = function(p)
+        local c = light_cmd(p)
+        if not c then return end
+        local ramp = ramp_ms(c)
+        if c.state == "OFF" then o:execute(ix.off, 0, ramp); return end -- SwitchOff(Time, Ramp)
+        local k = ix.ct and tonumber(c.color_temp)
+        if k then
+          k = math.floor(math.max(CT_MIN, math.min(CT_MAX, k)) + 0.5)
+          o:execute(ix.set_ct, k, ramp)                                   -- SetColorTemp(K, Ramp)
+        end
+        if tonumber(c.brightness) then
+          o:execute(ix.set, b255(c.brightness), ramp)                     -- SetValue(Value, Ramp)
+        elseif not k or b255(feat(o, ix.value)) == 0 then
+          o:execute(ix.on, 0, ramp, 1)                                    -- SwitchOn(Time, Ramp, Mode)
+        end
+      end,
+    },
+  }
+end
+
 local KINDS = {}
 KINDS.switch = on_off_kind("switch")
-KINDS.light = on_off_kind("light")
+local onoff_light = on_off_kind("light")
+-- light: brightness for DIMM / LED_CHANNEL, + colour temperature for LED_CCT, RGBW for LEDRGB,
+-- on/off for anything else (or with opts.feature).
+KINDS.light = function(o, opts)
+  if not opts.feature then
+    if o._class == CLS_DIMM then return dimm_light(o) end
+    if o._class == CLS_LEDRGB then return rgbw_light(o) end
+    if o._class == CLS_LEDCH then return channel_light(o, LEDCH) end
+    if o._class == CLS_LEDCCT then return channel_light(o, LEDCCT) end
+  end
+  return onoff_light(o, opts)
+end
 
 KINDS.binary_sensor = function(o, opts)
   local f = opts.feature or 0
@@ -211,11 +394,15 @@ end
 local DEFAULTS = {
   [3] = { { kind = "binary_sensor" }, { kind = "event" } },                         -- DIN
   [4] = { { kind = "switch" } },                                                    -- DOUT
+  [5] = { { kind = "light" } },                                                     -- DIMM
   [7] = { { kind = "event" } },                                                     -- BUTTON
+  [9] = { { kind = "light" } },                                                     -- LEDRGB
   [20] = { { kind = "sensor", device_class = "temperature", unit = "°C" } },        -- PANELSENSTEMP
   [21] = { { kind = "sensor", unit = "%", icon = "mdi:brightness-5" } },            -- PANELSENSLIGHT
   [24] = { { kind = "cover" } },                                                    -- ROLLER_SHUTTER
   [30] = { { kind = "event" } },                                                    -- PANEL_BUTTON
+  [49] = { { kind = "light" } },                                                    -- LED_CHANNEL
+  [72] = { { kind = "light" } },                                                    -- LED_CCT
 }
 
 -- ---------------------------------------------------------------------------------------------
@@ -538,8 +725,6 @@ end
 --   <root>/<OBJ>/execute/<idx>       [args] | v | "" -> <root>/<OBJ>/execute/<idx>/result
 -- Remote-CLU proxies (class 1) are refused: their execute(0, s) runs s as Lua on the peer.
 -- ---------------------------------------------------------------------------------------------
-local jdecode = __json.decode -- objects.lua
-
 local function api_reply(topic, ok, v)
   local body = ok and ('{"ok":true,"value":' .. json(v) .. "}") or ('{"ok":false,"error":' .. json(tostring(v)) .. "}")
   enqueue(topic, body, false, 0, false)
@@ -627,7 +812,8 @@ local function on_message(topic, payload)
     if fn then break end
   end
   if not fn then return end
-  payload = payload:match("^%s*(.-)%s*$"):upper()
+  payload = payload:match("^%s*(.-)%s*$")
+  if not e.raw then payload = payload:upper() end -- raw: JSON commands (lights)
   local ok, err = pcall(fn, payload)
   if not ok then C.log(1, "mqtt: " .. topic .. ": " .. tostring(err)) end
   -- Commands that change nothing (e.g. ON on an output that is on) would otherwise leave an

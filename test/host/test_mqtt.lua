@@ -63,7 +63,18 @@ __clu = {
 
 assert(loadfile(here .. "../../components/clu_lua/prelude.lua"))()
 assert(loadfile(here .. "../../components/clu_lua/objects.lua"))()
-assert(loadfile(here .. "../../components/clu_mqtt/mqtt.lua"))()
+local mqtt_dir = here .. "../../components/clu_mqtt/"
+local parts_file = assert(io.open(mqtt_dir .. "lua/parts.txt", "rb"))
+local mqtt_source = {}
+for part in parts_file:lines() do
+  if part ~= "" then
+    local part_file = assert(io.open(mqtt_dir .. "lua/" .. part, "rb"))
+    mqtt_source[#mqtt_source + 1] = part_file:read("*a")
+    part_file:close()
+  end
+end
+parts_file:close()
+assert(load(table.concat(mqtt_source), "@" .. mqtt_dir .. "mqtt.lua"))()
 __clu = nil
 
 -- USER.LUA-style override before the objects exist
@@ -74,6 +85,12 @@ DIM0001 = OBJECT:new(5, mm_550000001, 0, "DIM0001")
 LED0001 = OBJECT:new(9, mm_550000001, 0, "LED0001")
 LCH0001 = OBJECT:new(49, mm_550000001, 3, "LCH0001")
 CCT0001 = OBJECT:new(72, mm_550000001, 0, "CCT0001")
+TMR0001 = OBJECT:new(6, "TMR0001")
+SCH0001 = OBJECT:new(16, "SCH0001")
+THE0001 = OBJECT:new(18, "THE0001")
+PRE0001 = OBJECT:new(40, "PRE0001")
+TMR0001:set(0, 60000)
+TMR0001:execute(0)
 SYSTEM.Init()
 
 local function run(n)
@@ -111,6 +128,9 @@ DIM0001._f[0] = 0.5
 LED0001._f[3], LED0001._f[4], LED0001._f[5], LED0001._f[15] = 200, 100, 0, 50
 LCH0001._f[0] = 77
 CCT0001._f[0], CCT0001._f[2] = 4600, 0
+POW0001._f[0] = 23.8
+SCH0001._f[1], SCH0001._f[2] = 1, 42
+THE0001._f[3], THE0001._f[14] = 21.5, 20.25
 CLU100000001._f[0], CLU100000001._f[2] = 120, 1 -- Uptime, State (C hooks on the device)
 connected, gen = true, 1
 run()
@@ -147,13 +167,40 @@ check("LED_CCT state (off)", (find("grenton/CLU100000001/CCT0001/state") or {}).
 check("LEDRGB state", (find("grenton/CLU100000001/LED0001/state") or {}).p
   == '{"brightness":200,"color":{"b":0,"g":128,"r":255,"w":64},"color_mode":"rgbw","state":"ON"}')
 check("no entity for POW/STO/remote CLU", find(CFG .. "switch" .. NODE .. "CLU100000002/config") == nil
-  and count(CFG .. "sensor" .. NODE .. "POW") == 0 and count(CFG .. "sensor" .. NODE .. "STO") == 0
+  and count(CFG .. "sensor" .. NODE .. "STO") == 0
   and count("grenton/CLU100000001/CLU100000002") == 0)
+local voltage = find(CFG .. "sensor" .. NODE .. "POW0001/config")
+check("PowerSupplyVoltage -> voltage sensor", voltage and voltage.p:find('"device_class":"voltage"', 1, true)
+  and voltage.p:find('"unit_of_measurement":"V"', 1, true)
+  and (find("grenton/CLU100000001/POW0001/state") or {}).p == "23.8")
+local timer = find(CFG .. "sensor" .. NODE .. "TMR0001/config")
+check("Timer -> remaining duration sensor", timer and timer.p:find('"device_class":"duration"', 1, true)
+  and timer.p:find('"unit_of_measurement":"s"', 1, true)
+  and tonumber((find("grenton/CLU100000001/TMR0001/state") or {}).p) > 50
+  and tonumber((find("grenton/CLU100000001/TMR0001/state") or {}).p) < 60)
+check("Timer -> Start/Stop buttons", find(CFG .. "button" .. NODE .. "TMR0001_2/config") ~= nil
+  and find(CFG .. "button" .. NODE .. "TMR0001_3/config") ~= nil)
+local sched = find(CFG .. "sensor" .. NODE .. "SCH0001/config")
+check("Scheduler -> value sensor", sched and (find("grenton/CLU100000001/SCH0001/state") or {}).p == "42")
+check("Scheduler -> switch", find(CFG .. "switch" .. NODE .. "SCH0001_2/config") ~= nil)
+local thermo = find(CFG .. "climate" .. NODE .. "THE0001/config")
+check("Thermostat -> climate discovery", thermo and thermo.p:find('"current_temperature_topic":"~/state"', 1, true)
+  and thermo.p:find('"temperature_command_topic":"~/temperature/set"', 1, true)
+  and thermo.p:find('"mode_command_topic":"~/mode/set"', 1, true)
+  and thermo.p:find('"preset_mode_command_topic":"~/preset/set"', 1, true))
+local thermo_state = __mqtt.jdecode((find("grenton/CLU100000001/THE0001/state") or {}).p or "")
+check("Thermostat state from interface features", thermo_state and thermo_state.temperature == 21.5
+  and thermo_state.current_temperature == 20.3 and thermo_state.action == "heating")
+local presence = find(CFG .. "binary_sensor" .. NODE .. "PRE0001/config")
+check("PresenceSensor -> occupancy", presence and presence.p:find('"device_class":"occupancy"', 1, true))
+check("PresenceSensor -> Locked switch", find(CFG .. "switch" .. NODE .. "PRE0001_2/config") ~= nil)
 check("switch state ON", (find("grenton/CLU100000001/DOU0001/state") or {}).p == "ON")
 check("state retained", (find("grenton/CLU100000001/DOU0001/state") or {}).r == true)
 check("binary_sensor OFF", (find("grenton/CLU100000001/DIN0001/state") or {}).p == "OFF")
 check("cover stopped", (find("grenton/CLU100000001/ROL0001/state") or {}).p == "stopped")
 check("cover position", (find("grenton/CLU100000001/ROL0001/position") or {}).p == "55")
+TMR0001:execute(1)
+run(2)
 
 -- ---- internals --------------------------------------------------------------------
 local st = find(CFG .. "sensor" .. NODE .. "system_clu_state/config")
@@ -251,6 +298,38 @@ inbox = {
 }
 run(3)
 check("commands -> object calls", table.concat(executed, " ") == "DOU0001:2 DOU0002:1 ROL0001:5 ROL0001:3 ROL0001:10(42) ROL0001:10(100)")
+
+local function command(topic, payload)
+  inbox = { { "grenton/CLU100000001/" .. topic, payload } }
+  run(1)
+end
+command("TMR0001_2/set", "PRESS")
+check("Timer Start button", TMR0001:get(2) == 1)
+command("TMR0001_3/set", "PRESS")
+check("Timer Stop button", TMR0001:get(2) == 0)
+command("SCH0001_2/set", "ON")
+check("Scheduler switch starts", SCH0001:get(1) == 1)
+command("SCH0001_2/set", "OFF")
+check("Scheduler switch stops", SCH0001:get(1) == 0)
+command("PRE0001_2/set", "ON")
+check("Presence Locked switch on", PRE0001:get(5) == 1)
+command("PRE0001_2/set", "OFF")
+check("Presence Locked switch off", PRE0001:get(5) == 0)
+command("THE0001/temperature/set", "22.26")
+check("Thermostat temperature rounds to half-degree", THE0001:get(3) == 22.5)
+command("THE0001/mode/set", "off")
+check("Thermostat mode off stops", THE0001:get(6) == 0)
+command("THE0001/mode/set", "heat")
+check("Thermostat mode heat starts", THE0001:get(6) == 1)
+command("THE0001/preset/set", "away")
+check("Thermostat away preset", THE0001:get(8) == 1)
+command("THE0001/preset/set", "none")
+check("Thermostat none exits holiday", THE0001:get(8) == 0)
+command("THE0001/preset/set", "auto")
+check("Thermostat auto preset", THE0001:get(8) == 2)
+command("THE0001/preset/set", "none")
+command("THE0001/preset/set", "boost")
+check("Thermostat boost preset", THE0001:get(8) == 3 and THE0001._heatup.add == 5)
 
 -- ---- lights (JSON schema) -------------------------------------------------------------
 local calls = {}
@@ -350,7 +429,7 @@ check("HA online -> discovery resent", count(CFG) > before)
 
 -- ---- remap at runtime: old configs cleared -----------------------------------------
 MQTT.hide(DOU0001)
-run(3)
+run(10)
 local cleared = find(CFG .. "switch" .. NODE .. "DOU0001/config")
 check("hidden entity config cleared", cleared and cleared.p == "" and cleared.r == true)
 __persist.flush(true)

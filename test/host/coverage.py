@@ -23,8 +23,28 @@ from collections import defaultdict
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 OUT = os.path.join(HERE, "coverage")
+
+
+def mqtt_parts():
+    manifest = os.path.join(ROOT, "components", "clu_mqtt", "lua", "parts.txt")
+    parts, offset = [], 0
+    with open(manifest) as fh:
+        for name in fh:
+            name = name.strip()
+            if not name:
+                continue
+            path = os.path.join("components", "clu_mqtt", "lua", name)
+            with open(os.path.join(ROOT, path), "rb") as part:
+                count = len(part.read().splitlines())
+            parts.append((path, offset, count))
+            offset += count
+    return parts
+
+
+MQTT_PARTS = mqtt_parts()
 LUA_SOURCES = ["components/clu_lua/prelude.lua", "components/clu_lua/objects.lua",
-               "components/clu_mqtt/mqtt.lua", "components/clu_mysensors/mysensors.lua"]
+               *(path for path, _, _ in MQTT_PARTS), "components/clu_mysensors/mysensors.lua"]
+MQTT_BUNDLE = "components/clu_mqtt/mqtt.lua"
 
 
 def rel(path, cwd):
@@ -87,11 +107,17 @@ def lua_coverage(luac):
                 src, ln = row.rstrip("\n").split("\t")
                 hits[rel(src, HERE)].add(int(ln))
     res = {}
+    mqtt_hits = hits[MQTT_BUNDLE]
+    mqtt_offsets = {path: (offset, count) for path, offset, count in MQTT_PARTS}
     for r in LUA_SOURCES:
         out = subprocess.run([luac, "-l", "-l", "-p", os.path.join(ROOT, r)], capture_output=True,
                              text=True, check=True).stdout
         exe = {int(m) for m in re.findall(r"^\s*\d+\s+\[(\d+)\]", out, re.M)}
-        hit = hits[r] & exe
+        if r in mqtt_offsets:
+            offset, count = mqtt_offsets[r]
+            hit = {line - offset for line in mqtt_hits if offset < line <= offset + count} & exe
+        else:
+            hit = hits[r] & exe
         res[r] = {"lines": [len(hit), len(exe)], "uncovered_lines": sorted(exe - hit)}
     return res
 

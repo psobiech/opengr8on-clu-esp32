@@ -350,6 +350,17 @@ static int lua_module(lua_Integer sn, lua_Integer hw, const char *name)
     return obj;
 }
 
+static int lua_module_src(const char *source)
+{
+    if (luaL_dostring(L, source) != LUA_OK) {
+        fprintf(stderr, "Lua fixture failed: %s\n", lua_tostring(L, -1));
+        exit(1);
+    }
+    int obj = lua_gettop(L);
+    s_ops[2]->on_new(L, obj);
+    return obj;
+}
+
 // OBJECT:new(cls, module, ch, name); module = stack index of the module table (0 = virtual)
 static int lua_io(int cls, int module, int ch, const char *name)
 {
@@ -404,7 +415,7 @@ int main(void)
 
     // ---- registry from OM.LUA
     int A = lua_module(0x13ab6c81, 0x1e, "mm_A");
-    int Z = lua_module(0x008500030011LL, 0x008500030011LL, "zwave"); // Z-Wave node, not TFBUS
+    int Z = lua_module_src("return {_class=2, _sn=0x008500030011, _hwType=0x008500030011, _name='zwave'}");
     int B = lua_module(0x11111111, 0x99, "mm_B");                    // unknown hwType, no driver
     int C = lua_module(0x22222222, 0x1e, "mm_C");
     lua_getfield(L, A, "_addr");

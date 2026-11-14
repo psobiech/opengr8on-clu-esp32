@@ -70,7 +70,7 @@ enum { PE_CHANGE = 0, PE_LOWER = 1, PE_RISE = 2, PE_OUT = 3, PE_IN = 6 };
 
 /** @brief Colour state. */
 typedef struct {
-    double h, s, v;        // hue 0..360, saturation / value 0..1
+    float h, s, v;         // hue 0..360, saturation / value 0..1
     uint8_t c[4];          // R, G, B, W 0..255 (before correction)
 } color_t;
 
@@ -79,7 +79,7 @@ typedef struct {
     char name[24];         // LEDRGB object (empty = not declared)
     char psu[24];          // PowerSupplyVoltage object
     color_t col;
-    double min, max;
+    float min, max;
     uint8_t corr[3];       // R/G/B correction [%]
     uint32_t ramp;         // RampTime [ms]
     bool have_target;      // Lua set a colour (re-applied by init)
@@ -88,8 +88,8 @@ typedef struct {
     light_hold_t hold;     // shared by all Hold* methods
 
     // PowerSupplyVoltage
-    double u, u_event;     // last value, value at the last change event
-    double u_sens, u_min, u_max;
+    float u, u_event;      // last value, value at the last change event
+    float u_sens, u_min, u_max;
     bool u_have, u_out;
 
     ledch_t *lch;          // LED_CHANNEL / LED_CCT objects (drv_ledch.c)
@@ -105,7 +105,7 @@ static rgbw_t *ctx(tfbus_module_t *module)
         }
         rgbw_state->max = 1;
         rgbw_state->corr[0] = rgbw_state->corr[1] = rgbw_state->corr[2] = 100;
-        rgbw_state->u_sens = 0.5;
+        rgbw_state->u_sens = 0.5f;
         rgbw_state->u_min = 21;
         rgbw_state->u_max = 24;
         rgbw_state->lch = ledch_new();
@@ -116,24 +116,24 @@ static rgbw_t *ctx(tfbus_module_t *module)
 
 // ---------------------------------------------------------------- colour model
 /** @brief Truncate to two decimals (as the real CLU keeps Value / Saturation). */
-static double trunc2(double value)
+static float trunc2(float value)
 {
-    return floor(value * 100 + 1e-6) / 100;
+    return floorf(value * 100.0f + 1e-6f) / 100.0f;
 }
 
 /** @brief 0..1 -> 0..255, truncated. */
-static uint8_t to255(double normalized_value)
+static uint8_t to255(float normalized_value)
 {
-    return (uint8_t)light_clamp(floor(normalized_value * 255 + 1e-6), 0, 255);
+    return (uint8_t)light_clamp(floorf(normalized_value * 255.0f + 1e-6f), 0, 255);
 }
 
 /** @brief R/G/B from H/S/V (W untouched). */
 static void hsv_to_rgb(color_t *color)
 {
-    double hue_sector = fmod(color->h, 360) / 60, saturation = color->s, value = color->v;
+    float hue_sector = fmodf(color->h, 360.0f) / 60.0f, saturation = color->s, value = color->v;
     int sector_index = (int)hue_sector;
-    double sector_fraction = hue_sector - sector_index, low_component = value * (1 - saturation), falling_component = value * (1 - saturation * sector_fraction), rising_component = value * (1 - saturation * (1 - sector_fraction));
-    double rgb[6][3] = {{value, rising_component, low_component}, {falling_component, value, low_component}, {low_component, value, rising_component}, {low_component, falling_component, value}, {rising_component, low_component, value}, {value, low_component, falling_component}};
+    float sector_fraction = hue_sector - sector_index, low_component = value * (1.0f - saturation), falling_component = value * (1.0f - saturation * sector_fraction), rising_component = value * (1.0f - saturation * (1.0f - sector_fraction));
+    float rgb[6][3] = {{value, rising_component, low_component}, {falling_component, value, low_component}, {low_component, value, rising_component}, {low_component, falling_component, value}, {rising_component, low_component, value}, {value, low_component, falling_component}};
     for (int j = 0; j < 3; j++) {
         color->c[j] = to255(rgb[sector_index % 6][j]);
     }
@@ -142,23 +142,21 @@ static void hsv_to_rgb(color_t *color)
 /** @brief H/S/V from R/G/B (Hue whole degrees, S/V two decimals); hue kept where undefined. */
 static void rgb_to_hsv(color_t *color)
 {
-    double red_component = color->c[0] / 255.0, green_component = color->c[1] / 255.0, blue_component = color->c[2] / 255.0;
-    double maximum = fmax(red_component, fmax(green_component, blue_component)), minimum = fmin(red_component, fmin(green_component, blue_component)), chroma = maximum - minimum;
+    float red_component = color->c[0] / 255.0f, green_component = color->c[1] / 255.0f, blue_component = color->c[2] / 255.0f;
+    float maximum = fmaxf(red_component, fmaxf(green_component, blue_component)), minimum = fminf(red_component, fminf(green_component, blue_component)), chroma = maximum - minimum;
     color->v = trunc2(maximum);
-    color->s = maximum == 0 ? 0 : trunc2(chroma / maximum);
+    color->s = maximum == 0 ? 0.0f : trunc2(chroma / maximum);
     if (chroma == 0) {
         return; // black / grey: keep hue
     }
-    // in float like the real CLU: (255, 127, 63) gives 19.99999 -> 19, not 20
-    float red_float = color->c[0] / 255.0f, green_float = color->c[1] / 255.0f, blue_float = color->c[2] / 255.0f;
-    float float_chroma = fmaxf(red_float, fmaxf(green_float, blue_float)) - fminf(red_float, fminf(green_float, blue_float));
-    float hue_degrees = maximum == red_component ? fmodf((green_float - blue_float) / float_chroma, 6) : maximum == green_component ? (blue_float - red_float) / float_chroma + 2 : (red_float - green_float) / float_chroma + 4;
-    hue_degrees *= 60;
+    // Keep the CLU's float behavior: (255, 127, 63) gives 19.99999 -> 19, not 20.
+    float hue_degrees = maximum == red_component ? fmodf((green_component - blue_component) / chroma, 6.0f) : maximum == green_component ? (blue_component - red_component) / chroma + 2.0f : (red_component - green_component) / chroma + 4.0f;
+    hue_degrees *= 60.0f;
     color->h = floorf(hue_degrees < 0 ? hue_degrees + 360 : hue_degrees);
 }
 
 /** @brief Set Value / Hue / Saturation (already in range) and recompute R/G/B. */
-static void set_hsv(color_t *color, double hue_degrees, double saturation, double value)
+static void set_hsv(color_t *color, float hue_degrees, float saturation, float value)
 {
     color->h = hue_degrees;
     color->s = saturation;
@@ -217,7 +215,7 @@ static void publish(const rgbw_t *rgbw_state, lua_State *L, int obj)
 {
     static const int idx[] = {F_VALUE, F_HUE, F_SAT, F_RED, F_GREEN, F_BLUE, F_WHITE};
     const color_t *color = &rgbw_state->col;
-    double val[] = {color->v, color->h, color->s, color->c[0], color->c[1], color->c[2], color->c[3]};
+    float val[] = {color->v, color->h, color->s, color->c[0], color->c[1], color->c[2], color->c[3]};
     char hex[8];
     rgb_str(color, hex);
     if (L) {
@@ -343,7 +341,7 @@ static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int c
         return false;
     }
     if (cls == CLS_PSU) {
-        double supply_voltage = luaL_checknumber(L, val);
+        float supply_voltage = luaL_checknumber(L, val);
         if (idx == P_SENS) {
             rgbw_state->u_sens = supply_voltage;
         } else if (idx == P_MIN) {
@@ -404,17 +402,17 @@ static void hold(tfbus_module_t *module, rgbw_t *rgbw_state, lua_State *L, int o
     uint32_t ramp = sweep;
     if (idx == X_HOLD) {
         int dir = light_hold_dir(&rgbw_state->hold, now, target_color.v, rgbw_state->min, rgbw_state->max);
-        double value_step = sweep ? trunc2((double)LIGHT_HOLD_STEP_MS / sweep) : 1;
+        float value_step = sweep ? trunc2((float)LIGHT_HOLD_STEP_MS / sweep) : 1;
         set_hsv(&target_color, target_color.h, target_color.s, trunc2(light_clamp(target_color.v + dir * value_step, rgbw_state->min, rgbw_state->max)));
     } else if (idx == X_HOLD_HUE) {
         int dir = light_hold_dir(&rgbw_state->hold, now, target_color.h, -1, 361); // no ends: wraps
-        double hue_value = target_color.h + dir * (sweep ? floor(360.0 * LIGHT_HOLD_STEP_MS / sweep) : 60);
+        float hue_value = target_color.h + dir * (sweep ? floorf(360.0f * LIGHT_HOLD_STEP_MS / sweep) : 60);
         set_hsv(&target_color, hue_value < 0 ? 359 : hue_value > 359 ? 0 : hue_value, target_color.s, target_color.v);
         ramp = 0; // captured: HoldHue sends ramp 0
     } else {
         int channel_index = idx == X_HOLD_WHITE ? 3 : idx - X_HOLD_RED; // 0 R, 1 G, 2 B, 3 W
         int dir = light_hold_dir(&rgbw_state->hold, now, target_color.c[channel_index], 0, 255);
-        double value_step = sweep ? lround(255.0 * LIGHT_HOLD_STEP_MS / sweep) : 255;
+        float value_step = sweep ? lroundf(255.0f * LIGHT_HOLD_STEP_MS / sweep) : 255;
         target_color.c[channel_index] = (uint8_t)light_clamp(target_color.c[channel_index] + dir * value_step, 0, 255);
         if (channel_index < 3) {
             rgb_to_hsv(&target_color);
@@ -438,7 +436,7 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
     uint32_t ramp;
     switch (idx) {
     case X_VALUE: {
-        double requested_value = luaL_checknumber(L, first);
+        float requested_value = luaL_checknumber(L, first);
         if ((requested_value < rgbw_state->min || requested_value > rgbw_state->max) && rgbw_state->name[0]) {
             clu_lua_post_event(rgbw_state->name, EV_RANGE);
         }
@@ -446,7 +444,7 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
         break;
     }
     case X_HUE:
-        set_hsv(&target_color, floor(light_clamp(luaL_checknumber(L, first), 0, 360)), target_color.s, target_color.v);
+        set_hsv(&target_color, floorf(light_clamp(luaL_checknumber(L, first), 0, 360)), target_color.s, target_color.v);
         break;
     case X_SAT:
         set_hsv(&target_color, target_color.h, light_clamp(luaL_checknumber(L, first), 0, 1), target_color.v);
@@ -478,7 +476,7 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
     case X_ON:
     case X_OFF:
     case X_SWITCH: {
-        double ms = light_arg(L, first, nargs, 0, 0);
+        float ms = light_arg(L, first, nargs, 0, 0);
         ramp = light_ramp_arg(L, first, nargs, 1, rgbw_state->ramp);
         bool on = idx == X_ON || (idx == X_SWITCH && !lit(&rgbw_state->col));
         set_hsv(&target_color, target_color.h, target_color.s, on ? rgbw_state->max : 0);
@@ -504,17 +502,17 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
 }
 
 /** @brief PowerSupplyVoltage update: Value / Value% and events. */
-static void psu_update(rgbw_t *rgbw_state, double supply_voltage)
+static void psu_update(rgbw_t *rgbw_state, float supply_voltage)
 {
     const char *object_name = rgbw_state->psu;
     bool first = !rgbw_state->u_have;
     rgbw_state->u_have = true;
     rgbw_state->u = supply_voltage;
     bool out = supply_voltage < rgbw_state->u_min || supply_voltage > rgbw_state->u_max;
-    bool change = first || fabs(supply_voltage - rgbw_state->u_event) >= rgbw_state->u_sens;
+    bool change = first || fabsf(supply_voltage - rgbw_state->u_event) >= rgbw_state->u_sens;
     if (object_name[0] && (change || out != rgbw_state->u_out)) {
         clu_lua_post_number(object_name, P_VALUE, supply_voltage);
-        clu_lua_post_number(object_name, P_PERCENT, rgbw_state->u_max > 0 ? round(supply_voltage / rgbw_state->u_max * 10000) / 100 : 0);
+        clu_lua_post_number(object_name, P_PERCENT, rgbw_state->u_max > 0 ? roundf(supply_voltage / rgbw_state->u_max * 10000) / 100.0f : 0);
     }
     if (object_name[0] && change && !first) {
         clu_lua_post_event(object_name, PE_CHANGE);
@@ -537,7 +535,7 @@ static void on_status(tfbus_module_t *module, const uint8_t *status_payload, siz
     int status_record_count = tfbus_parse_tlv(status_payload, len, status_records, 8);
     for (int i = 0; i < status_record_count; i++) {
         if (status_records[i].type == 0x02 && status_records[i].len >= 2) {
-            psu_update(rgbw_state, (status_records[i].data[0] | status_records[i].data[1] << 8) / 100.0);
+            psu_update(rgbw_state, (status_records[i].data[0] | status_records[i].data[1] << 8) / 100.0f);
         } else if (status_records[i].type == 0x04 && status_records[i].len >= 2) {
             ledch_reported(rgbw_state->lch, status_records[i].data[0], status_records[i].data[1]);
         }

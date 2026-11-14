@@ -9,6 +9,7 @@
 #include <errno.h>
 #include <ftw.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,6 +54,15 @@ static void host_sem_del(void *s);
 #define vSemaphoreDelete(s)      host_sem_del(s)
 
 #include "../../components/clu_lua/clu_lua.c"
+
+#if LUA_FLOAT_TYPE == LUA_FLOAT_FLOAT
+_Static_assert(sizeof(lua_Number) == sizeof(float), "Lua float configuration must use float numbers");
+#endif
+#if defined(LUA_32BITS)
+_Static_assert(sizeof(lua_Integer) == sizeof(int), "32-bit Lua mode must use 32-bit integers");
+#else
+_Static_assert(sizeof(lua_Integer) >= sizeof(int64_t), "default Lua mode must keep 64-bit integers");
+#endif
 
 // The firmware embeds prelude.lua / objects.lua (EMBED_TXTFILES: NUL-terminated).
 __asm__(".pushsection .rodata\n"
@@ -252,7 +262,7 @@ static uint32_t cb_remote(uint32_t ip, const char *script)
     snprintf(s_remote_script, sizeof s_remote_script, "%s", script);
     return s_remote_id;
 }
-static void cb_feature(int idx, const char *str, double num)
+static void cb_feature(int idx, const char *str, float num)
 {
     snprintf(s_feature, sizeof s_feature, "%d:%s:%g", idx, str ? str : "-", num);
 }

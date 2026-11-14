@@ -13,6 +13,11 @@ idf_component_register(
 if(NOT CONFIG_CLU_LUA_5_5)
     target_compile_definitions(${COMPONENT_LIB} PUBLIC LUA_COMPAT_5_2)
 endif()
+if(CONFIG_CLU_LUA_32BITS)
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC LUA_32BITS=1)
+elseif(CONFIG_CLU_LUA_FLOAT)
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC LUA_FLOAT_TYPE=LUA_FLOAT_FLOAT)
+endif()
 # C recursion limits (parser nesting, C calls, pattern matching) sized for the 48 KB Lua task
 # stack (clu_lua.c). Upstream 200 needs ~50 KB of stack for the parser alone; 120 levels are far
 # beyond what OM-generated or hand-written CLU scripts use. Exceeding it is a Lua error, not a crash.

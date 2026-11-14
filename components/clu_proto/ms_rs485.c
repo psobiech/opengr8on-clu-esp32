@@ -167,7 +167,7 @@ bool ms_bin_decode(const uint8_t *encoded_message, size_t len, ms_bin_t *decoded
         float float_value;
         memcpy(&float_value, &float_bits, sizeof float_value);
         int prec = pad[4] > 8 ? 8 : pad[4];
-        snprintf(payload_text, cap, "%2.*f", prec, (double)float_value); // dtostrf(f, 2, prec)
+        snprintf(payload_text, cap, "%2.*f", prec, float_value); // float is promoted for varargs, like dtostrf(f, 2, prec)
         break;
     }
     default: // P_CUSTOM: hex

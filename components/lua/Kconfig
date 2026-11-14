@@ -14,6 +14,24 @@ menu "Lua runtime"
             bool "Lua 5.5.1 (experimental)"
     endchoice
 
+    config CLU_LUA_32BITS
+        bool "Use 32-bit Lua integers and floats"
+        default n
+        help
+            Build Lua with 32-bit integers and single-precision floats instead of 64-bit integers
+            and doubles. Serial numbers at or above 2^31 become negative, millis exceeds the
+            signed integer range after about 24.9 days, and floats retain only about 7 significant
+            digits.
+
+    config CLU_LUA_FLOAT
+        bool "Use single-precision Lua numbers"
+        depends on !CLU_LUA_32BITS
+        default y
+        help
+            Use 32-bit floats for Lua numbers while keeping 64-bit Lua integers. Floating-point
+            values retain about 7 significant digits; serial numbers and other integers remain
+            64-bit. This setting is unavailable when CLU_LUA_32BITS is enabled.
+
     config CLU_LUA_MEM_LIMIT_KB
         int "Lua heap limit (KB)"
         default 4096

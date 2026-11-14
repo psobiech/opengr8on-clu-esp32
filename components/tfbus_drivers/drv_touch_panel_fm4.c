@@ -54,8 +54,8 @@ static tp4_t *ctx(tfbus_module_t *module)
         if (!panel_state) {
             abort(); // out of memory while loading OM.LUA: reboot instead of a NULL dereference
         }
-        panel_state->temp = (panel_sensor_t){.threshold = 0.1, .min = 0, .max = 40};
-        panel_state->light = (panel_sensor_t){.threshold = 0.1, .min = 0, .max = 100};
+        panel_state->temp = (panel_sensor_t){.threshold = 0.1f, .min = 0, .max = 40};
+        panel_state->light = (panel_sensor_t){.threshold = 0.1f, .min = 0, .max = 100};
         panel_state->buzzer = true;
         module->drv_ctx = panel_state;
     }
@@ -100,7 +100,7 @@ static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int c
     tp4_t *panel_state = ctx(module);
     panel_sensor_t *sensor_config = cls == CLS_TEMP ? &panel_state->temp : cls == CLS_LIGHT ? &panel_state->light : NULL;
     if (sensor_config) {
-        double sensor_value = luaL_optnumber(L, val, 0);
+        float sensor_value = luaL_optnumber(L, val, 0);
         if (idx == 1) {
             sensor_config->threshold = sensor_value;
         } else if (idx == 3) {
@@ -145,8 +145,8 @@ static void on_status(tfbus_module_t *module, const uint8_t *status_payload, siz
         }
         uint16_t record_value = (uint16_t)(status_records[i].data[0] | status_records[i].data[1] << 8);
         switch (status_records[i].type) {
-        case 0x02: panel_sensor_update(&panel_state->temp, record_value / 100.0); break;
-        case 0x07: panel_sensor_update(&panel_state->light, record_value / 100.0); break;
+        case 0x02: panel_sensor_update(&panel_state->temp, record_value / 100.0f); break;
+        case 0x07: panel_sensor_update(&panel_state->light, record_value / 100.0f); break;
         case 0x08: panel_button_event(panel_state->btn, BTN, &panel_state->btn_value, NULL, status_records[i].data[0]); break;
         default: break;
         }

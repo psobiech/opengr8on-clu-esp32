@@ -15,10 +15,13 @@ HDRS := $(wildcard $(COMP)/*/include/*.h $(COMP)/tfbus_drivers/*.h $(MAIN)/*.h)
 test_proto: test_proto.c $(PROTO)/tfbus_frame.c $(PROTO)/clu_keys.c $(PROTO)/tftp_proto.c $(PROTO)/http_proto.c $(HDRS)
 	$(TCC) $(CFLAGS) -o $@ $(filter %.c,$^)
 
-# Lua version under test: make LUA=5.5 clean test
+# Lua version under test: make LUA=5.5 clean test; LUA_FLOAT=0 uses doubles, LUA32=1 uses 32-bit
+# integers and floats.
 LUA ?= 5.3
+LUA32 ?= 0
+LUA_FLOAT ?= 1
 LUA_DIR := $(COMP)/lua/src-$(LUA)
-LUA_DEFS := $(if $(filter 5.3,$(LUA)),-DLUA_COMPAT_5_2) -DLUAI_MAXCCALLS=120 -DMAXCCALLS=120 # = components/lua/CMakeLists.txt
+LUA_DEFS := $(if $(filter 5.3,$(LUA)),-DLUA_COMPAT_5_2) $(if $(filter 1,$(LUA32)),-DLUA_32BITS=1,$(if $(filter 1,$(LUA_FLOAT)),-DLUA_FLOAT_TYPE=LUA_FLOAT_FLOAT)) -DLUAI_MAXCCALLS=120 -DMAXCCALLS=120 # = components/lua/CMakeLists.txt
 LUA_SRCS := $(filter-out %/lua.c %/luac.c,$(wildcard $(LUA_DIR)/*.c))
 DRV_SRCS := $(wildcard $(COMP)/tfbus_drivers/*.c)
 DRV_INC := -Istubs -I$(COMP)/clu_proto/include -I$(LUA_DIR) -I$(COMP)/clu_lua/include \

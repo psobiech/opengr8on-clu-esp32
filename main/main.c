@@ -225,7 +225,7 @@ static void storage_mount(void)
  * 25 PrimaryDNS, 26 SecondaryDNS. GATE: 2 PrimaryDNS, 3 SecondaryDNS, 14 TimeZone, 18 UseCloud,
  * 21 UseNTP.
  */
-static void on_clu_feature(int idx, const char *str, double num)
+static void on_clu_feature(int idx, const char *str, float num)
 {
 #if CONFIG_CLU_DEVICE_GATE_HTTP
     switch (idx) {
@@ -239,7 +239,7 @@ static void on_clu_feature(int idx, const char *str, double num)
 #else
     switch (idx) {
     case 22: clu_time_set_ntp_server(str); break;       // NTPServer
-    case 23: // TimeZone (enum index); NaN / out-of-range doubles must not reach the int cast
+    case 23: // TimeZone (enum index); NaN / out-of-range values must not reach the int cast
         clu_time_set_zone(num >= 0 && num < 1000 ? (int)num : -1);
         break;
     case 25: clu_net_set_dns(0, str); break;            // PrimaryDNS (both interfaces)

@@ -64,7 +64,7 @@ jobs:
   coverage:
     name: Host tests and coverage
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     env:
       COVERAGE_MIN: 95
       MBEDTLS_VERSION: 3.6.2
@@ -137,11 +137,35 @@ jobs:
             test/host/coverage/coverage.json
           if-no-files-found: ignore
 
+  # C host tests for every Lua build variant (coverage above runs the default 5.3 / float build).
+  host-lua-matrix:
+    name: Host tests (Lua ${{ matrix.lua }}, LUA32=${{ matrix.lua32 }})
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-26.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lua: [ "5.3", "5.5" ]
+        lua32: [ "0", "1" ]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc libc6-dev make lua5.5 lua5.3
+
+      - name: Allow AddressSanitizer
+        run: sudo sysctl -w vm.mmap_rnd_bits=28
+
+      - name: Tests
+        run: make -C test/host test LUA="${{ matrix.lua }}" LUA32="${{ matrix.lua32 }}"
+
   emulator:
-    name: Emulator integration (${{ matrix.preset }})
+    name: idfEmulator integration (${{ matrix.preset }})
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     needs: [ gate-http, gate-http-low-memory ]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -275,7 +299,7 @@ jobs:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [ firmware, gate-http, gate-http-N8R8 ]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:

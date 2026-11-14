@@ -88,7 +88,7 @@ typedef struct {
     char name[32];
     int idx;
     bool is_value;
-    double value;
+    float value;
     char str[16]; // string value (is_value, str[0] != 0): e.g. LEDRGB "#RRGGBB"
 } event_t;
 
@@ -180,7 +180,7 @@ void clu_lua_post_event(const char *obj_name, int event_idx)
     xQueueSend(s_events, &event_data, 0);
 }
 
-void clu_lua_post_number(const char *obj_name, int feature_idx, double value)
+void clu_lua_post_number(const char *obj_name, int feature_idx, float value)
 {
     if (!s_events) {
         return;
@@ -470,7 +470,7 @@ static void drain_events(lua_State *L)
         if (event_data.is_value) {
             if (event_data.str[0]) {
                 lua_pushstring(L, event_data.str);
-            } else if (event_data.value == (double)(lua_Integer)event_data.value) {
+            } else if (event_data.value == (float)(lua_Integer)event_data.value) {
                 lua_pushinteger(L, (lua_Integer)event_data.value);
             } else {
                 lua_pushnumber(L, event_data.value);

@@ -82,13 +82,13 @@ typedef struct {
  * @param upper_bound Upper end.
  * @return +1 up, -1 down (also left in h->dir).
  */
-int light_hold_dir(light_hold_t *hold_state, int64_t now_us, double cur, double lower_bound, double upper_bound);
+int light_hold_dir(light_hold_t *hold_state, int64_t now_us, float cur, float lower_bound, float upper_bound);
 
 /**
  * @brief Optional method argument @p argument_index (0-based) as a number.
  * @return The argument, or @p dflt if absent / nil.
  */
-double light_arg(lua_State *L, int first, int nargs, int argument_index, double dflt);
+float light_arg(lua_State *L, int first, int nargs, int argument_index, float dflt);
 
 /** @brief Ramp argument @p argument_index [ms] clamped to 0..LIGHT_RAMP_MAX; absent -> @p dflt. */
 uint32_t light_ramp_arg(lua_State *L, int first, int nargs, int argument_index, uint32_t dflt);
@@ -100,7 +100,7 @@ void light_queue_ramp(tfbus_module_t *module, uint32_t ms);
 void light_queue_dlg(tfbus_module_t *module, uint8_t channel, uint32_t group);
 
 /** @brief Clamp @p input_value to [@p lower_bound, @p upper_bound]. */
-static inline double light_clamp(double input_value, double lower_bound, double upper_bound)
+static inline float light_clamp(float input_value, float lower_bound, float upper_bound)
 {
     return input_value < lower_bound ? lower_bound : input_value > upper_bound ? upper_bound : input_value;
 }

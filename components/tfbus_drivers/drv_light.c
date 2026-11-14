@@ -70,7 +70,7 @@ void light_timer_overdue(light_timer_t *timer_state)
     }
 }
 
-int light_hold_dir(light_hold_t *hold_state, int64_t now_us, double cur, double lower_bound, double upper_bound)
+int light_hold_dir(light_hold_t *hold_state, int64_t now_us, float cur, float lower_bound, float upper_bound)
 {
     int64_t gap_ms = (now_us - hold_state->last_us) / 1000;
     bool fresh = hold_state->last_us == 0 || gap_ms > LIGHT_HOLD_GAP_MS || gap_ms < 0;
@@ -87,7 +87,7 @@ int light_hold_dir(light_hold_t *hold_state, int64_t now_us, double cur, double 
     return hold_state->dir;
 }
 
-double light_arg(lua_State *L, int first, int nargs, int argument_index, double dflt)
+float light_arg(lua_State *L, int first, int nargs, int argument_index, float dflt)
 {
     if (argument_index >= nargs || lua_isnoneornil(L, first + argument_index)) {
         return dflt;
@@ -97,7 +97,7 @@ double light_arg(lua_State *L, int first, int nargs, int argument_index, double 
 
 uint32_t light_ramp_arg(lua_State *L, int first, int nargs, int argument_index, uint32_t dflt)
 {
-    double ramp_value = light_arg(L, first, nargs, argument_index, dflt);
+    float ramp_value = light_arg(L, first, nargs, argument_index, dflt);
     return (uint32_t)light_clamp(ramp_value, 0, LIGHT_RAMP_MAX);
 }
 

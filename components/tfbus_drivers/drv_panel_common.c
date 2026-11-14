@@ -4,6 +4,7 @@
  */
 #include "drv_panel_common.h"
 
+#include <float.h>
 #include <math.h>
 
 #include "clu_lua.h"
@@ -13,7 +14,7 @@ enum { SEV_CHANGE = 0, SEV_RISE = 1, SEV_LOWER = 2, SEV_RANGE = 3 };
 /** @brief Button event indices (OnChange, OnSwitchOn, OnSwitchOff). */
 enum { EV_CHANGE = 0, EV_ON = 1, EV_OFF = 2 };
 
-void panel_sensor_update(panel_sensor_t *sensor, double new_value)
+void panel_sensor_update(panel_sensor_t *sensor, float new_value)
 {
     if (!sensor->name[0]) {
         return;
@@ -30,8 +31,9 @@ void panel_sensor_update(panel_sensor_t *sensor, double new_value)
     }
     sensor->value = new_value;
     clu_lua_post_number(sensor->name, 0, new_value);
-    double value_delta = new_value - sensor->last_event_value;
-    if (fabs(value_delta) >= sensor->threshold - 1e-9) {
+    float value_delta = new_value - sensor->last_event_value;
+    float comparison_tolerance = FLT_EPSILON * fmaxf(1.0f, fmaxf(fabsf(new_value), fabsf(sensor->last_event_value)));
+    if (fabsf(value_delta) + comparison_tolerance >= sensor->threshold) {
         sensor->last_event_value = new_value;
         clu_lua_post_event(sensor->name, SEV_CHANGE);
         clu_lua_post_event(sensor->name, value_delta > 0 ? SEV_RISE : SEV_LOWER);

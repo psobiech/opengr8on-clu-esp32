@@ -160,24 +160,38 @@
 ** 32-bit integers and 'float'
 */
 #if LUAI_IS32INT  /* use 'int' if big enough */
+#if !defined(LUA_INT_TYPE)
 #define LUA_INT_TYPE	LUA_INT_INT
+#endif
 #else  /* otherwise use 'long' */
+#if !defined(LUA_INT_TYPE)
 #define LUA_INT_TYPE	LUA_INT_LONG
 #endif
+#endif
+#if !defined(LUA_FLOAT_TYPE)
 #define LUA_FLOAT_TYPE	LUA_FLOAT_FLOAT
+#endif
 
 #elif LUA_C89_NUMBERS	/* }{ */
 /*
 ** largest types available for C89 ('long' and 'double')
 */
+#if !defined(LUA_INT_TYPE)
 #define LUA_INT_TYPE	LUA_INT_LONG
+#endif
+#if !defined(LUA_FLOAT_TYPE)
 #define LUA_FLOAT_TYPE	LUA_FLOAT_DOUBLE
+#endif
 
 #else		/* }{ */
 /* use defaults */
 
+#if !defined(LUA_INT_TYPE)
 #define LUA_INT_TYPE	LUA_INT_DEFAULT
+#endif
+#if !defined(LUA_FLOAT_TYPE)
 #define LUA_FLOAT_TYPE	LUA_FLOAT_DEFAULT
+#endif
 
 #endif				/* } */
 

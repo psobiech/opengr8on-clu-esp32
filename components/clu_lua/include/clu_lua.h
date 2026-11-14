@@ -57,7 +57,7 @@ typedef struct {
      *  return a call id > 0 (0 = not sent). The reply goes back with clu_lua_post_remote(id, ...). */
     uint32_t (*remote)(uint32_t ip, const char *script);
     /** Local CLU feature set from Lua (CLUxxx:set(idx, v)); str is NULL for non-string values. */
-    void (*clu_feature)(int idx, const char *str, double num);
+    void (*clu_feature)(int idx, const char *str, float num);
     /** CloudConnection (feature 19): true while the cloud link (MQTT broker) is up. Optional. */
     bool (*cloud_connected)(void);
     /** clu_lua_reload(): old VM closed, new one not created yet. Forget everything OM.LUA declared
@@ -145,7 +145,7 @@ esp_err_t clu_lua_call(const char *expr, const char *from_ip, char *out, size_t 
 /** @brief Fire event @p event_idx of object @p obj_name. */
 void clu_lua_post_event(const char *obj_name, int event_idx);
 /** @brief Set feature @p feature_idx of object @p obj_name to @p value. */
-void clu_lua_post_number(const char *obj_name, int feature_idx, double value);
+void clu_lua_post_number(const char *obj_name, int feature_idx, float value);
 /** @brief Set feature @p feature_idx of object @p obj_name to the string @p value (max 15 chars). */
 void clu_lua_post_string(const char *obj_name, int feature_idx, const char *value);
 /**

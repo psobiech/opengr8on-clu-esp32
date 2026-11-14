@@ -240,7 +240,7 @@ pierwszym `req_set_key`. Linia z PIN-em trafia tylko na UART, nie na telnet.
 | `components/clu_crypto` | AES-128-CBC/PKCS#7 (PSA crypto, mbedtls 4) |
 | `components/clu_proto` | wyprowadzanie kluczy, ramkowanie TF-Bus, emulowane moduły TF-Bus, protokół TFTP, linie MySensors (czysty C, testowany na hoście) |
 | `components/clu_lua` | środowisko Lua: prelude (model obiektów OM), obiekty wirtualne (`objects.lua`) |
-| `components/lua` | Lua 5.3.6 (domyślnie, jak w CLU) i 5.5.1 (opcja `CLU_LUA_5_5`), źródła niezmodyfikowane |
+| `components/lua` | Lua 5.3.6 (domyślnie, jak w CLU) i 5.5.1 (opcja `CLU_LUA_5_5`), domyślnie `float` + 64-bitowe liczby całkowite; opcjonalny tryb 32-bit (`CLU_LUA_32BITS`) |
 | `components/tfbus_uart` | UART RS485 half-duplex |
 | `components/tfbus_master` | master magistrali: rejestr modułów, adresowanie, odpytywanie, discovery |
 | `components/tfbus_drivers` | sterowniki modułów TF-Bus, zob. [TFBUS.md](TFBUS.md) |
@@ -427,6 +427,8 @@ Podmenu **RS485 bus (TF-Bus / MySensors)**.
 | `CLU_SETUP_WINDOW_S` | 0 | okno konfiguracji po uruchomieniu CLU [s]: discovery, zmiana klucza/IP, TFTP (`0` = zawsze) |
 | `CLU_SETUP_BUTTON_GPIO` | 0 (BOOT) | przycisk otwierający okno konfiguracji w trakcie pracy, `-1` = brak |
 | `CLU_LUA_5_3` / `CLU_LUA_5_5` | 5.3 | wersja Lua (5.3 jak w CLU, 5.5 eksperymentalnie) |
+| `CLU_LUA_FLOAT` | y | liczby Lua typu `float` (~7 cyfr znaczących) zamiast `double`; liczby całkowite Lua pozostają 64-bitowe |
+| `CLU_LUA_32BITS` | n | tryb ograniczony: liczby całkowite Lua są 32-bitowe (≥2³¹ stają się ujemne), a `millis` przekracza zakres po ok. 24,9 dnia; liczby Lua typu `float` |
 | `CLU_LUA_MEM_LIMIT_KB` | 4096 | limit sterty Lua (KB) |
 | `CLU_LUA_INTERNAL_RESERVE_KB` | 64 | wewnętrzny RAM zostawiany dla systemu |
 | `CLU_TELNET` | y | konsola logów |
@@ -585,6 +587,9 @@ Wymagania: `gcc`/`clang`, `make`, interpreter `lua5.3` (i `lua5.5` dla testów 5
 make -C test/host test                            # wszystko poniżej
 make -C test/host test-lua OM="/path/to/OM.LUA"   # dodatkowo wczytaj prawdziwy OM.LUA przez prelude
 make -C test/host LUA=5.5 clean test              # to samo na Lua 5.5
+make -C test/host LUA_FLOAT=0 clean test           # kontrolnie z liczbami Lua typu double
+make -C test/host LUA32=1 clean test               # tryb Lua 32-bit: int32 + float
+make -C test/host LUA=5.5 LUA32=1 clean test      # tryb 32-bit także na Lua 5.5
 make -C test/host coverage                        # pokrycie C (gcov) i Lua; FAIL_UNDER=<%> = próg
 ```
 

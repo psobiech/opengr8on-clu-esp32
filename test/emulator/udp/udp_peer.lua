@@ -10,7 +10,13 @@ function udp_ping(token, seq)
   return nonce .. ":" .. name .. ":pong:" .. seq
 end
 
+local started = {}
+
+-- Idempotent: the runner retries a start whose UDP reply was lost; only the first call spawns.
 function udp_start(drop)
+  local mode = drop and "drop" or "exchange"
+  if started[mode] then return "started" end
+  started[mode] = true
   __spawn("UDP test", function()
     local count = drop and 1 or 3
     for i = 1, count do

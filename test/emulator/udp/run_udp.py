@@ -28,6 +28,10 @@ FACTORY_IV = bytes.fromhex("b9afe387f919a3d3a0d79ade8e11a116")
 BROADCAST_IV = bytes.fromhex("07060504030201000402090304010507")
 FACTORY_PIN = b"ABCD1234"
 FACTORY_DEVICE_KEY = bytes(a ^ b for a, b in zip(FACTORY_IV, FACTORY_PIN + FACTORY_PIN[::-1]))
+# Session 00000001 under this test key decrypts to padding-valid garbage under the broadcast key.
+KEY_SELECTION_KEY = bytes(range(16))
+KEY_SELECTION_IV = bytes(range(16, 32))
+KEY_SELECTION_SCRIPT = 'return "key-selection-ok" -- 103'
 FAILURE_PATTERNS = BOOT_FAILURE_PATTERNS + (
     re.compile(r"bad UDP request|bad UDP sequence|bad UDP reply|missing timeout error|UDP test:"),
 )
@@ -112,6 +116,8 @@ class Device:
         self.session = 0
         self.key = b""
         self.iv = b""
+        self.pin_key = b""
+        self.pin_iv = b""
         self.log_path = out_dir / f"{name}.log"
         self.log = None
         self.process = None
@@ -191,18 +197,34 @@ class Device:
                 continue
             if b":resp_discovery_clu:" not in reply or len(reply) < 49:
                 continue
-            self.key = FACTORY_DEVICE_KEY
-            self.iv = reply[33:49]
+            # PIN key + temp IV: accepted for req_set_key while the setup window is open, also
+            # after a project key is set, so a key change can be retried whatever the CLU holds.
+            self.pin_key, self.pin_iv = FACTORY_DEVICE_KEY, reply[33:49]
+            self.key, self.iv = self.pin_key, self.pin_iv
             return
         raise TimeoutError(f"{self.name}: CLU discovery timed out")
 
-    def set_project_key(self, key: bytes, iv: bytes, timeout: float = 15) -> None:
+    def set_project_key(self, key: bytes, iv: bytes, retries: int = 1, timeout: float = 15) -> None:
+        """Set the project key under the PIN key (idempotent, so a lost reply is retried)."""
         message = bytes(32) + b":" + iv + b":req_set_key:" + key
-        self.sock.send(encrypt(message, self.key, self.iv))
-        response = self._receive(timeout, key, iv)
-        if response != b"resp:OK":
-            raise RuntimeError(f"{self.name}: project key setup failed: {response!r}")
-        self.key, self.iv = key, iv
+        packet = encrypt(message, self.pin_key, self.pin_iv)
+        for _ in range(retries + 1):
+            self.sock.send(packet)
+            deadline = time.monotonic() + timeout
+            while (remaining := deadline - time.monotonic()) > 0:
+                try:
+                    response = self._receive(remaining, key, iv)
+                except TimeoutError:
+                    break
+                # Late discovery reply copies (sent 3x) can decrypt with valid padding under the
+                # new key: anything that is not a CLU response is skipped, not reported.
+                if not response.startswith(b"resp"):
+                    continue
+                if response != b"resp:OK":
+                    raise RuntimeError(f"{self.name}: project key setup failed: {response!r}")
+                self.key, self.iv = key, iv
+                return
+        raise TimeoutError(f"{self.name}: project key setup timed out")
 
     def call(self, script: str, retries: int = 0, timeout: float = 15) -> str:
         """Run a Lua request, optionally retrying only a caller-designated idempotent script."""
@@ -331,6 +353,24 @@ class Relay:
             raise RuntimeError("UDP relay did not stop")
 
 
+def check_key_selection(device: Device) -> None:
+    """Send the padding-collision vector as the first Lua session under KEY_SELECTION_KEY.
+
+    Not retried: a retry uses another session, whose ciphertext does not collide, and would hide
+    a firmware that stops at the first key with valid padding.
+    """
+    if device.session != 0:
+        raise RuntimeError(f"{device.name}: key selection vector needs Lua session 00000001")
+    try:
+        result = device.call(KEY_SELECTION_SCRIPT)
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"{device.name}: padding collision selected the wrong UDP key (request dropped)"
+        ) from exc
+    if result != "key-selection-ok":
+        raise RuntimeError(f"{device.name}: padding collision selected the wrong UDP key: {result!r}")
+
+
 def check_logs(devices: list[Device], nonce: str) -> None:
     for device in devices:
         if device.process.poll() is not None:
@@ -379,6 +419,9 @@ def run_test(args: argparse.Namespace) -> str:
             device.wait_for("main: WiFi IP 192.168.4.2")
             device.wait_for("no /fs/a/MAIN.LUA, idle")
             device.discover()
+            device.set_project_key(KEY_SELECTION_KEY, KEY_SELECTION_IV)
+            check_key_selection(device)
+            device.discover()
             device.set_project_key(project_key, project_iv)
             peer = "B" if device.name == "A" else "A"
             script = template.replace("@NAME@", device.name).replace("@PEER@", peer).replace("@NONCE@", nonce)
@@ -389,22 +432,22 @@ def run_test(args: argparse.Namespace) -> str:
         relay = Relay(project_key, project_iv)
         for source, target in ((devices[0], devices[1]), (devices[1], devices[0])):
             relay.target_port = target.udp_port
-            if source.call("return udp_start(false)") != "started":
+            if source.call("return udp_start(false)", retries=1) != "started":
                 raise RuntimeError(f"{source.name}: failed to start native UDP exchange")
             source.wait_for(f"UDP_DONE {source.name} {nonce}", timeout=45)
-            if source.call("return udp_completed") != "3":
+            if source.call("return udp_completed", retries=1) != "3":
                 raise RuntimeError(f"{source.name}: not all three CLU UDP replies completed")
-            if target.call("return udp_received") != "3":
+            if target.call("return udp_received", retries=1) != "3":
                 raise RuntimeError(f"{target.name}: did not receive all three CLU UDP requests")
             for sequence in range(1, 4):
                 source.wait_for(f"UDP_REPLY_OK {source.name} {sequence} {nonce}")
                 target.wait_for(f"UDP_RECEIVED {target.name} {nonce}:{source.name}:ping:{sequence}")
 
         relay.target_port = None
-        if devices[0].call("return udp_start(true)") != "started":
+        if devices[0].call("return udp_start(true)", retries=1) != "started":
             raise RuntimeError("A: failed to start dropped-packet timeout check")
         devices[0].wait_for(f"UDP_TIMEOUT_OK A {nonce}", timeout=30)
-        if devices[1].call("return udp_received") != "3":
+        if devices[1].call("return udp_received", retries=1) != "3":
             raise RuntimeError("B received a packet that should have been dropped")
         if relay.errors:
             raise RuntimeError(f"UDP relay failed: {relay.errors}")
@@ -412,7 +455,7 @@ def run_test(args: argparse.Namespace) -> str:
         check_logs(devices, nonce)
         summary = (
             "PASS: native encrypted CLU UDP A -> B 3/3, B -> A 3/3; exact nonce-tagged Lua "
-            f"requests/replies and dropped-packet timeout verified. nonce={nonce}"
+            f"requests/replies, wrong-key padding collision and dropped-packet timeout verified. nonce={nonce}"
         )
         return summary
     finally:

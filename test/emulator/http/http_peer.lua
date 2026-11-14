@@ -53,9 +53,13 @@ request:add_event(1, function()
 end)
 
 function http_start(port)
-  assert(not mode, "HTTP test already started")
-  target_port = assert(math.tointeger(port))
-  assert(target_port > 0, "bad HTTP target port")
+  port = assert(math.tointeger(port))
+  assert(port > 0, "bad HTTP target port")
+  if mode then
+    assert(target_port == port, "HTTP test already started with another port")
+    return "started"
+  end
+  target_port = port
   request:set(0, "192.168.4.1:" .. target_port)
   mode = "exchange"
   sequence = 1

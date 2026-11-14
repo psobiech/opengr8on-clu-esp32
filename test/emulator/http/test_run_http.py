@@ -95,6 +95,7 @@ class HttpRunnerTests(unittest.TestCase):
             self.assertEqual(
                 devices[0].call.call_args_list,
                 [
+                    call("return http_start(19302)", retries=1),
                     call("return http_start(19302)"),
                     call("return http_completed()", retries=1),
                     call("return http_received()", retries=1),
@@ -104,6 +105,7 @@ class HttpRunnerTests(unittest.TestCase):
                 devices[1].call.call_args_list,
                 [
                     call("return http_received()", retries=1),
+                    call("return http_start(19301)", retries=1),
                     call("return http_start(19301)"),
                     call("return http_completed()", retries=1),
                 ],
@@ -127,7 +129,11 @@ class HttpRunnerTests(unittest.TestCase):
                     run_test(args)
             self.assertEqual(
                 devices[0].call.call_args_list,
-                [call("return http_start(19302)"), call("return http_completed()", retries=1)],
+                [
+                    call("return http_start(19302)", retries=1),
+                    call("return http_start(19302)"),
+                    call("return http_completed()", retries=1),
+                ],
             )
             for device in devices:
                 device.close.assert_called_once()

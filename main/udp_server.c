@@ -256,6 +256,16 @@ static bool keyed_cmd(const uint8_t *buf, size_t len, const char *cmd, const uin
     return true;
 }
 
+/** @brief Recognize CLU request framing; valid CBC padding alone does not identify a key. */
+static bool request_frame(const uint8_t *buf, size_t len)
+{
+    const uint8_t *tail;
+    size_t tail_len;
+    return starts(buf, len, "req") || (len >= 4 && memcmp(buf, "req_", 4) == 0) ||
+           keyed_cmd(buf, len, "req_discovery_clu", &tail, &tail_len) ||
+           keyed_cmd(buf, len, "req_set_key", &tail, &tail_len);
+}
+
 /**
  * @brief req_discovery_clu: prove knowledge of the device key and queue the reply.
  *
@@ -674,7 +684,7 @@ static void udp_task(void *arg)
                 continue;
             }
             int pl = clu_decrypt(keys[i], in, n, plain, BUF_SZ);
-            if (pl <= 0) {
+            if (pl <= 0 || !request_frame(plain, (size_t)pl)) {
                 continue;
             }
             clu_cipher_t used = *keys[i];
@@ -683,7 +693,7 @@ static void udp_task(void *arg)
             break;
         }
         if (!handled) {
-            ESP_LOGW(TAG, "%d bytes from %s: no key decrypts it (wrong project key / PIN?)", n,
+            ESP_LOGW(TAG, "%d bytes from %s: no key yields a CLU request (wrong project key / PIN?)", n,
                      inet_ntoa(from.sin_addr));
             ESP_LOG_BUFFER_HEX_LEVEL(TAG, in, n > 64 ? 64 : n, ESP_LOG_WARN);
             if (g_clu.has_temp) {

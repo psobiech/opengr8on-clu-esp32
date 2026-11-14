@@ -125,7 +125,9 @@ BaseType_t xTaskCreatePinnedToCore(void (*fn)(void *), const char *n, uint32_t s
 
 // ---------------------------------------------------------------- fake cipher
 // Length-preserving like AES-CBC + PKCS#7 (30 -> 32 bytes etc.), keyed by key AND IV, and a wrong
-// key yields garbage that fails the padding check: enough for key selection and reply checks.
+// key normally yields garbage that fails the padding check. The collision case models a wrong
+// key that happens to produce valid padding, as real CBC sometimes does.
+static bool s_padding_collision;
 static uint8_t keystream(const clu_cipher_t *c, size_t i)
 {
     uint32_t h = 2166136261u;
@@ -158,6 +160,11 @@ int clu_decrypt(const clu_cipher_t *c, const uint8_t *in, size_t len, uint8_t *o
 {
     if (len == 0 || len % 16 || cap < len) {
         return -1;
+    }
+    if (s_padding_collision && c == broadcast_key()) {
+        memset(out, 0xa5, len);
+        out[len - 1] = 1;
+        return clu_pkcs7_unpad(out, len);
     }
     for (size_t i = 0; i < len; i++) {
         out[i] = in[i] ^ keystream(c, i);
@@ -785,6 +792,35 @@ static void test_lua_requests(void)
               "resp:192.168.1.20:0000000a:42");
 }
 
+static void test_padding_collision(void)
+{
+    clu_cipher_t *prj = &g_clu.project;
+    int calls = s_lua_calls;
+    sent_reset();
+    rx_reset();
+    rx_add_str(prj, "req:192.168.1.20:00000004:SYSTEM:get(1)", "192.168.1.50");
+    s_padding_collision = true;
+    run_task(udp_task);
+    s_padding_collision = false;
+    check("padding-valid garbage under the broadcast key does not swallow a project request",
+          s_lua_calls == calls + 1 && s_nsent == 1);
+    check_str("padding collision: Lua reply uses the project key", sent_str(0, prj),
+              "resp:192.168.1.20:00000004:42");
+
+    uint8_t pkt[96];
+    size_t n = set_key_req(pkt, prj->key, 16, prj->iv);
+    int saved = s_saved_keys;
+    sent_reset();
+    rx_reset();
+    rx_add(prj, pkt, n, "192.168.1.50");
+    s_padding_collision = true;
+    run_task(udp_task);
+    s_padding_collision = false;
+    check("padding collision: binary-prefixed set_key still reaches the project key",
+          s_saved_keys == saved + 1 && s_nsent == 1);
+    check_str("padding collision: set_key acknowledged", sent_str(0, prj), "resp:OK");
+}
+
 static void test_project_commands(void)
 {
     clu_cipher_t *prj = &g_clu.project;
@@ -1156,6 +1192,7 @@ int main(void)
     test_set_ip();
     test_set_key();
     test_lua_requests();
+    test_padding_collision();
     test_project_commands();
     test_reset();
     test_report();

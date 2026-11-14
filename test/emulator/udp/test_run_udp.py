@@ -10,9 +10,13 @@ from unittest.mock import Mock, patch
 from .run_udp import (
     BROADCAST_IV,
     FACTORY_DEVICE_KEY,
+    KEY_SELECTION_IV,
+    KEY_SELECTION_KEY,
+    KEY_SELECTION_SCRIPT,
     MASTER_KEY,
     Device,
     Relay,
+    check_key_selection,
     decrypt,
     encrypt,
     main,
@@ -31,6 +35,19 @@ class CryptoTests(unittest.TestCase):
     def test_decrypt_rejects_malformed_ciphertext(self):
         with self.assertRaises(ValueError):
             decrypt(b"short", FACTORY_DEVICE_KEY, BROADCAST_IV)
+
+    def test_key_selection_vector_has_valid_padding_under_the_wrong_key(self):
+        request = f"req:192.168.4.1:00000001:{KEY_SELECTION_SCRIPT}".encode()
+        packet = encrypt(request, KEY_SELECTION_KEY, KEY_SELECTION_IV)
+        self.assertEqual(packet.hex(),
+                         "08323ba5963ecb3c4acb22b12fc55b205d353b48e352ca506e61ae10d6c1471b"
+                         "6e4cfef8c74b0e51fa66f5e1df64e15d57eb4a1f00015beed61986e088cc1756")
+        self.assertEqual(decrypt(packet, KEY_SELECTION_KEY, KEY_SELECTION_IV), request)
+        garbage = decrypt(packet, MASTER_KEY, BROADCAST_IV)
+        self.assertEqual(len(garbage), len(packet) - 1)
+        self.assertFalse(garbage.startswith((b"req:", b"req_")))
+        self.assertNotIn(b":req_discovery_clu:", garbage)
+        self.assertNotIn(b":req_set_key:", garbage)
 
 
 class SessionTests(unittest.TestCase):
@@ -51,6 +68,24 @@ class DeviceTests(unittest.TestCase):
 
     def response(self, session, value):
         return encrypt(f"resp:192.168.4.1:{session:08x}:{value}".encode(), MASTER_KEY, BROADCAST_IV)
+
+    def test_padding_collision_check_is_single_shot(self):
+        self.device.call = Mock(return_value="key-selection-ok")
+        check_key_selection(self.device)
+        self.device.call.assert_called_once_with(KEY_SELECTION_SCRIPT)
+
+    def test_padding_collision_check_does_not_hide_timeout(self):
+        self.device.call = Mock(side_effect=TimeoutError("lost request"))
+        with self.assertRaisesRegex(RuntimeError, "padding collision"):
+            check_key_selection(self.device)
+        self.device.call.assert_called_once_with(KEY_SELECTION_SCRIPT)
+
+    def test_padding_collision_check_requires_first_session(self):
+        self.device.session = 1
+        self.device.call = Mock()
+        with self.assertRaisesRegex(RuntimeError, "needs Lua session 00000001"):
+            check_key_selection(self.device)
+        self.device.call.assert_not_called()
 
     def test_call_ignores_stale_session_and_bad_ciphertext(self):
         self.device.session = 1
@@ -77,6 +112,51 @@ class DeviceTests(unittest.TestCase):
             with self.assertRaisesRegex(TimeoutError, "session 00000002 timed out"):
                 self.device.call("return http_received()", retries=1, timeout=2)
         self.assertEqual(self.device.sock.send.call_count, 2)
+
+    def setup_key_device(self):
+        self.device.pin_key, self.device.pin_iv = FACTORY_DEVICE_KEY, bytes(range(16))
+        return bytes(range(32, 48)), bytes(range(48, 64))
+
+    def test_set_project_key_skips_late_discovery_copies(self):
+        key, iv = self.setup_key_device()
+        stale = encrypt(b"\0" * 32 + b":resp_discovery_clu:copy", key, iv)
+        self.device.sock.recv.side_effect = [stale, encrypt(b"resp:OK", key, iv)]
+        self.device.set_project_key(key, iv)
+        sent = decrypt(self.device.sock.send.call_args.args[0], FACTORY_DEVICE_KEY, bytes(range(16)))
+        self.assertTrue(sent.endswith(b":req_set_key:" + key))
+        self.assertEqual((self.device.key, self.device.iv), (key, iv))
+
+    def test_set_project_key_resends_same_packet_after_lost_reply(self):
+        key, iv = self.setup_key_device()
+        self.device._receive = Mock(side_effect=[TimeoutError("lost"), b"resp:OK"])
+        self.device.set_project_key(key, iv)
+        first, second = self.device.sock.send.call_args_list
+        self.assertEqual(first, second)
+        self.assertEqual(self.device.key, key)
+
+    def test_set_project_key_reports_error_and_timeout(self):
+        key, iv = self.setup_key_device()
+        self.device.sock.recv.side_effect = [encrypt(b"resp:ERROR", key, iv)]
+        with self.assertRaisesRegex(RuntimeError, "setup failed"):
+            self.device.set_project_key(key, iv)
+        self.device.sock.recv.side_effect = socket.timeout
+        with patch("test.emulator.udp.run_udp.time.monotonic", side_effect=itertools.count()):
+            with self.assertRaisesRegex(TimeoutError, "project key setup timed out"):
+                self.device.set_project_key(key, iv, timeout=2)
+        self.assertEqual(self.device.key, MASTER_KEY)
+
+    def test_key_selection_is_not_retried_and_names_the_dropped_request(self):
+        self.device.call = Mock(side_effect=TimeoutError("session 00000001 timed out"))
+        with self.assertRaisesRegex(RuntimeError, "padding collision selected the wrong UDP key"):
+            check_key_selection(self.device)
+        self.device.call.assert_called_once_with(KEY_SELECTION_SCRIPT)
+
+    def test_key_selection_requires_first_session(self):
+        self.device.session = 1
+        self.device.call = Mock()
+        with self.assertRaisesRegex(RuntimeError, "session 00000001"):
+            check_key_selection(self.device)
+        self.device.call.assert_not_called()
 
     def test_upload_retries_only_idempotent_operations_and_loads_once(self):
         script = 'print("hello")\n'

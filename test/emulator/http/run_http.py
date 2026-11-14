@@ -80,8 +80,11 @@ def run_test(args: argparse.Namespace) -> str:
             device.wait_for(f"HTTP_READY {device.name} {nonce}")
 
         for source, target in ((devices[0], devices[1]), (devices[1], devices[0])):
-            if source.call(f"return http_start({target.tcp_port})") != "started":
+            start = f"return http_start({target.tcp_port})"
+            if source.call(start, retries=1) != "started":
                 raise RuntimeError(f"{source.name}: failed to start HttpRequest exchange")
+            if source.call(start) != "started":
+                raise RuntimeError(f"{source.name}: repeated HttpRequest start was not idempotent")
             source.wait_for(f"HTTP_DONE {source.name} {nonce}", timeout=60)
             if source.call("return http_completed()", retries=1) != "3":
                 raise RuntimeError(f"{source.name}: not all three HttpRequest responses completed")

@@ -165,7 +165,32 @@ function syncWriteCfg() {
   $("cfg-ota-hint").hidden = !ota;
   $("s2").classList.toggle("off", ota);
 }
-$("write-cfg").addEventListener("change", () => syncMode());
+/** Random identity in the firmware's own format (main/clu_state.c): SN 31-bit non-zero, PIN 8 x A-Z0-9. */
+function randomSn() {
+  const r = new Uint32Array(1);
+  do crypto.getRandomValues(r); while ((r[0] & 0x7fffffff) === 0);
+  return String(r[0] & 0x7fffffff);
+}
+function randomPin() {
+  const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const b = new Uint8Array(1);
+  let pin = "";
+  while (pin.length < 8) {
+    crypto.getRandomValues(b);
+    if (b[0] < 252) pin += abc[b[0] % 36]; // 252 = 7 * 36: no modulo bias
+  }
+  return pin;
+}
+
+$("write-cfg").addEventListener("change", () => {
+  syncMode();
+  if (!writeCfg()) return;
+  // pre-generate a missing identity so the user sees (and can note) SN and PIN before flashing
+  let filled = false;
+  if (!form.elements.sn.value) { form.elements.sn.value = randomSn(); filled = true; }
+  if (!form.elements.pin.value) { form.elements.pin.value = randomPin(); filled = true; }
+  if (filled) form.dispatchEvent(new Event("input")); // validate + remember the SN
+});
 
 function checkSettings() {
   const errors = validate(settings());

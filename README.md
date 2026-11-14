@@ -196,7 +196,7 @@ publikują wydanie.
 
 ### Wymagania do budowania
 
-- **ESP-IDF 6.0** (projekt budowany na 6.0.2, zob. `dependencies.lock`), target `esp32s3` albo
+- **ESP-IDF 6.1** (projekt budowany na 6.1.0, zob. `dependencies.lock`), target `esp32s3` albo
   `esp32` (Grenton GATE).
 - Sieć przy pierwszym budowaniu: component manager pobiera `espressif/mqtt`
   (`components/clu_mqtt/idf_component.yml`), `espressif/w5500` i na `esp32` `espressif/lan87xx`

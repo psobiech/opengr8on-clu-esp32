@@ -38,3 +38,4 @@ test/host/coverage/
 .idea/
 TODO.md
 build-*/
+.tmp/

@@ -28,7 +28,7 @@ Lua peer script (where applicable), and focused unit tests together.
 
 ## CI behavior
 
-`.github/workflows/firmware.yml` builds `gate-http` and `gate-http-low-memory` with ESP-IDF v6.0.2;
+`.github/workflows/firmware.yml` builds `gate-http` and `gate-http-low-memory` with ESP-IDF v6.1.0;
 the emulator matrix downloads each matching firmware artifact rather than compiling in the test job.
 The low-memory preset uses `partitions_4mb.csv` and quad PSRAM, with its generated `sdkconfig` kept
 inside its separate build directory. The low-memory test artifact is not included in GitHub releases.
@@ -44,7 +44,7 @@ TCP ports 19301 and 19302. The runners have independent emulator and Unix wall-c
 
 ## Local run
 
-With ESP-IDF v6.0.2 and `esp-emu` v1.0.0 installed:
+With ESP-IDF v6.1.0 and `esp-emu` v1.0.0 installed:
 
 ```sh
 idf.py --preset gate-http build merge-bin

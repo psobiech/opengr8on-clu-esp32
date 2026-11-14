@@ -46,3 +46,18 @@ initDone = true
 end
 
 CLU100000001:add_event(0, OnInit)
+
+-- CLU user features as OM declares them: initial value, then registration with the store
+-- (execute(4) = persistent, execute(2) = not persistent)
+restored = 0 -- number
+_type["restored"] = "number"
+keep = "init" -- string
+_type["keep"] = "string"
+fresh = "init" -- string
+_type["fresh"] = "string"
+gone = "init" -- string
+_type["gone"] = "string"
+STO99999:execute(4, "restored")
+STO99999:execute(4, "keep")
+STO99999:execute(4, "fresh")
+STO99999:execute(2, "gone")

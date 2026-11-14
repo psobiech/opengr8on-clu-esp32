@@ -204,12 +204,18 @@ local function lit(value)
 end
 __lit = lit
 
+-- Entries: {object, feature} ({"NAME", feature} also accepted) or a bare string = user
+-- variable (global), which is how OM subscribes to CLU user features: {"a", {CLU…, 0}}.
 local function fetch(subs)
   local vals = {}
   for i, s in ipairs(subs or {}) do
-    local object = s[1]
-    if type(object) == "string" then object = objects[object] end
-    vals[i] = object and lit(object:get(s[2])) or "nil"
+    if type(s) == "string" then
+      vals[i] = lit(_G[s])
+    else
+      local object = s[1]
+      if type(object) == "string" then object = objects[object] end
+      vals[i] = object and lit(object:get(s[2])) or "nil"
+    end
   end
   return "{" .. table.concat(vals, ",") .. "}"
 end

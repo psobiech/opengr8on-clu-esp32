@@ -19,7 +19,7 @@ local storage = os.tmpname()
 local storage_tmp = storage:gsub("%.%w+$", "") .. ".TMP"
 do
   local f = assert(io.open(storage, "wb"))
-  f:write('{["es"]={["EVE0002"]={{3,0,"0 9 * * *"}}},["vars"]={["keep"]="a\\"b\\nc",["restored"]=7}}')
+  f:write('{["es"]={["EVE0002"]={{3,0,"0 9 * * *"}}},["vars"]={["gone"]="stale",["keep"]="a\\"b\\nc",["restored"]=7}}')
   f:close()
 end
 local function stored()
@@ -116,6 +116,11 @@ if not arg[1] then
     #reports == 2 and reports[1][1] == "10.0.0.5" and reports[2][1] == "10.0.0.9" and
     reports[1][2] == 4344 and reports[1][3] == "clientReport:7:{0,30000,nil}")
   check("fetchValues", SYSTEM:fetchValues({ { DOU0001, 0 }, { "ROL0001", 1 } }) == "values:{0,30000}")
+  -- OM subscribes to CLU user features (globals) as a bare name
+  uservar = "elo"
+  check("fetchValues user variable", SYSTEM:fetchValues({ "uservar", { DOU0001, 0 }, "nosuchvar" }) ==
+    'values:{"elo",0,nil}')
+  uservar = nil
   check("clientDestroy", SYSTEM:clientDestroy("10.0.0.5", 4344, 7) == 7)
   __update("DIN0001", 0, 1)
   SYSTEM.Loop()
@@ -230,7 +235,18 @@ do
   check("calendar bad rule", CAL:get(0) == "ERROR")
 
   -- Storage (class 44) + persistence
-  check("storage restored before OnInit", restored == 7 and keep == 'a"b\nc')
+  if not arg[1] then -- user features declared by fixtures/om.lua
+    check("storage restored before OnInit", restored == 7 and keep == 'a"b\nc')
+    check("persistent feature without saved value keeps its initial value", fresh == "init")
+    check("non-persistent feature keeps its initial value", gone == "init")
+    clock = clock + 6000; SYSTEM.Loop()
+    check("persistent registration saves only new values",
+      stored().vars.fresh == "init" and stored().vars.restored == 7 and stored().vars.keep == 'a"b\nc')
+    check("non-persistent feature: stale saved value dropped", stored().vars.gone == nil)
+    restored = 8
+    clock = clock + 1000; SYSTEM.Loop(); clock = clock + 5000; SYSTEM.Loop()
+    check("registered feature change written", stored().vars.restored == 8)
+  end
   check("ser int/float/str", __ser(1) == "1" and __ser(1.0) == "1.0" and __ser(0.1) == "0.10000000000000001"
     and __ser("x\0y") == '"x\\0y"')
   myvar = 5
@@ -240,7 +256,7 @@ do
   clock = clock + 1000; SYSTEM.Loop()
   check("tracked change debounced", stored().vars.myvar == 5)
   clock = clock + 5000; SYSTEM.Loop()
-  check("tracked change written", stored().vars.myvar == 2.5 and stored().vars.restored == 7)
+  check("tracked change written", stored().vars.myvar == 2.5 and (arg[1] or stored().vars.restored == 8))
   -- reset right after a change (no SYSTEM.Loop scan / debounce yet): __shutdown writes it
   myvar = 3
   __shutdown()
@@ -248,12 +264,14 @@ do
   myvar = 2.5
   clock = clock + 1000; SYSTEM.Loop(); clock = clock + 5000; SYSTEM.Loop()
   check("utilization %", STO99999:get(1) == 0)
-  -- tracked table edited in place: the stored copy must not alias the global
+  -- only number / string / boolean persist (OM offers no persistence for type OTHER)
   mytab = { a = 1 }
+  local nlogs = #logs
   STO99999:execute(4, "mytab")
-  mytab.a = 2
   clock = clock + 1000; SYSTEM.Loop(); clock = clock + 5000; SYSTEM.Loop()
-  check("tracked table in-place change written", stored().vars.mytab.a == 2)
+  check("table not persisted, logged once", stored().vars.mytab == nil and #logs == nlogs + 1 and
+    logs[#logs]:find("unsupported type table") ~= nil)
+  mytab = nil
   local ES2 = OBJECT:new(43, "EVE0002")
   check("es rules restored", ES2:get(0) == '{{3,0,"0 9 * * *"}}')
   check("es add duplicate -> same id", ES2:execute(2, "0 9 * * *") == 3 and ES2:get(3) == 1)
@@ -281,6 +299,12 @@ do
   check("load falls back to .TMP", __persist.load().vars.myvar == 2.5)
   STO99999:execute(3)
   check("erase all", next(stored().vars) == nil and stored().es.EVE0001 ~= nil and io.open(storage_tmp) == nil)
+  if not arg[1] then
+    check("erase all: declared features back to initial values",
+      restored == 0 and math.type(restored) == "integer" and keep == "init" and fresh == "init")
+    clock = clock + 1000; SYSTEM.Loop(); clock = clock + 5000; SYSTEM.Loop()
+    check("erase all: initial values saved again", stored().vars.restored == 0 and stored().vars.keep == "init")
+  end
   os.time = real_time
 
   -- Statistics / StatisticsPulse (CLU interface 0x203)

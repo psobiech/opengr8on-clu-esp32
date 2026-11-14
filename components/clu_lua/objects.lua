@@ -732,18 +732,30 @@ Pulse.X[0] = function(object) -- TriggerPulse
 end
 
 -- ---------------------------------------------------------------------------------------------
--- Storage (class 44): persistent user variables (globals). Same model as the Java/Node vCLU:
---   STO:execute(4, "name")  Store: track global "name" and save it now; no name = save all tracked
---   STO:execute(3)          EraseAll: forget all variables and wipe them from flash
+-- Storage (class 44): persistent user variables (globals). OM.LUA declares every CLU user
+-- feature (`d = "d"`, its initial value) and at its end registers it with the store:
+--   STO:execute(4, "name")  persist "name". While OM.LUA loads (before SYSTEM.Init) this remembers
+--                           the initial value and restores the saved value over it (no saved
+--                           value: the initial value is saved); after SYSTEM.Init it saves the
+--                           current value now. No name = save all tracked variables now.
+--   STO:execute(2, "name")  "name" is not persistent: forget any saved value (the feature was
+--                           persistent in an earlier project), so its initial value stays.
+--   STO:execute(3)          EraseAll: wipe the saved values; declared variables go back to their
+--                           initial values (still tracked, so they are saved again).
 --   STO:get(1)              StorageUtilization, % of STORAGE_BUDGET used by the store file
--- Tracked variables are restored before OnInit (via OM's setVar when present, so _type applies),
--- then watched every second; changes are written debounced. How the real CLU picks persistent
--- variables is not known (no sample OM.LUA uses them).
+-- Only number / string / boolean persist (OM offers persistence for no other user feature type).
+-- Restores go through OM's setVar when present (so _type applies). Tracked variables are watched
+-- every second; changes are written debounced. Saved values of variables nobody registers are
+-- kept in the file but never restored.
 -- ---------------------------------------------------------------------------------------------
 local Storage = vclass(44, {})
 local STORAGE_BUDGET = 64 * 1024
 local storage_hooked = false
 local storage_next_scan = 0
+local storage_booted = false -- SYSTEM.Init ran: execute(4, name) saves instead of restoring
+local storage_tracked = {}    -- names registered via execute(4, name)
+local storage_initial = {}    -- name -> initial value (declared in OM.LUA)
+local STORABLE = { number = true, string = true, boolean = true }
 
 local function sto_vars() return persist.section("vars") end
 
@@ -751,23 +763,16 @@ local function sto_assign(name, value)
   if type(setVar) == "function" then setVar(name, value) else _G[name] = value end
 end
 
--- Tables are stored as deep copies (round-trip through ser, i.e. exactly what gets saved): an
--- alias would follow in-place edits of the global and hide them from the change check.
-local function sto_copy(value, serialized_value)
-  if type(value) ~= "table" then return value end
-  return load("return " .. (serialized_value or ser(value)), "=storage", "t", {})()
-end
-
-local function sto_capture(name)
-  local vars = sto_vars()
+local function sto_capture(name, quiet)
   local cur = _G[name]
-  local serialized_value = ser(cur)
-  if serialized_value == nil then
-    clu.log(2, "storage: " .. name .. " has unsupported type " .. type(cur))
+  if not STORABLE[type(cur)] then
+    if not quiet then clu.log(2, "storage: " .. name .. " has unsupported type " .. type(cur)) end
     return false
   end
-  if vars[name] == nil or serialized_value ~= ser(vars[name]) then
-    vars[name] = sto_copy(cur, serialized_value)
+  local vars = sto_vars()
+  -- compare serialized: keeps integer 1 vs float 1.0 apart, NaN equal to itself
+  if vars[name] == nil or ser(cur) ~= ser(vars[name]) then
+    vars[name] = cur
     persist.mark()
     return true
   end
@@ -779,17 +784,13 @@ local function sto_scan(now) -- now nil: scan unconditionally (close hook)
     if now < storage_next_scan then return end
     storage_next_scan = now + 1000
   end
-  for name in pairs(sto_vars()) do
-    if _G[name] ~= nil then sto_capture(name) end
-  end
+  for name in pairs(storage_tracked) do sto_capture(name, true) end
 end
 
 function Storage.init(object)
   if storage_hooked then return end
   storage_hooked = true
-  HOOKS.init[#HOOKS.init + 1] = function()
-    for name, value in pairs(sto_vars()) do sto_assign(name, sto_copy(value)) end
-  end
+  HOOKS.init[#HOOKS.init + 1] = function() storage_booted = true end
   HOOKS.loop[#HOOKS.loop + 1] = sto_scan
   table.insert(HOOKS.close, 1, sto_scan) -- capture last changes before the final flush
 end
@@ -798,17 +799,38 @@ Storage.G[1] = function()
   return math.min(100, math.floor(persist.size() * 100 / STORAGE_BUDGET))
 end
 
+Storage.X[2] = function(object, name) -- not persistent
+  if type(name) ~= "string" then return end
+  storage_tracked[name], storage_initial[name] = nil, nil
+  local vars = sto_vars()
+  if vars[name] ~= nil then
+    vars[name] = nil
+    persist.mark()
+  end
+end
+
 Storage.X[3] = function() -- EraseAll
   persist.load().vars = {}
+  for name, value in pairs(storage_initial) do sto_assign(name, value) end
   persist.mark()
   persist.flush(true)
 end
 
 Storage.X[4] = function(object, name) -- Store
   if type(name) == "string" and name ~= "" then
+    local declaring = not storage_booted and not storage_tracked[name]
+    storage_tracked[name] = true
+    if declaring then
+      if STORABLE[type(_G[name])] then storage_initial[name] = _G[name] end
+      local saved = sto_vars()[name]
+      if STORABLE[type(saved)] then
+        sto_assign(name, saved)
+        return
+      end
+    end
     sto_capture(name)
   else
-    for n in pairs(sto_vars()) do sto_capture(n) end
+    for n in pairs(storage_tracked) do sto_capture(n) end
   end
   if persist.size() > STORAGE_BUDGET then clu.log(2, "storage: over budget") end
   persist.flush(true)

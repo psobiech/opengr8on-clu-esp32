@@ -87,14 +87,14 @@ typedef struct {
  * @brief Decode a MyMessage.
  * @return false if too short, not protocol version 2 or the command is invalid.
  */
-bool ms_bin_decode(const uint8_t *b, size_t len, ms_bin_t *out);
+bool ms_bin_decode(const uint8_t *binary_data, size_t len, ms_bin_t *out);
 
 /**
- * @brief Encode a controller message (m->node = destination, m->ack = echo request) as sent by
+ * @brief Encode a controller message (message->node = destination, message->ack = echo request) as sent by
  * @p sender: payload text as P_STRING, empty as P_BYTE 0, C_STREAM hex as P_CUSTOM.
  * @return Bytes written, 0 if it does not fit / the payload is too long.
  */
-size_t ms_bin_encode(const ms_msg_t *m, uint8_t sender, uint8_t *out, size_t cap);
+size_t ms_bin_encode(const ms_msg_t *message, uint8_t sender, uint8_t *out, size_t cap);
 
 /**
  * @brief Encode a one-byte (P_BYTE) internal message from @p sender, e.g. I_PONG / I_FIND_PARENT_RESPONSE.

@@ -75,42 +75,42 @@ static int s_max;
 // ---------------------------------------------------------------------------------------------
 // IO_MODULE_DIN_8
 // ---------------------------------------------------------------------------------------------
-static int din8_status(tfbus_vmod_t *b, uint8_t *p, size_t cap)
+static int din8_status(tfbus_vmod_t *bus_endpoint, uint8_t *status_buffer, size_t cap)
 {
-    const vmod_t *m = b->ctx;
+    const vmod_t *virtual_module = bus_endpoint->ctx;
     xSemaphoreTake(s_mx, portMAX_DELAY);
-    tfbus_din8_status(m->in, m->out, p);
+    tfbus_din8_status(virtual_module->in, virtual_module->out, status_buffer);
     xSemaphoreGive(s_mx);
     return TFBUS_DIN8_STATUS_LEN;
 }
 
 /** @brief MODULE_CMD: switch outputs; each bound output that changed is sent to its node. */
-static bool din8_command(tfbus_vmod_t *b, uint8_t type, const uint8_t *pl, size_t plen)
+static bool din8_command(tfbus_vmod_t *bus_endpoint, uint8_t type, const uint8_t *command_payload, size_t plen)
 {
     if (type != TFBUS_T_MODULE_CMD) {
         return true;
     }
-    vmod_t *m = b->ctx;
-    int idx = (int)(m - s_mod);
+    vmod_t *virtual_module = bus_endpoint->ctx;
+    int idx = (int)(virtual_module - s_mod);
     slot_t send[8];
     uint8_t val[8];
-    int n = 0;
+    int changed_count = 0;
     xSemaphoreTake(s_mx, portMAX_DELAY);
-    uint8_t out = m->out;
-    bool ok = tfbus_din8_cmd(pl, plen, &out);
+    uint8_t out = virtual_module->out;
+    bool ok = tfbus_din8_cmd(command_payload, plen, &out);
     if (ok) {
-        uint8_t changed = out ^ m->out;
+        uint8_t changed = out ^ virtual_module->out;
         for (int ch = 0; ch < 8; ch++) {
-            const slot_t *s = &s_slot[idx][m->type->first[MS_SLOT_DOUT] + ch];
-            if ((changed >> ch & 1) && s->used) {
-                send[n] = *s;
-                val[n++] = out >> ch & 1;
+            const slot_t *slot_entry = &s_slot[idx][virtual_module->type->first[MS_SLOT_DOUT] + ch];
+            if ((changed >> ch & 1) && slot_entry->used) {
+                send[changed_count] = *slot_entry;
+                val[changed_count++] = out >> ch & 1;
             }
         }
-        m->out = out;
+        virtual_module->out = out;
     }
     xSemaphoreGive(s_mx);
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < changed_count; i++) {
         if (!s_cfg.send(send[i].node, send[i].child, 1 /* C_SET */, send[i].vtype, val[i] ? "1" : "0")) {
             ESP_LOGW(TAG, "node %u/%u: output not sent (queue full)", send[i].node, send[i].child);
         }
@@ -138,34 +138,34 @@ static const vtype_t DIN8 = {
 // ---------------------------------------------------------------------------------------------
 static void save_map(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &nvs_handle) != ESP_OK) {
         ESP_LOGE(TAG, "NVS open failed: bindings not saved");
         return;
     }
-    nvs_set_blob(h, NVS_MAP, s_slot, sizeof s_slot);
-    nvs_set_blob(h, NVS_OWN, s_owner, sizeof s_owner);
-    nvs_commit(h);
-    nvs_close(h);
+    nvs_set_blob(nvs_handle, NVS_MAP, s_slot, sizeof s_slot);
+    nvs_set_blob(nvs_handle, NVS_OWN, s_owner, sizeof s_owner);
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
 }
 
 static void save_sn(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &nvs_handle) != ESP_OK) {
         ESP_LOGE(TAG, "NVS open failed: module serials not saved");
         return;
     }
-    nvs_set_blob(h, NVS_SN, s_sn, sizeof s_sn);
-    nvs_commit(h);
-    nvs_close(h);
+    nvs_set_blob(nvs_handle, NVS_SN, s_sn, sizeof s_sn);
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
 }
 
 /** @brief Set up module @p i (serial in s_sn[i]) as an IO_MODULE_DIN_8; not visible until s_n covers it. */
-static void setup_module(int i)
+static void setup_module(int module_index)
 {
-    s_mod[i] = (vmod_t){.type = &DIN8};
-    s_bus[i] = (tfbus_vmod_t){.sn = s_sn[i], .ops = DIN8.ops, .ctx = &s_mod[i]};
+    s_mod[module_index] = (vmod_t){.type = &DIN8};
+    s_bus[module_index] = (tfbus_vmod_t){.sn = s_sn[module_index], .ops = DIN8.ops, .ctx = &s_mod[module_index]};
 }
 
 /** @brief Create one more module (fresh serial, saved); -1 at the limit. Lock held. */
@@ -174,29 +174,29 @@ static int add_module(void)
     if (s_n >= s_max) {
         return -1;
     }
-    int i = s_n;
-    uint32_t sn;
+    int module_index = s_n;
+    uint32_t serial_number;
     bool dup;
     do { // non-zero, 31 bits like the CLU and on-board IO serials, distinct
-        sn = esp_random() & 0x7fffffff;
-        dup = sn == 0;
-        for (int j = 0; j < i; j++) {
-            dup |= s_sn[j] == sn;
+        serial_number = esp_random() & 0x7fffffff;
+        dup = serial_number == 0;
+        for (int j = 0; j < module_index; j++) {
+            dup |= s_sn[j] == serial_number;
         }
     } while (dup);
-    s_sn[i] = sn;
-    memset(s_slot[i], 0, sizeof s_slot[i]);
-    setup_module(i);
+    s_sn[module_index] = serial_number;
+    memset(s_slot[module_index], 0, sizeof s_slot[module_index]);
+    setup_module(module_index);
     save_sn();
-    __atomic_store_n(&s_n, i + 1, __ATOMIC_RELEASE); // the bus endpoint sees it fully set up
-    ESP_LOGW(TAG, "new module %d: IO_MODULE_DIN_8 SN %lu; run discovery in OM to add it", i + 1, (unsigned long)sn);
-    return i;
+    __atomic_store_n(&s_n, module_index + 1, __ATOMIC_RELEASE); // the bus endpoint sees it fully set up
+    ESP_LOGW(TAG, "new module %d: IO_MODULE_DIN_8 SN %lu; run discovery in OM to add it", module_index + 1, (unsigned long)serial_number);
+    return module_index;
 }
 
-static bool module_empty(int i)
+static bool module_empty(int module_index)
 {
     for (int j = 0; j < MS_VMOD_SLOTS; j++) {
-        if (s_slot[i][j].used) {
+        if (s_slot[module_index][j].used) {
             return false;
         }
     }
@@ -206,37 +206,37 @@ static bool module_empty(int i)
 /** @brief Modules of @p node, in creation order; returns how many. Lock held. */
 static int node_modules(uint8_t node, int *out)
 {
-    int n = 0;
+    int module_count = 0;
     for (int i = 0; i < s_n; i++) {
         if (s_owner[i] == node) {
-            out[n++] = i;
+            out[module_count++] = i;
         }
     }
-    return n;
+    return module_count;
 }
 
 /** @brief One more module for @p node: an empty unowned one, else a new one; -1 at the limit. Lock held. */
 static int take_module(uint8_t node)
 {
-    int i = 0;
-    while (i < s_n && (s_owner[i] || !module_empty(i))) {
-        i++;
+    int module_index = 0;
+    while (module_index < s_n && (s_owner[module_index] || !module_empty(module_index))) {
+        module_index++;
     }
-    if (i == s_n && (i = add_module()) < 0) {
+    if (module_index == s_n && (module_index = add_module()) < 0) {
         return -1;
     }
-    s_owner[i] = node;
-    s_mod[i].in = s_mod[i].out = 0;
-    return i;
+    s_owner[module_index] = node;
+    s_mod[module_index].in = s_mod[module_index].out = 0;
+    return module_index;
 }
 
 /** @brief Slot kind of channel @p slot of module @p i, and its channel within the kind. */
-static int kind_of(int i, int slot, int *ch)
+static int kind_of(int module_index, int slot, int *channel_index)
 {
-    const vtype_t *t = s_mod[i].type;
+    const vtype_t *module_type = s_mod[module_index].type;
     for (int k = 0; k < MS_SLOT_KINDS; k++) {
-        if (t->count[k] && slot >= t->first[k] && slot < t->first[k] + t->count[k]) {
-            *ch = slot - t->first[k];
+        if (module_type->count[k] && slot >= module_type->first[k] && slot < module_type->first[k] + module_type->count[k]) {
+            *channel_index = slot - module_type->first[k];
             return k;
         }
     }
@@ -248,10 +248,10 @@ typedef struct {
     uint8_t child, vtype, bit;
 } entry_t;
 
-static int entry_cmp(const void *a, const void *b)
+static int entry_cmp(const void *left_entry_ptr, const void *right_entry_ptr)
 {
-    const entry_t *x = a, *y = b;
-    return x->child != y->child ? x->child - y->child : x->vtype - y->vtype;
+    const entry_t *left_entry = left_entry_ptr, *right_entry = right_entry_ptr;
+    return left_entry->child != right_entry->child ? left_entry->child - right_entry->child : left_entry->vtype - right_entry->vtype;
 }
 
 /**
@@ -264,56 +264,56 @@ static void layout(uint8_t node, uint8_t kind, const entry_t *add)
 {
     const int per = DIN8.count[kind], first = DIN8.first[kind];
     const char *kname = kind == MS_SLOT_DIN ? "DIN" : "DOUT";
-    int mods[MS_VMOD_MAX], nm = node_modules(node, mods);
-    entry_t e[MS_VMOD_MAX * 8 + 1];
-    int n = 0;
-    for (int k = 0; k < nm; k++) {
-        const vmod_t *m = &s_mod[mods[k]];
-        uint8_t bits = kind == MS_SLOT_DIN ? m->in : m->out;
+    int mods[MS_VMOD_MAX], module_count = node_modules(node, mods);
+    entry_t entries[MS_VMOD_MAX * 8 + 1];
+    int entry_count = 0;
+    for (int k = 0; k < module_count; k++) {
+        const vmod_t *virtual_module = &s_mod[mods[k]];
+        uint8_t bits = kind == MS_SLOT_DIN ? virtual_module->in : virtual_module->out;
         for (int c = 0; c < per; c++) {
-            const slot_t *sl = &s_slot[mods[k]][first + c];
-            if (sl->used) {
-                e[n++] = (entry_t){.child = sl->child, .vtype = sl->vtype, .bit = (uint8_t)(bits >> c & 1)};
+            const slot_t *slot_entry = &s_slot[mods[k]][first + c];
+            if (slot_entry->used) {
+                entries[entry_count++] = (entry_t){.child = slot_entry->child, .vtype = slot_entry->vtype, .bit = (uint8_t)(bits >> c & 1)};
             }
         }
     }
     if (add) {
-        e[n++] = *add;
+        entries[entry_count++] = *add;
     }
-    qsort(e, (size_t)n, sizeof *e, entry_cmp);
-    while (nm * per < n) {
+    qsort(entries, (size_t)entry_count, sizeof *entries, entry_cmp);
+    while (module_count * per < entry_count) {
         int i = take_module(node);
         if (i < 0) {
             ESP_LOGW(TAG, "node %u/%u: no free %s channel, %d module(s) = the limit (menuconfig "
                           "CLU_MYSENSORS_MODULES_MAX)", node, add ? add->child : 255, kname, s_max);
             return;
         }
-        mods[nm++] = i;
+        mods[module_count++] = i;
     }
     bool moved = false;
-    for (int i = 0; i < nm * per; i++) {
-        int mi = mods[i / per], c = i % per;
-        slot_t *sl = &s_slot[mi][first + c];
-        uint8_t *bits = kind == MS_SLOT_DIN ? &s_mod[mi].in : &s_mod[mi].out;
-        if (i >= n) { // past the node's last sensor of this kind
-            moved |= sl->used;
-            *sl = (slot_t){0};
+    for (int i = 0; i < module_count * per; i++) {
+        int module_index = mods[i / per], c = i % per;
+        slot_t *slot_entry = &s_slot[module_index][first + c];
+        uint8_t *bits = kind == MS_SLOT_DIN ? &s_mod[module_index].in : &s_mod[module_index].out;
+        if (i >= entry_count) { // past the node's last sensor of this kind
+            moved |= slot_entry->used;
+            *slot_entry = (slot_t){0};
             *bits &= (uint8_t)~(1u << c);
             continue;
         }
-        if (add && e[i].child == add->child && e[i].vtype == add->vtype) {
-            ESP_LOGI(TAG, "node %u/%u -> module %d (SN %lu) %s %d", node, add->child, mi + 1,
-                     (unsigned long)s_sn[mi], kname, c + 1);
-        } else if (!sl->used || sl->child != e[i].child || sl->vtype != e[i].vtype) {
+        if (add && entries[i].child == add->child && entries[i].vtype == add->vtype) {
+            ESP_LOGI(TAG, "node %u/%u -> module %d (SN %lu) %s %d", node, add->child, module_index + 1,
+                     (unsigned long)s_sn[module_index], kname, c + 1);
+        } else if (!slot_entry->used || slot_entry->child != entries[i].child || slot_entry->vtype != entries[i].vtype) {
             moved = true;
         }
-        *sl = (slot_t){.used = 1, .node = node, .child = e[i].child, .vtype = e[i].vtype};
-        *bits = e[i].bit ? (uint8_t)(*bits | 1u << c) : (uint8_t)(*bits & ~(1u << c));
+        *slot_entry = (slot_t){.used = 1, .node = node, .child = entries[i].child, .vtype = entries[i].vtype};
+        *bits = entries[i].bit ? (uint8_t)(*bits | 1u << c) : (uint8_t)(*bits & ~(1u << c));
     }
     if (moved) {
         ESP_LOGW(TAG, "node %u: %s channels re-sorted by child id", node, kname);
     }
-    for (int k = 0; k < nm; k++) {
+    for (int k = 0; k < module_count; k++) {
         if (module_empty(mods[k])) {
             s_owner[mods[k]] = 0; // free for the next node that needs one
         }
@@ -326,15 +326,15 @@ void ms_vmod_present(uint8_t node, uint8_t child, uint8_t stype, const char *des
     if (!s_max || node == 0 || node == 255) {
         return; // the gateway / a node without an id
     }
-    int r = 0;
-    while (r < (int)(sizeof RULES / sizeof *RULES) && RULES[r].stype != stype) {
-        r++;
+    int rule_index = 0;
+    while (rule_index < (int)(sizeof RULES / sizeof *RULES) && RULES[rule_index].stype != stype) {
+        rule_index++;
     }
-    if (r == (int)(sizeof RULES / sizeof *RULES)) {
+    if (rule_index == (int)(sizeof RULES / sizeof *RULES)) {
         return;
     }
-    uint8_t kind = RULES[r].kind;
-    const uint8_t vtype = RULES[r].vtype;
+    uint8_t kind = RULES[rule_index].kind;
+    const uint8_t vtype = RULES[rule_index].vtype;
     // WORKAROUND: some relay/input boards present their inputs as S_BINARY too (V_STATUS, like the
     // relays), so the type cannot tell them apart; such a child whose description starts with
     // "INPUT" is taken as a binary input (DIN fed by V_STATUS) instead of an output.
@@ -344,15 +344,15 @@ void ms_vmod_present(uint8_t node, uint8_t child, uint8_t stype, const char *des
     xSemaphoreTake(s_mx, portMAX_DELAY);
     for (int i = 0; i < s_n; i++) {
         for (int j = 0; j < MS_VMOD_SLOTS; j++) {
-            slot_t *sl = &s_slot[i][j];
-            int ch;
-            if (sl->used && sl->node == node && sl->child == child && sl->vtype == vtype) {
-                int had = kind_of(i, j, &ch);
+            slot_t *slot_entry = &s_slot[i][j];
+            int channel_index;
+            if (slot_entry->used && slot_entry->node == node && slot_entry->child == child && slot_entry->vtype == vtype) {
+                int had = kind_of(i, j, &channel_index);
                 if (had == kind) {
                     xSemaphoreGive(s_mx); // bound already
                     return;
                 }
-                *sl = (slot_t){0}; // bound as the other kind: move it
+                *slot_entry = (slot_t){0}; // bound as the other kind: move it
                 layout(node, (uint8_t)had, NULL);
                 i = s_n; // done searching
                 break;
@@ -372,12 +372,12 @@ void ms_vmod_value(uint8_t node, uint8_t child, uint8_t vtype, const char *paylo
     xSemaphoreTake(s_mx, portMAX_DELAY);
     for (int i = 0; i < s_n; i++) {
         for (int j = 0; j < MS_VMOD_SLOTS; j++) {
-            const slot_t *s = &s_slot[i][j];
-            int ch;
-            int k = s->used && s->node == node && s->child == child && s->vtype == vtype ? kind_of(i, j, &ch) : -1;
-            uint8_t *bits = k == MS_SLOT_DIN ? &s_mod[i].in : k == MS_SLOT_DOUT ? &s_mod[i].out : NULL;
+            const slot_t *slot_entry = &s_slot[i][j];
+            int channel_index;
+            int slot_kind = slot_entry->used && slot_entry->node == node && slot_entry->child == child && slot_entry->vtype == vtype ? kind_of(i, j, &channel_index) : -1;
+            uint8_t *bits = slot_kind == MS_SLOT_DIN ? &s_mod[i].in : slot_kind == MS_SLOT_DOUT ? &s_mod[i].out : NULL;
             if (bits) {
-                *bits = on ? (uint8_t)(*bits | 1u << ch) : (uint8_t)(*bits & ~(1u << ch));
+                *bits = on ? (uint8_t)(*bits | 1u << channel_index) : (uint8_t)(*bits & ~(1u << channel_index));
             }
         }
     }
@@ -391,24 +391,24 @@ int ms_vmod_frame(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap)
 
 int ms_vmod_list(ms_vmod_slot_t *out, int max)
 {
-    int n = 0;
+    int slot_count = 0;
     if (!s_n) {
         return 0;
     }
     xSemaphoreTake(s_mx, portMAX_DELAY);
     for (int i = 0; i < s_n; i++) {
-        for (int j = 0; j < MS_VMOD_SLOTS && n < max; j++) {
-            const slot_t *s = &s_slot[i][j];
-            int ch, k = s->used ? kind_of(i, j, &ch) : -1;
-            if (k >= 0) {
-                out[n++] = (ms_vmod_slot_t){.module = i, .sn = s_bus[i].sn, .hw_type = s_bus[i].ops->hw_type,
-                                            .kind = (ms_slot_kind_t)k, .channel = ch, .node = s->node,
-                                            .child = s->child, .vtype = s->vtype};
+        for (int j = 0; j < MS_VMOD_SLOTS && slot_count < max; j++) {
+            const slot_t *slot_entry = &s_slot[i][j];
+            int channel_index, slot_kind = slot_entry->used ? kind_of(i, j, &channel_index) : -1;
+            if (slot_kind >= 0) {
+                out[slot_count++] = (ms_vmod_slot_t){.module = i, .sn = s_bus[i].sn, .hw_type = s_bus[i].ops->hw_type,
+                                            .kind = (ms_slot_kind_t)slot_kind, .channel = channel_index, .node = slot_entry->node,
+                                            .child = slot_entry->child, .vtype = slot_entry->vtype};
             }
         }
     }
     xSemaphoreGive(s_mx);
-    return n;
+    return slot_count;
 }
 
 int ms_vmod_owner(int module)
@@ -418,17 +418,17 @@ int ms_vmod_owner(int module)
 
 int ms_vmod_unmap(uint8_t node, uint8_t child)
 {
-    int n = 0;
+    int unmapped_count = 0;
     if (!s_n) {
         return 0;
     }
     xSemaphoreTake(s_mx, portMAX_DELAY);
     for (int i = 0; i < MS_VMOD_MAX; i++) {
         for (int j = 0; j < MS_VMOD_SLOTS; j++) {
-            slot_t *s = &s_slot[i][j];
-            if (s->used && s->node == node && (child == 255 || s->child == child)) {
-                memset(s, 0, sizeof *s);
-                n++;
+            slot_t *slot_entry = &s_slot[i][j];
+            if (slot_entry->used && slot_entry->node == node && (child == 255 || slot_entry->child == child)) {
+                memset(slot_entry, 0, sizeof *slot_entry);
+                unmapped_count++;
             }
         }
     }
@@ -437,11 +437,11 @@ int ms_vmod_unmap(uint8_t node, uint8_t child)
             s_owner[i] = 0; // free for the next node that needs one
         }
     }
-    if (n) {
+    if (unmapped_count) {
         save_map();
     }
     xSemaphoreGive(s_mx);
-    return n;
+    return unmapped_count;
 }
 
 int ms_vmod_prune(const uint8_t alive[32])
@@ -454,43 +454,43 @@ int ms_vmod_prune(const uint8_t alive[32])
     uint8_t logged[32] = {0};
     for (int i = 0; i < s_n; i++) {
         for (int j = 0; j < MS_VMOD_SLOTS; j++) {
-            slot_t *s = &s_slot[i][j];
-            const uint8_t bit = (uint8_t)(1u << (s->node % 8));
-            if (s->used && !(alive[s->node / 8] & bit)) {
-                if (!(logged[s->node / 8] & bit)) {
-                    logged[s->node / 8] |= bit;
-                    ESP_LOGW(TAG, "node %u not heard: its channels removed", s->node);
+            slot_t *slot_entry = &s_slot[i][j];
+            const uint8_t bit = (uint8_t)(1u << (slot_entry->node % 8));
+            if (slot_entry->used && !(alive[slot_entry->node / 8] & bit)) {
+                if (!(logged[slot_entry->node / 8] & bit)) {
+                    logged[slot_entry->node / 8] |= bit;
+                    ESP_LOGW(TAG, "node %u not heard: its channels removed", slot_entry->node);
                 }
-                *s = (slot_t){0};
+                *slot_entry = (slot_t){0};
                 dropped++;
             }
         }
     }
     // empty modules go: the ones after them move down (the RESET that follows re-addresses all)
-    int n = 0, removed = 0;
+    int compacted_count = 0, removed = 0;
     for (int i = 0; i < s_n; i++) {
         if (module_empty(i)) {
             ESP_LOGW(TAG, "module SN %lu removed (no channels)", (unsigned long)s_sn[i]);
             removed++;
             continue;
         }
-        if (n != i) {
-            s_sn[n] = s_sn[i];
-            s_owner[n] = s_owner[i];
-            memcpy(s_slot[n], s_slot[i], sizeof s_slot[n]);
-            vmod_t m = s_mod[i];
-            setup_module(n);
-            s_mod[n].in = m.in;
-            s_mod[n].out = m.out;
+        if (compacted_count != i) {
+            s_sn[compacted_count] = s_sn[i];
+            s_owner[compacted_count] = s_owner[i];
+            memcpy(s_slot[compacted_count], s_slot[i], sizeof s_slot[compacted_count]);
+            vmod_t module_snapshot = s_mod[i];
+            setup_module(compacted_count);
+            s_mod[compacted_count].in = module_snapshot.in;
+            s_mod[compacted_count].out = module_snapshot.out;
         }
-        n++;
+        compacted_count++;
     }
-    for (int i = n; i < s_n; i++) {
+    for (int i = compacted_count; i < s_n; i++) {
         s_sn[i] = 0;
         s_owner[i] = 0;
         memset(s_slot[i], 0, sizeof s_slot[i]);
     }
-    __atomic_store_n(&s_n, n, __ATOMIC_RELEASE);
+    __atomic_store_n(&s_n, compacted_count, __ATOMIC_RELEASE);
     if (dropped || removed) {
         save_sn();
         save_map();
@@ -500,14 +500,14 @@ int ms_vmod_prune(const uint8_t alive[32])
 }
 
 /** @brief Read a blob of up to @p cap bytes (shorter ones from an older, smaller layout too). */
-static void load_blob(nvs_handle_t h, const char *key, void *out, size_t cap, size_t unit)
+static void load_blob(nvs_handle_t storage_handle, const char *key, void *out, size_t cap, size_t unit)
 {
     size_t len = 0;
     memset(out, 0, cap);
-    if (nvs_get_blob(h, key, NULL, &len) != ESP_OK || len == 0 || len > cap || len % unit) {
+    if (nvs_get_blob(storage_handle, key, NULL, &len) != ESP_OK || len == 0 || len > cap || len % unit) {
         return;
     }
-    if (nvs_get_blob(h, key, out, &len) != ESP_OK) {
+    if (nvs_get_blob(storage_handle, key, out, &len) != ESP_OK) {
         memset(out, 0, cap);
     }
 }
@@ -523,24 +523,24 @@ int ms_vmod_init(const ms_vmod_cfg_t *cfg)
     if (!s_mx) {
         s_mx = xSemaphoreCreateMutex();
     }
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        load_blob(h, NVS_SN, s_sn, sizeof s_sn, sizeof s_sn[0]);
-        load_blob(h, NVS_MAP, s_slot, sizeof s_slot, sizeof s_slot[0]);
-        load_blob(h, NVS_OWN, s_owner, sizeof s_owner, 1);
-        nvs_close(h);
+    nvs_handle_t storage_handle;
+    if (nvs_open(NVS_NS, NVS_READONLY, &storage_handle) == ESP_OK) {
+        load_blob(storage_handle, NVS_SN, s_sn, sizeof s_sn, sizeof s_sn[0]);
+        load_blob(storage_handle, NVS_MAP, s_slot, sizeof s_slot, sizeof s_slot[0]);
+        load_blob(storage_handle, NVS_OWN, s_owner, sizeof s_owner, 1);
+        nvs_close(storage_handle);
     } else {
         memset(s_sn, 0, sizeof s_sn);
         memset(s_slot, 0, sizeof s_slot);
         memset(s_owner, 0, sizeof s_owner);
     }
-    int n = 0;
-    while (n < s_max && s_sn[n]) {
-        setup_module(n);
-        ESP_LOGI(TAG, "module %d: IO_MODULE_DIN_8 SN %lu", n + 1, (unsigned long)s_sn[n]);
-        n++;
+    int module_count = 0;
+    while (module_count < s_max && s_sn[module_count]) {
+        setup_module(module_count);
+        ESP_LOGI(TAG, "module %d: IO_MODULE_DIN_8 SN %lu", module_count + 1, (unsigned long)s_sn[module_count]);
+        module_count++;
     }
-    s_n = n;
+    s_n = module_count;
     for (int i = 0; i < s_n; i++) {
         if (s_owner[i]) {
             continue;

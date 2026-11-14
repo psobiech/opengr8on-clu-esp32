@@ -82,12 +82,12 @@ bool ms_parse(const char *line, ms_msg_t *out);
 
 /**
  * @brief Format a message as a line, '\n' included.
- * @param m   Message.
+ * @param message Message.
  * @param out Buffer.
  * @param cap Capacity of @p out.
  * @return Line length, or -1 if it does not fit / the payload has a line break.
  */
-int ms_format(const ms_msg_t *m, char *out, size_t cap);
+int ms_format(const ms_msg_t *message, char *out, size_t cap);
 
 #ifdef __cplusplus
 }

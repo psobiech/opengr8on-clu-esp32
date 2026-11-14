@@ -65,8 +65,8 @@ static const char *TAG = "main";
  */
 static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    const ip_event_got_ip_t *e = data;
-    ESP_LOGI(TAG, "%s IP " IPSTR, id == IP_EVENT_STA_GOT_IP ? "WiFi" : "Ethernet", IP2STR(&e->ip_info.ip));
+    const ip_event_got_ip_t *ip_event = data;
+    ESP_LOGI(TAG, "%s IP " IPSTR, id == IP_EVENT_STA_GOT_IP ? "WiFi" : "Ethernet", IP2STR(&ip_event->ip_info.ip));
     udp_server_net_up();
     esp_sntp_restart(); // first poll now instead of at the next retry after a failed early one
     clu_mqtt_start(); // MQTT does not wait for the Lua scripts (SYSTEM.Init)
@@ -84,31 +84,31 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         // Debug: one scan first to log matching APs (security, channel), then connect.
-        wifi_scan_config_t sc = {.ssid = (uint8_t *)s_wifi_ssid, .show_hidden = true};
-        if (esp_wifi_scan_start(&sc, false) != ESP_OK) esp_wifi_connect();
+        wifi_scan_config_t scan_config = {.ssid = (uint8_t *)s_wifi_ssid, .show_hidden = true};
+        if (esp_wifi_scan_start(&scan_config, false) != ESP_OK) esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_SCAN_DONE) {
-        uint16_t n = 8;
-        wifi_ap_record_t ap[8];
-        esp_wifi_scan_get_ap_records(&n, ap);
-        ESP_LOGW(TAG, "scan: %u AP(s) named [%s]", n, s_wifi_ssid);
-        for (int i = 0; i < n; i++) {
+        uint16_t access_point_count = 8;
+        wifi_ap_record_t access_points[8];
+        esp_wifi_scan_get_ap_records(&access_point_count, access_points);
+        ESP_LOGW(TAG, "scan: %u AP(s) named [%s]", access_point_count, s_wifi_ssid);
+        for (int i = 0; i < access_point_count; i++) {
             // authmode: 3=WPA2_PSK 6=WPA3_PSK 7=WPA2_WPA3_PSK; cipher 3=CCMP
             ESP_LOGW(TAG, "  " MACSTR " ch %d rssi %d authmode %d pairwise %d group %d 11b%d g%d n%d ax%d",
-                     MAC2STR(ap[i].bssid), ap[i].primary, ap[i].rssi, ap[i].authmode,
-                     ap[i].pairwise_cipher, ap[i].group_cipher, ap[i].phy_11b, ap[i].phy_11g,
-                     ap[i].phy_11n, ap[i].phy_11ax);
+                     MAC2STR(access_points[i].bssid), access_points[i].primary, access_points[i].rssi, access_points[i].authmode,
+                     access_points[i].pairwise_cipher, access_points[i].group_cipher, access_points[i].phy_11b, access_points[i].phy_11g,
+                     access_points[i].phy_11n, access_points[i].phy_11ax);
         }
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_CONNECTED) {
-        const wifi_event_sta_connected_t *e = data;
+        const wifi_event_sta_connected_t *wifi_event = data;
         ESP_LOGI(TAG, "WiFi connected to \"%.*s\" ch %d authmode %d",
-                 e->ssid_len, (const char *)e->ssid, e->channel, e->authmode);
+                 wifi_event->ssid_len, (const char *)wifi_event->ssid, wifi_event->channel, wifi_event->authmode);
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        const wifi_event_sta_disconnected_t *e = data;
+        const wifi_event_sta_disconnected_t *wifi_event = data;
         // 2=AUTH_EXPIRE 15=4WAY_HANDSHAKE_TIMEOUT 201=NO_AP_FOUND 202=AUTH_FAIL
         // 204=HANDSHAKE_TIMEOUT 205=CONNECTION_FAIL 210=NO_AP_FOUND_W_COMPATIBLE_SECURITY
         // 211=NO_AP_FOUND_IN_AUTHMODE_THRESHOLD 212=NO_AP_FOUND_IN_RSSI_THRESHOLD
-        ESP_LOGW(TAG, "WiFi disconnected: reason %d rssi %d", e->reason, e->rssi);
+        ESP_LOGW(TAG, "WiFi disconnected: reason %d rssi %d", wifi_event->reason, wifi_event->rssi);
         esp_wifi_connect();
     }
 }
@@ -130,32 +130,32 @@ static void wifi_start(void)
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi, NULL));
 
-    wifi_config_t wc = {0};
-    strlcpy((char *)wc.sta.ssid, s_wifi_ssid, sizeof wc.sta.ssid);
-    strlcpy((char *)wc.sta.password, pass, sizeof wc.sta.password);
+    wifi_config_t wifi_config = {0};
+    strlcpy((char *)wifi_config.sta.ssid, s_wifi_ssid, sizeof wifi_config.sta.ssid);
+    strlcpy((char *)wifi_config.sta.password, pass, sizeof wifi_config.sta.password);
     // Never join open/WEP/WPA networks (a spoofed AP with the same SSID could otherwise
     // downgrade us); WPA2-PSK minimum, or WPA3-SAE only.
 #if CONFIG_CLU_WIFI_WPA3_ONLY
-    wc.sta.threshold.authmode = WIFI_AUTH_WPA3_PSK;
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA3_PSK;
 #else
-    wc.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 #endif
     // SAE: accept both hunt-and-peck and hash-to-element (H2E-only APs refuse HnP).
-    wc.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
-    wc.sta.pmf_cfg.capable = true;
+    wifi_config.sta.sae_pwe_h2e = WPA3_SAE_PWE_BOTH;
+    wifi_config.sta.pmf_cfg.capable = true;
     // Optional fixed AP (e.g. pin one AP of a mesh / avoid band steering).
     if (CONFIG_CLU_WIFI_BSSID[0]) {
-        unsigned b[6];
-        if (sscanf(CONFIG_CLU_WIFI_BSSID, "%x:%x:%x:%x:%x:%x", &b[0], &b[1], &b[2], &b[3], &b[4], &b[5]) == 6) {
-            for (int i = 0; i < 6; i++) wc.sta.bssid[i] = (uint8_t)b[i];
-            wc.sta.bssid_set = true;
-            ESP_LOGW(TAG, "WiFi BSSID locked to " MACSTR, MAC2STR(wc.sta.bssid));
+        unsigned bssid_octets[6];
+        if (sscanf(CONFIG_CLU_WIFI_BSSID, "%x:%x:%x:%x:%x:%x", &bssid_octets[0], &bssid_octets[1], &bssid_octets[2], &bssid_octets[3], &bssid_octets[4], &bssid_octets[5]) == 6) {
+            for (int i = 0; i < 6; i++) wifi_config.sta.bssid[i] = (uint8_t)bssid_octets[i];
+            wifi_config.sta.bssid_set = true;
+            ESP_LOGW(TAG, "WiFi BSSID locked to " MACSTR, MAC2STR(wifi_config.sta.bssid));
         } else {
             ESP_LOGE(TAG, "CLU_WIFI_BSSID \"%s\" is not aa:bb:cc:dd:ee:ff, ignored", CONFIG_CLU_WIFI_BSSID);
         }
     }
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     // Debug: what the driver actually holds ([] show stray spaces). Remove once WiFi works.
     wifi_config_t got = {0};
     esp_wifi_get_config(WIFI_IF_STA, &got);
@@ -202,13 +202,13 @@ static void net_start(void)
  */
 static void storage_mount(void)
 {
-    static wl_handle_t wl;
-    const esp_vfs_fat_mount_config_t mc = {
+    static wl_handle_t wear_level_handle;
+    const esp_vfs_fat_mount_config_t mount_config = {
         .format_if_mount_failed = true,
         .max_files = 6,
         .allocation_unit_size = 4096,
     };
-    esp_err_t err = esp_vfs_fat_spiflash_mount_rw_wl(CLU_FS_ROOT, "storage", &mc, &wl);
+    esp_err_t err = esp_vfs_fat_spiflash_mount_rw_wl(CLU_FS_ROOT, "storage", &mount_config, &wear_level_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "storage mount failed: %s", esp_err_to_name(err));
         return;
@@ -307,13 +307,13 @@ void app_main(void)
 
     clu_state_load(); // logs the PIN: keep it before the telnet hook so it never leaves UART
 #if CONFIG_CLU_TELNET
-    const clu_telnet_cfg_t tc = {
+    const clu_telnet_cfg_t telnet_config = {
         .port = CONFIG_CLU_TELNET_PORT,
         .max_clients = CONFIG_CLU_TELNET_MAX_CLIENTS,
         .history = CONFIG_CLU_TELNET_HISTORY,
         .allow = CONFIG_CLU_TELNET_ALLOW,
     };
-    clu_telnet_init(&tc);
+    clu_telnet_init(&telnet_config);
 #endif
     clu_time_init();
     storage_mount();
@@ -336,7 +336,7 @@ void app_main(void)
     };
 #endif
 #if CONFIG_CLU_TFBUS_MASTER
-    const tfbus_uart_cfg_t uc = {
+    const tfbus_uart_cfg_t uart_config = {
 #if CONFIG_CLU_TFBUS
         .uart_num = CONFIG_CLU_RS485_UART,
         .tx_pin = CONFIG_CLU_RS485_TX_GPIO,
@@ -347,7 +347,7 @@ void app_main(void)
         .uart_num = -1, // the RS485 pins carry the MySensors gateway: emulated modules only
 #endif
     };
-    tfbus_uart_init(&uc);
+    tfbus_uart_init(&uart_config);
 #if CONFIG_CLU_LOCAL_IO
     clu_localio_start(); // answers the bus frames for the on-board IO modules
 #endif
@@ -367,15 +367,15 @@ void app_main(void)
     clu_telnet_start();
 #endif
 #if CONFIG_CLU_OTA
-    const clu_ota_cfg_t oc = {
+    const clu_ota_cfg_t ota_config = {
         .port = CONFIG_CLU_OTA_PORT,
         // cfg partition (prebuilt firmware) over menuconfig; empty = no network updates
         .password = clu_state_setting("ota_pass", CONFIG_CLU_OTA_PASSWORD),
         .cors_origin = CONFIG_CLU_OTA_CORS_ORIGIN,
     };
-    clu_ota_start(&oc);
+    clu_ota_start(&ota_config);
 #endif
-    const clu_mqtt_cfg_t mc = {
+    const clu_mqtt_cfg_t mqtt_config = {
         .sn = g_clu.sn,
         .fw_version = CLU_FW_VERSION,
         .ca_path = CLU_FS_ROOT "/a/MQTT_CA.PEM",
@@ -384,20 +384,20 @@ void app_main(void)
         .username = clu_state_setting("mqtt_user", NULL),
         .password = clu_state_setting("mqtt_pass", NULL),
     };
-    clu_mqtt_init(&mc);
+    clu_mqtt_init(&mqtt_config);
 #if CONFIG_CLU_HTTP
-    const clu_http_cfg_t hc = {
+    const clu_http_cfg_t http_config = {
         .port = CONFIG_CLU_HTTP_PORT,
         .max_body = CONFIG_CLU_HTTP_MAX_BODY,
         .listener_timeout_ms = CONFIG_CLU_HTTP_LISTENER_TIMEOUT_MS,
     };
-    clu_http_init(&hc); // HttpRequest / HttpListener (http.lua)
+    clu_http_init(&http_config); // HttpRequest / HttpListener (http.lua)
     clu_http_start();
 #endif
     clu_sysinfo_init();
     clu_tftp_init(CLU_FS_ROOT);
     udp_server_start(); // before Lua: OM.LUA's remote calls / reports need its queue and lock
-    const clu_lua_cfg_t lc = {
+    const clu_lua_cfg_t lua_config = {
         .root = CLU_FS_ROOT "/a",
         .sn = g_clu.sn,
         .fw_version = CLU_FW_VERSION,
@@ -411,5 +411,5 @@ void app_main(void)
         .on_reload = on_lua_reload,
         .on_time_set = clu_time_store,
     };
-    clu_lua_start(&lc);
+    clu_lua_start(&lua_config);
 }

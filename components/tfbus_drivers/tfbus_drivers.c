@@ -7,31 +7,31 @@
 #include "esp_log.h"
 #include "tfbus_frame.h"
 
-void drv_queue_record(tfbus_module_t *m, uint8_t type, uint8_t meta, const uint8_t *data, uint8_t len)
+void drv_queue_record(tfbus_module_t *module, uint8_t type, uint8_t meta, const uint8_t *data, uint8_t len)
 {
-    uint8_t f[TFBUS_MAX_FRAME];
-    tfbus_tlv_t r = {.type = type, .meta = meta, .len = len, .data = data};
-    size_t n = tfbus_module_cmd(f, sizeof f, m->addr, &r, 1);
-    if (n == 0 || tfbus_master_queue(f, n) != ESP_OK) {
-        ESP_LOGW("drv", "queue full / bad record for addr %u", m->addr);
+    uint8_t frame[TFBUS_MAX_FRAME];
+    tfbus_tlv_t record = {.type = type, .meta = meta, .len = len, .data = data};
+    size_t frame_length = tfbus_module_cmd(frame, sizeof frame, module->addr, &record, 1);
+    if (frame_length == 0 || tfbus_master_queue(frame, frame_length) != ESP_OK) {
+        ESP_LOGW("drv", "queue full / bad record for addr %u", module->addr);
     }
 }
 
-void drv_queue_records(tfbus_module_t *m, const tfbus_tlv_t *recs, size_t n)
+void drv_queue_records(tfbus_module_t *module, const tfbus_tlv_t *recs, size_t record_count)
 {
-    uint8_t f[TFBUS_MAX_FRAME];
-    size_t len = tfbus_module_cmd(f, sizeof f, m->addr, recs, n);
-    if (len == 0 || tfbus_master_queue(f, len) != ESP_OK) {
-        ESP_LOGW("drv", "queue full / bad batch for addr %u", m->addr);
+    uint8_t frame[TFBUS_MAX_FRAME];
+    size_t len = tfbus_module_cmd(frame, sizeof frame, module->addr, recs, record_count);
+    if (len == 0 || tfbus_master_queue(frame, len) != ESP_OK) {
+        ESP_LOGW("drv", "queue full / bad batch for addr %u", module->addr);
     }
 }
 
-void drv_queue_frame(tfbus_module_t *m, uint8_t type, const uint8_t *payload, size_t len)
+void drv_queue_frame(tfbus_module_t *module, uint8_t type, const uint8_t *payload, size_t len)
 {
-    uint8_t f[TFBUS_MAX_FRAME];
-    size_t n = tfbus_build(f, sizeof f, m->addr, type, payload, len);
-    if (n == 0 || tfbus_master_queue(f, n) != ESP_OK) {
-        ESP_LOGW("drv", "queue full / bad frame for addr %u", m->addr);
+    uint8_t frame[TFBUS_MAX_FRAME];
+    size_t frame_length = tfbus_build(frame, sizeof frame, module->addr, type, payload, len);
+    if (frame_length == 0 || tfbus_master_queue(frame, frame_length) != ESP_OK) {
+        ESP_LOGW("drv", "queue full / bad frame for addr %u", module->addr);
     }
 }
 

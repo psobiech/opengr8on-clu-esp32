@@ -30,13 +30,14 @@ extern const uint8_t CLU_DEFAULT_BROADCAST_IV[16];
 /**
  * @brief Derive a key from an IV and the private key.
  *
- * key[i] = iv[i] ^ pk[i] for i<8, iv[i] ^ pk[15-i] for i>=8.
+ * key[i] = initialization_vector[i] ^ private_key[i] for i<8,
+ * initialization_vector[i] ^ private_key[15-i] for i>=8.
  *
- * @param iv          16-byte IV.
+ * @param initialization_vector 16-byte IV.
  * @param private_key 8-byte private key.
  * @param out         16-byte derived key.
  */
-void clu_derive_key(const uint8_t iv[16], const uint8_t private_key[8], uint8_t out[16]);
+void clu_derive_key(const uint8_t initialization_vector[16], const uint8_t private_key[8], uint8_t out[16]);
 
 /**
  * @brief Per-device default key from the private key (PIN printed on the sticker).

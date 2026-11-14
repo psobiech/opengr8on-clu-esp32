@@ -110,18 +110,18 @@ struct ledch {
 
 ledch_t *ledch_new(void)
 {
-    ledch_t *s = calloc(1, sizeof *s);
-    if (!s) {
+    ledch_t *ledch_state = calloc(1, sizeof *ledch_state);
+    if (!ledch_state) {
         abort(); // out of memory while loading OM.LUA
     }
     for (int i = 0; i < 4; i++) {
-        s->ch[i] = (chan_t){.s = s, .i = i, .max = 255};
-        s->rep[i] = -1;
+        ledch_state->ch[i] = (chan_t){.s = ledch_state, .i = i, .max = 255};
+        ledch_state->rep[i] = -1;
     }
     for (int i = 0; i < 2; i++) {
-        s->cct[i] = (cct_t){.s = s, .i = i, .p = 0.5, .max = 255};
+        ledch_state->cct[i] = (cct_t){.s = ledch_state, .i = i, .p = 0.5, .max = 255};
     }
-    return s;
+    return ledch_state;
 }
 
 // ---------------------------------------------------------------- wire
@@ -132,131 +132,131 @@ static uint32_t ramp_units(uint32_t ms)
 }
 
 /** @brief One channel: SET_RAMP_TIME (t in 10 ms) + SET_CHANNEL_VALUE in one frame. */
-static void queue_out(tfbus_module_t *m, ledch_t *s, int ch, uint32_t t, uint8_t v)
+static void queue_out(tfbus_module_t *module, ledch_t *ledch_state, int channel_index, uint32_t ramp_duration, uint8_t channel_value)
 {
-    uint8_t r[5] = {(uint8_t)ch, (uint8_t)t, (uint8_t)(t >> 8), 0, 0}, d[2] = {(uint8_t)ch, v};
-    const tfbus_tlv_t rec[2] = {{.type = 0x06, .meta = 0x00, .len = 5, .data = r},
-                                {.type = 0x05, .meta = 0x10, .len = 2, .data = d}};
-    drv_queue_records(m, rec, 2);
-    s->sent[ch] = v;
+    uint8_t ramp_record[5] = {(uint8_t)channel_index, (uint8_t)ramp_duration, (uint8_t)(ramp_duration >> 8), 0, 0}, value_record[2] = {(uint8_t)channel_index, channel_value};
+    const tfbus_tlv_t rec[2] = {{.type = 0x06, .meta = 0x00, .len = 5, .data = ramp_record},
+                                {.type = 0x05, .meta = 0x10, .len = 2, .data = value_record}};
+    drv_queue_records(module, rec, 2);
+    ledch_state->sent[channel_index] = channel_value;
 }
 
 /** @brief Hold start of one channel: ramp (10 ms) + 13 [ch, dir 1 up / 2 down, target]. */
-static void queue_hold(tfbus_module_t *m, int ch, uint32_t t, int dir, uint8_t target)
+static void queue_hold(tfbus_module_t *module, int channel_index, uint32_t ramp_duration, int dir, uint8_t target)
 {
-    uint8_t r[5] = {(uint8_t)ch, (uint8_t)t, (uint8_t)(t >> 8), 0, 0};
-    uint8_t h[3] = {(uint8_t)ch, (uint8_t)(dir > 0 ? 1 : 2), target};
-    const tfbus_tlv_t rec[2] = {{.type = 0x06, .meta = 0x00, .len = 5, .data = r},
-                                {.type = 0x13, .meta = 0x00, .len = 3, .data = h}};
-    drv_queue_records(m, rec, 2);
+    uint8_t ramp_record[5] = {(uint8_t)channel_index, (uint8_t)ramp_duration, (uint8_t)(ramp_duration >> 8), 0, 0};
+    uint8_t hold_record[3] = {(uint8_t)channel_index, (uint8_t)(dir > 0 ? 1 : 2), target};
+    const tfbus_tlv_t rec[2] = {{.type = 0x06, .meta = 0x00, .len = 5, .data = ramp_record},
+                                {.type = 0x13, .meta = 0x00, .len = 3, .data = hold_record}};
+    drv_queue_records(module, rec, 2);
 }
 
 /** @brief Hold stop of @p n channels from @p ch0 on. */
-static void queue_hold_stop(tfbus_module_t *m, int ch0, int n)
+static void queue_hold_stop(tfbus_module_t *module, int first_channel, int channel_count)
 {
-    uint8_t h[2][3] = {{(uint8_t)ch0, 0, 0}, {(uint8_t)(ch0 + 1), 0, 0}};
-    const tfbus_tlv_t rec[2] = {{.type = 0x13, .meta = 0x00, .len = 3, .data = h[0]},
-                                {.type = 0x13, .meta = 0x00, .len = 3, .data = h[1]}};
-    drv_queue_records(m, rec, (size_t)n);
+    uint8_t hold_records[2][3] = {{(uint8_t)first_channel, 0, 0}, {(uint8_t)(first_channel + 1), 0, 0}};
+    const tfbus_tlv_t rec[2] = {{.type = 0x13, .meta = 0x00, .len = 3, .data = hold_records[0]},
+                                {.type = 0x13, .meta = 0x00, .len = 3, .data = hold_records[1]}};
+    drv_queue_records(module, rec, (size_t)channel_count);
 }
 
 /** @brief Current value of channel @p ch as the CLU sees it: reported, else last sent. */
-static int cur(const ledch_t *s, int ch)
+static int cur(const ledch_t *ledch_state, int channel_index)
 {
-    return s->rep[ch] >= 0 ? s->rep[ch] : s->sent[ch];
+    return ledch_state->rep[channel_index] >= 0 ? ledch_state->rep[channel_index] : ledch_state->sent[channel_index];
 }
 
-static void post_events(const char *name, int change, int on, int off, double old, double nv)
+static void post_events(const char *name, int change, int on, int off, double old, double new_value)
 {
-    if (!name[0] || old == nv) {
+    if (!name[0] || old == new_value) {
         return;
     }
     clu_lua_post_event(name, change);
-    if (old <= 0 && nv > 0) {
+    if (old <= 0 && new_value > 0) {
         clu_lua_post_event(name, on);
-    } else if (nv <= 0 && old > 0) {
+    } else if (new_value <= 0 && old > 0) {
         clu_lua_post_event(name, off);
     }
 }
 
 // ---------------------------------------------------------------- LED_CHANNEL
-static void ch_out(tfbus_module_t *m, chan_t *c, uint8_t v, uint32_t ramp)
+static void ch_out(tfbus_module_t *module, chan_t *channel_state, uint8_t channel_value, uint32_t ramp)
 {
-    c->target = v;
-    c->have_target = true;
-    if (v > 0) {
-        c->last_on = v;
+    channel_state->target = channel_value;
+    channel_state->have_target = true;
+    if (channel_value > 0) {
+        channel_state->last_on = channel_value;
     }
-    queue_out(m, c->s, c->i, ramp_units(ramp), v);
+    queue_out(module, channel_state->s, channel_state->i, ramp_units(ramp), channel_value);
 }
 
-static void ch_revert(tfbus_module_t *m, void *owner)
+static void ch_revert(tfbus_module_t *module, void *owner)
 {
-    chan_t *c = owner;
-    ch_out(m, c, c->revert_to, c->revert_ramp);
+    chan_t *channel_state = owner;
+    ch_out(module, channel_state, channel_state->revert_to, channel_state->revert_ramp);
 }
 
-static void ch_hold_stop(tfbus_module_t *m, void *owner)
+static void ch_hold_stop(tfbus_module_t *module, void *owner)
 {
-    chan_t *c = owner;
-    if (c->hold_dir) {
-        c->hold_dir = 0;
-        queue_hold_stop(m, c->i, 1);
+    chan_t *channel_state = owner;
+    if (channel_state->hold_dir) {
+        channel_state->hold_dir = 0;
+        queue_hold_stop(module, channel_state->i, 1);
     }
 }
 
 /** @brief Hold*: start (or turn) the module's ramp, keep it going until calls stop. */
-static void ch_hold(tfbus_module_t *m, chan_t *c, int fixed, uint32_t sweep)
+static void ch_hold(tfbus_module_t *module, chan_t *channel_state, int fixed, uint32_t sweep)
 {
     int64_t now = esp_timer_get_time();
     int dir = fixed;
     if (fixed) {
-        c->hold.last_us = now;
+        channel_state->hold.last_us = now;
     } else {
-        dir = light_hold_dir(&c->hold, now, cur(c->s, c->i), c->min, c->max);
+        dir = light_hold_dir(&channel_state->hold, now, cur(channel_state->s, channel_state->i), channel_state->min, channel_state->max);
     }
-    if (dir != c->hold_dir) {
-        queue_hold(m, c->i, ramp_units(sweep), dir, dir > 0 ? c->max : c->min);
-        c->hold_dir = (int8_t)dir;
+    if (dir != channel_state->hold_dir) {
+        queue_hold(module, channel_state->i, ramp_units(sweep), dir, dir > 0 ? channel_state->max : channel_state->min);
+        channel_state->hold_dir = (int8_t)dir;
     }
-    light_timer_start(&c->hold_stop, m, c, ch_hold_stop, CH_HOLD_STOP_MS);
+    light_timer_start(&channel_state->hold_stop, module, channel_state, ch_hold_stop, CH_HOLD_STOP_MS);
 }
 
-static int ch_execute(tfbus_module_t *m, chan_t *c, lua_State *L, int idx, int first, int nargs)
+static int ch_execute(tfbus_module_t *module, chan_t *channel_state, lua_State *L, int idx, int first, int nargs)
 {
     switch (idx) {
     case CX_SET: {
-        double v = luaL_checknumber(L, first);
-        uint32_t ramp = light_ramp_arg(L, first, nargs, 1, c->ramp);
-        if ((v < c->min || v > c->max) && c->name[0]) {
-            clu_lua_post_event(c->name, CE_RANGE);
+        double requested_value = luaL_checknumber(L, first);
+        uint32_t ramp = light_ramp_arg(L, first, nargs, 1, channel_state->ramp);
+        if ((requested_value < channel_state->min || requested_value > channel_state->max) && channel_state->name[0]) {
+            clu_lua_post_event(channel_state->name, CE_RANGE);
         }
-        light_timer_cancel(&c->timed);
-        ch_out(m, c, (uint8_t)light_clamp(floor(v), c->min, c->max), ramp);
+        light_timer_cancel(&channel_state->timed);
+        ch_out(module, channel_state, (uint8_t)light_clamp(floor(requested_value), channel_state->min, channel_state->max), ramp);
         return 0;
     }
     case CX_ON:
     case CX_OFF:
     case CX_SWITCH: {
         double ms = light_arg(L, first, nargs, 0, 0);
-        uint32_t ramp = light_ramp_arg(L, first, nargs, 1, c->ramp);
+        uint32_t ramp = light_ramp_arg(L, first, nargs, 1, channel_state->ramp);
         bool last = idx != CX_OFF && light_arg(L, first, nargs, 2, 0) == 1;
-        bool on = idx == CX_ON || (idx == CX_SWITCH && c->target == 0);
-        uint8_t v = on ? (last && c->last_on ? c->last_on : c->max) : 0;
-        light_timer_cancel(&c->timed);
-        if (ms > 0 && v != c->target) {
-            c->revert_to = c->target;
-            c->revert_ramp = ramp;
-            light_timer_start(&c->timed, m, c, ch_revert, (uint32_t)ms);
+        bool on = idx == CX_ON || (idx == CX_SWITCH && channel_state->target == 0);
+        uint8_t requested_value = on ? (last && channel_state->last_on ? channel_state->last_on : channel_state->max) : 0;
+        light_timer_cancel(&channel_state->timed);
+        if (ms > 0 && requested_value != channel_state->target) {
+            channel_state->revert_to = channel_state->target;
+            channel_state->revert_ramp = ramp;
+            light_timer_start(&channel_state->timed, module, channel_state, ch_revert, (uint32_t)ms);
         }
-        ch_out(m, c, v, ramp);
+        ch_out(module, channel_state, requested_value, ramp);
         return 0;
     }
     case CX_HOLD:
     case CX_UP:
     case CX_DOWN:
-        light_timer_cancel(&c->timed);
-        ch_hold(m, c, idx == CX_UP ? 1 : idx == CX_DOWN ? -1 : 0, light_ramp_arg(L, first, nargs, 0, c->ramp));
+        light_timer_cancel(&channel_state->timed);
+        ch_hold(module, channel_state, idx == CX_UP ? 1 : idx == CX_DOWN ? -1 : 0, light_ramp_arg(L, first, nargs, 0, channel_state->ramp));
         return 0;
     default:
         return -1;
@@ -264,149 +264,149 @@ static int ch_execute(tfbus_module_t *m, chan_t *c, lua_State *L, int idx, int f
 }
 
 // ---------------------------------------------------------------- LED_CCT
-static double ct_of(double p)
+static double ct_of(double warm_share)
 {
-    return (double)lround(CT_COOL - (CT_COOL - CT_WARM) * p);
+    return (double)lround(CT_COOL - (CT_COOL - CT_WARM) * warm_share);
 }
 
 /** @brief ColorTemp, ColorTemp% and Value: stored on the object (Lua hook) or posted (bus task). */
-static void cct_publish(const cct_t *c, lua_State *L, int obj)
+static void cct_publish(const cct_t *cct_state, lua_State *L, int obj)
 {
     const int idx[3] = {T_CT, T_PCT, T_VALUE};
-    const double val[3] = {ct_of(c->p), (double)lround(c->p * 100), c->v};
+    const double val[3] = {ct_of(cct_state->p), (double)lround(cct_state->p * 100), cct_state->v};
     for (int i = 0; i < 3; i++) {
         if (L) {
             tfbus_obj_store(L, obj, idx[i], val[i]);
-        } else if (c->name[0]) {
-            clu_lua_post_number(c->name, idx[i], val[i]);
+        } else if (cct_state->name[0]) {
+            clu_lua_post_number(cct_state->name, idx[i], val[i]);
         }
     }
 }
 
-static void cct_events(const cct_t *c, double v0, double p0)
+static void cct_events(const cct_t *cct_state, double previous_value, double previous_warm_share)
 {
-    if (c->name[0] && p0 != c->p) {
-        clu_lua_post_event(c->name, TE_CT);
+    if (cct_state->name[0] && previous_warm_share != cct_state->p) {
+        clu_lua_post_event(cct_state->name, TE_CT);
     }
-    post_events(c->name, TE_CHANGE, TE_ON, TE_OFF, v0, c->v);
+    post_events(cct_state->name, TE_CHANGE, TE_ON, TE_OFF, previous_value, cct_state->v);
 }
 
 /**
  * @brief Drive the pair to Value @p v / warm share @p p.
  * @param by_value The change is one of Value (ramp scaled by it), else of the colour temperature.
  */
-static void cct_out(tfbus_module_t *m, cct_t *c, lua_State *L, int obj, double v, double p, uint32_t ramp,
+static void cct_out(tfbus_module_t *module, cct_t *cct_state, lua_State *L, int obj, double output_value, double warm_share, uint32_t ramp,
                     bool by_value)
 {
-    const float r = (float)ramp_units(ramp);
-    const float d = by_value ? fabsf((float)v / 255.0f - (float)c->v / 255.0f) : fabsf((float)p - (float)c->p);
-    const int warm = (int)lround(v * p);
-    const int val[2] = {warm, (int)v - warm};
+    const float ramp_scale = (float)ramp_units(ramp);
+    const float normalized_change = by_value ? fabsf((float)output_value / 255.0f - (float)cct_state->v / 255.0f) : fabsf((float)warm_share - (float)cct_state->p);
+    const int warm = (int)lround(output_value * warm_share);
+    const int val[2] = {warm, (int)output_value - warm};
     for (int k = 0; k < 2; k++) {
-        int ch = 2 * c->i + k, dch = abs(val[k] - cur(c->s, ch));
-        float x = r * d * 255.0f / (float)(dch ? dch : 255);
-        float t = floorf(by_value ? x - 1e-3f : x);
-        queue_out(m, c->s, ch, (uint32_t)light_clamp(t, 0, 0xffff), (uint8_t)val[k]);
+        int channel_index = 2 * cct_state->i + k, dch = abs(val[k] - cur(cct_state->s, channel_index));
+        float channel_ramp = ramp_scale * normalized_change * 255.0f / (float)(dch ? dch : 255);
+        float ramp_duration = floorf(by_value ? channel_ramp - 1e-3f : channel_ramp);
+        queue_out(module, cct_state->s, channel_index, (uint32_t)light_clamp(ramp_duration, 0, 0xffff), (uint8_t)val[k]);
     }
-    double v0 = c->v, p0 = c->p;
-    c->v = v;
-    c->p = p;
-    c->have_target = true;
-    c->from_module = false;
-    if (v > 0) {
-        c->last_on = v;
+    double previous_value = cct_state->v, previous_warm_share = cct_state->p;
+    cct_state->v = output_value;
+    cct_state->p = warm_share;
+    cct_state->have_target = true;
+    cct_state->from_module = false;
+    if (output_value > 0) {
+        cct_state->last_on = output_value;
     }
-    cct_publish(c, L, obj);
-    cct_events(c, v0, p0);
+    cct_publish(cct_state, L, obj);
+    cct_events(cct_state, previous_value, previous_warm_share);
 }
 
-static void cct_revert(tfbus_module_t *m, void *owner)
+static void cct_revert(tfbus_module_t *module, void *owner)
 {
-    cct_t *c = owner;
-    cct_out(m, c, NULL, 0, c->revert_v, c->p, c->revert_ramp, true);
+    cct_t *cct_state = owner;
+    cct_out(module, cct_state, NULL, 0, cct_state->revert_v, cct_state->p, cct_state->revert_ramp, true);
 }
 
-static void cct_hold_stop(tfbus_module_t *m, void *owner)
+static void cct_hold_stop(tfbus_module_t *module, void *owner)
 {
-    cct_t *c = owner;
-    if (c->hold_kind) {
-        c->hold_kind = c->hold_dir = 0;
-        queue_hold_stop(m, 2 * c->i, 2);
+    cct_t *cct_state = owner;
+    if (cct_state->hold_kind) {
+        cct_state->hold_kind = cct_state->hold_dir = 0;
+        queue_hold_stop(module, 2 * cct_state->i, 2);
     }
 }
 
 /** @brief Hold* of LED_CCT: @p kind 1 Value, 2 ColorTemp (+1 = warmer); @p fixed direction or 0. */
-static void cct_hold(tfbus_module_t *m, cct_t *c, int kind, int fixed, uint32_t sweep)
+static void cct_hold(tfbus_module_t *module, cct_t *cct_state, int kind, int fixed, uint32_t sweep)
 {
     int64_t now = esp_timer_get_time();
-    light_hold_t *h = kind == 1 ? &c->hold_v : &c->hold_ct;
+    light_hold_t *hold_state = kind == 1 ? &cct_state->hold_v : &cct_state->hold_ct;
     int dir = fixed;
     if (fixed) {
-        h->last_us = now;
+        hold_state->last_us = now;
     } else if (kind == 1) {
-        dir = light_hold_dir(h, now, c->v, c->min, c->max);
+        dir = light_hold_dir(hold_state, now, cct_state->v, cct_state->min, cct_state->max);
     } else {
-        dir = light_hold_dir(h, now, c->p, 0, 1);
+        dir = light_hold_dir(hold_state, now, cct_state->p, 0, 1);
     }
-    if (kind != c->hold_kind || dir != c->hold_dir) {
-        int tw, tc, dw, dc; // targets / directions of the warm and cold channel
+    if (kind != cct_state->hold_kind || dir != cct_state->hold_dir) {
+        int warm_target, cold_target, warm_direction, cold_direction; // targets / directions of the warm and cold channel
         if (kind == 1) {
-            tw = dir > 0 ? (int)lround(c->max * c->p) : 0;
-            tc = dir > 0 ? (int)c->max - tw : 0;
-            dw = dc = dir;
+            warm_target = dir > 0 ? (int)lround(cct_state->max * cct_state->p) : 0;
+            cold_target = dir > 0 ? (int)cct_state->max - warm_target : 0;
+            warm_direction = cold_direction = dir;
         } else {
-            tw = dir > 0 ? (int)c->v : 0;
-            tc = dir > 0 ? 0 : (int)c->v;
-            dw = dir;
-            dc = -dir;
+            warm_target = dir > 0 ? (int)cct_state->v : 0;
+            cold_target = dir > 0 ? 0 : (int)cct_state->v;
+            warm_direction = dir;
+            cold_direction = -dir;
         }
-        uint32_t t = ramp_units(sweep);
-        queue_hold(m, 2 * c->i, t, dw, (uint8_t)tw);
-        queue_hold(m, 2 * c->i + 1, t, dc, (uint8_t)tc);
-        c->hold_kind = (int8_t)kind;
-        c->hold_dir = (int8_t)dir;
+        uint32_t ramp_duration = ramp_units(sweep);
+        queue_hold(module, 2 * cct_state->i, ramp_duration, warm_direction, (uint8_t)warm_target);
+        queue_hold(module, 2 * cct_state->i + 1, ramp_duration, cold_direction, (uint8_t)cold_target);
+        cct_state->hold_kind = (int8_t)kind;
+        cct_state->hold_dir = (int8_t)dir;
     }
-    c->from_module = true;
-    light_timer_start(&c->hold_stop, m, c, cct_hold_stop, CCT_HOLD_STOP_MS);
+    cct_state->from_module = true;
+    light_timer_start(&cct_state->hold_stop, module, cct_state, cct_hold_stop, CCT_HOLD_STOP_MS);
 }
 
-static int cct_execute(tfbus_module_t *m, cct_t *c, lua_State *L, int obj, int idx, int first, int nargs)
+static int cct_execute(tfbus_module_t *module, cct_t *cct_state, lua_State *L, int obj, int idx, int first, int nargs)
 {
     switch (idx) {
     case TX_CT:
     case TX_PCT: {
-        double a = luaL_checknumber(L, first);
-        double p = idx == TX_CT ? (CT_COOL - light_clamp(a, CT_WARM, CT_COOL)) / (CT_COOL - CT_WARM)
-                                : light_clamp(a, 0, 100) / 100;
-        light_timer_cancel(&c->timed);
-        cct_out(m, c, L, obj, c->v, p, light_ramp_arg(L, first, nargs, 1, c->ramp), false);
+        double requested_temperature = luaL_checknumber(L, first);
+        double warm_share = idx == TX_CT ? (CT_COOL - light_clamp(requested_temperature, CT_WARM, CT_COOL)) / (CT_COOL - CT_WARM)
+                                : light_clamp(requested_temperature, 0, 100) / 100;
+        light_timer_cancel(&cct_state->timed);
+        cct_out(module, cct_state, L, obj, cct_state->v, warm_share, light_ramp_arg(L, first, nargs, 1, cct_state->ramp), false);
         return 0;
     }
     case TX_VALUE: {
-        double v = luaL_checknumber(L, first);
-        if ((v < c->min || v > c->max) && c->name[0]) {
-            clu_lua_post_event(c->name, TE_RANGE);
+        double requested_value = luaL_checknumber(L, first);
+        if ((requested_value < cct_state->min || requested_value > cct_state->max) && cct_state->name[0]) {
+            clu_lua_post_event(cct_state->name, TE_RANGE);
         }
-        light_timer_cancel(&c->timed);
-        cct_out(m, c, L, obj, floor(light_clamp(v, c->min, c->max)), c->p,
-                light_ramp_arg(L, first, nargs, 1, c->ramp), true);
+        light_timer_cancel(&cct_state->timed);
+        cct_out(module, cct_state, L, obj, floor(light_clamp(requested_value, cct_state->min, cct_state->max)), cct_state->p,
+                light_ramp_arg(L, first, nargs, 1, cct_state->ramp), true);
         return 0;
     }
     case TX_ON:
     case TX_OFF:
     case TX_SWITCH: {
         double ms = light_arg(L, first, nargs, 0, 0);
-        uint32_t ramp = light_ramp_arg(L, first, nargs, 1, c->ramp);
+        uint32_t ramp = light_ramp_arg(L, first, nargs, 1, cct_state->ramp);
         bool last = idx != TX_OFF && light_arg(L, first, nargs, 2, 0) == 1;
-        bool on = idx == TX_ON || (idx == TX_SWITCH && c->v <= 0);
-        double v = on ? (last && c->last_on > 0 ? c->last_on : c->max) : 0;
-        light_timer_cancel(&c->timed);
-        if (ms > 0 && v != c->v) {
-            c->revert_v = c->v;
-            c->revert_ramp = ramp;
-            light_timer_start(&c->timed, m, c, cct_revert, (uint32_t)ms);
+        bool on = idx == TX_ON || (idx == TX_SWITCH && cct_state->v <= 0);
+        double requested_value = on ? (last && cct_state->last_on > 0 ? cct_state->last_on : cct_state->max) : 0;
+        light_timer_cancel(&cct_state->timed);
+        if (ms > 0 && requested_value != cct_state->v) {
+            cct_state->revert_v = cct_state->v;
+            cct_state->revert_ramp = ramp;
+            light_timer_start(&cct_state->timed, module, cct_state, cct_revert, (uint32_t)ms);
         }
-        cct_out(m, c, L, obj, v, c->p, ramp, true);
+        cct_out(module, cct_state, L, obj, requested_value, cct_state->p, ramp, true);
         return 0;
     }
     case TX_HOLD:
@@ -417,8 +417,8 @@ static int cct_execute(tfbus_module_t *m, cct_t *c, lua_State *L, int obj, int i
     case TX_COOL: {
         int kind = idx <= TX_DOWN ? 1 : 2;
         int fixed = idx == TX_UP || idx == TX_WARM ? 1 : idx == TX_DOWN || idx == TX_COOL ? -1 : 0;
-        light_timer_cancel(&c->timed);
-        cct_hold(m, c, kind, fixed, light_ramp_arg(L, first, nargs, 0, c->ramp));
+        light_timer_cancel(&cct_state->timed);
+        cct_hold(module, cct_state, kind, fixed, light_ramp_arg(L, first, nargs, 0, cct_state->ramp));
         return 0;
     }
     default:
@@ -427,46 +427,46 @@ static int cct_execute(tfbus_module_t *m, cct_t *c, lua_State *L, int obj, int i
 }
 
 // ---------------------------------------------------------------- hooks
-void ledch_io_new(ledch_t *s, int cls, int ch, const char *name)
+void ledch_io_new(ledch_t *ledch_state, int cls, int channel_index, const char *name)
 {
-    if (cls == LEDCH_CLS_CHANNEL && ch >= 0 && ch < 4) {
-        strlcpy(s->ch[ch].name, name, sizeof s->ch[ch].name);
-    } else if (cls == LEDCH_CLS_CCT && ch >= 0 && ch < 2) {
-        strlcpy(s->cct[ch].name, name, sizeof s->cct[ch].name);
+    if (cls == LEDCH_CLS_CHANNEL && channel_index >= 0 && channel_index < 4) {
+        strlcpy(ledch_state->ch[channel_index].name, name, sizeof ledch_state->ch[channel_index].name);
+    } else if (cls == LEDCH_CLS_CCT && channel_index >= 0 && channel_index < 2) {
+        strlcpy(ledch_state->cct[channel_index].name, name, sizeof ledch_state->cct[channel_index].name);
     }
 }
 
-bool ledch_io_set(tfbus_module_t *m, ledch_t *s, lua_State *L, int cls, int ch, int idx, int val)
+bool ledch_io_set(tfbus_module_t *module, ledch_t *ledch_state, lua_State *L, int cls, int channel_index, int idx, int val)
 {
-    if (cls == LEDCH_CLS_CHANNEL && ch >= 0 && ch < 4) {
-        chan_t *c = &s->ch[ch];
+    if (cls == LEDCH_CLS_CHANNEL && channel_index >= 0 && channel_index < 4) {
+        chan_t *channel_state = &ledch_state->ch[channel_index];
         switch (idx) {
         case C_RAMP:
-            c->ramp = (uint32_t)light_clamp(luaL_checknumber(L, val), 0, LIGHT_RAMP_MAX);
+            channel_state->ramp = (uint32_t)light_clamp(luaL_checknumber(L, val), 0, LIGHT_RAMP_MAX);
             break;
         case C_MAX:
-            c->max = (uint8_t)light_clamp(luaL_checknumber(L, val), 0, 255);
+            channel_state->max = (uint8_t)light_clamp(luaL_checknumber(L, val), 0, 255);
             break;
         case C_MIN:
-            c->min = (uint8_t)light_clamp(luaL_checknumber(L, val), 0, 255);
+            channel_state->min = (uint8_t)light_clamp(luaL_checknumber(L, val), 0, 255);
             break;
         case C_DLG:
-            light_queue_dlg(m, (uint8_t)ch, (uint32_t)light_clamp(luaL_checknumber(L, val), 0, 10000));
+            light_queue_dlg(module, (uint8_t)channel_index, (uint32_t)light_clamp(luaL_checknumber(L, val), 0, 10000));
             break;
         default:
             break;
         }
-    } else if (cls == LEDCH_CLS_CCT && ch >= 0 && ch < 2) {
-        cct_t *c = &s->cct[ch];
+    } else if (cls == LEDCH_CLS_CCT && channel_index >= 0 && channel_index < 2) {
+        cct_t *channel_state = &ledch_state->cct[channel_index];
         switch (idx) {
         case T_RAMP:
-            c->ramp = (uint32_t)light_clamp(luaL_checknumber(L, val), 0, LIGHT_RAMP_MAX);
+            channel_state->ramp = (uint32_t)light_clamp(luaL_checknumber(L, val), 0, LIGHT_RAMP_MAX);
             break;
         case T_MAX:
-            c->max = light_clamp(luaL_checknumber(L, val), 0, 255);
+            channel_state->max = light_clamp(luaL_checknumber(L, val), 0, 255);
             break;
         case T_MIN:
-            c->min = light_clamp(luaL_checknumber(L, val), 0, 255);
+            channel_state->min = light_clamp(luaL_checknumber(L, val), 0, 255);
             break;
         default:
             break;
@@ -475,103 +475,103 @@ bool ledch_io_set(tfbus_module_t *m, ledch_t *s, lua_State *L, int cls, int ch, 
     return false; // store generically
 }
 
-int ledch_io_execute(tfbus_module_t *m, ledch_t *s, lua_State *L, int obj, int cls, int ch, int idx,
+int ledch_io_execute(tfbus_module_t *module, ledch_t *ledch_state, lua_State *L, int obj, int cls, int channel_index, int idx,
                      int first, int nargs)
 {
-    if (cls == LEDCH_CLS_CHANNEL && ch >= 0 && ch < 4) {
-        return ch_execute(m, &s->ch[ch], L, idx, first, nargs);
+    if (cls == LEDCH_CLS_CHANNEL && channel_index >= 0 && channel_index < 4) {
+        return ch_execute(module, &ledch_state->ch[channel_index], L, idx, first, nargs);
     }
-    if (cls == LEDCH_CLS_CCT && ch >= 0 && ch < 2) {
-        return cct_execute(m, &s->cct[ch], L, obj, idx, first, nargs);
+    if (cls == LEDCH_CLS_CCT && channel_index >= 0 && channel_index < 2) {
+        return cct_execute(module, &ledch_state->cct[channel_index], L, obj, idx, first, nargs);
     }
     return -1;
 }
 
-void ledch_reported(ledch_t *s, int ch, uint8_t v)
+void ledch_reported(ledch_t *ledch_state, int channel_index, uint8_t reported_value)
 {
-    if (ch < 0 || ch > 3) {
+    if (channel_index < 0 || channel_index > 3) {
         return;
     }
-    int old = s->rep[ch];
-    s->rep[ch] = v;
-    if (old != v) {
-        s->changed |= (uint8_t)(1u << ch);
+    int old = ledch_state->rep[channel_index];
+    ledch_state->rep[channel_index] = reported_value;
+    if (old != reported_value) {
+        ledch_state->changed |= (uint8_t)(1u << channel_index);
     }
-    const chan_t *c = &s->ch[ch];
-    if (c->name[0] && old != v) {
-        clu_lua_post_number(c->name, C_VALUE, v);
+    const chan_t *channel_state = &ledch_state->ch[channel_index];
+    if (channel_state->name[0] && old != reported_value) {
+        clu_lua_post_number(channel_state->name, C_VALUE, reported_value);
         if (old >= 0) {
-            post_events(c->name, CE_CHANGE, CE_ON, CE_OFF, old, v);
-            clu_lua_post_event(c->name, v > old ? CE_RISE : CE_LOWER);
+            post_events(channel_state->name, CE_CHANGE, CE_ON, CE_OFF, old, reported_value);
+            clu_lua_post_event(channel_state->name, reported_value > old ? CE_RISE : CE_LOWER);
         }
     }
 }
 
-void ledch_reported_end(ledch_t *s)
+void ledch_reported_end(ledch_t *ledch_state)
 {
     for (int i = 0; i < 2; i++) {
-        cct_t *t = &s->cct[i];
-        int w = s->rep[2 * i], k = s->rep[2 * i + 1];
-        if (!t->name[0] || !(s->changed >> (2 * i) & 3)) {
+        cct_t *cct_state = &ledch_state->cct[i];
+        int warm_value = ledch_state->rep[2 * i], cold_value = ledch_state->rep[2 * i + 1];
+        if (!cct_state->name[0] || !(ledch_state->changed >> (2 * i) & 3)) {
             continue;
         }
-        if (s->changed >> (2 * i) & 1) {
-            clu_lua_post_number(t->name, T_WARM, w);
+        if (ledch_state->changed >> (2 * i) & 1) {
+            clu_lua_post_number(cct_state->name, T_WARM, warm_value);
         }
-        if (s->changed >> (2 * i + 1) & 1) {
-            clu_lua_post_number(t->name, T_COLD, k);
+        if (ledch_state->changed >> (2 * i + 1) & 1) {
+            clu_lua_post_number(cct_state->name, T_COLD, cold_value);
         }
-        if (t->from_module && w >= 0 && k >= 0) { // after a hold: Value / colour temperature from the module
-            double v0 = t->v, p0 = t->p;
-            t->v = w + k;
-            if (t->v > 0) {
-                t->p = (double)w / t->v;
-                t->last_on = t->v;
+        if (cct_state->from_module && warm_value >= 0 && cold_value >= 0) { // after a hold: Value / colour temperature from the module
+            double previous_value = cct_state->v, previous_warm_share = cct_state->p;
+            cct_state->v = warm_value + cold_value;
+            if (cct_state->v > 0) {
+                cct_state->p = (double)warm_value / cct_state->v;
+                cct_state->last_on = cct_state->v;
             }
-            cct_publish(t, NULL, 0);
-            cct_events(t, v0, p0);
+            cct_publish(cct_state, NULL, 0);
+            cct_events(cct_state, previous_value, previous_warm_share);
         }
     }
-    s->changed = 0;
+    ledch_state->changed = 0;
 }
 
-void ledch_init(tfbus_module_t *m, ledch_t *s)
+void ledch_init(tfbus_module_t *module, ledch_t *ledch_state)
 {
     for (int i = 0; i < 4; i++) {
-        if (s->ch[i].have_target) {
-            queue_out(m, s, i, 0, s->ch[i].target);
+        if (ledch_state->ch[i].have_target) {
+            queue_out(module, ledch_state, i, 0, ledch_state->ch[i].target);
         }
     }
     for (int i = 0; i < 2; i++) {
-        const cct_t *c = &s->cct[i];
-        if (c->have_target) {
-            int warm = (int)lround(c->v * c->p);
-            queue_out(m, s, 2 * i, 0, (uint8_t)warm);
-            queue_out(m, s, 2 * i + 1, 0, (uint8_t)(c->v - warm));
+        const cct_t *cct_state = &ledch_state->cct[i];
+        if (cct_state->have_target) {
+            int warm = (int)lround(cct_state->v * cct_state->p);
+            queue_out(module, ledch_state, 2 * i, 0, (uint8_t)warm);
+            queue_out(module, ledch_state, 2 * i + 1, 0, (uint8_t)(cct_state->v - warm));
         }
     }
 }
 
-void ledch_overdue(ledch_t *s)
+void ledch_overdue(ledch_t *ledch_state)
 {
     for (int i = 0; i < 4; i++) {
-        light_timer_overdue(&s->ch[i].timed);
-        light_timer_overdue(&s->ch[i].hold_stop);
+        light_timer_overdue(&ledch_state->ch[i].timed);
+        light_timer_overdue(&ledch_state->ch[i].hold_stop);
     }
     for (int i = 0; i < 2; i++) {
-        light_timer_overdue(&s->cct[i].timed);
-        light_timer_overdue(&s->cct[i].hold_stop);
+        light_timer_overdue(&ledch_state->cct[i].timed);
+        light_timer_overdue(&ledch_state->cct[i].hold_stop);
     }
 }
 
-void ledch_deinit(ledch_t *s)
+void ledch_deinit(ledch_t *ledch_state)
 {
     for (int i = 0; i < 4; i++) {
-        light_timer_delete(&s->ch[i].timed);
-        light_timer_delete(&s->ch[i].hold_stop);
+        light_timer_delete(&ledch_state->ch[i].timed);
+        light_timer_delete(&ledch_state->ch[i].hold_stop);
     }
     for (int i = 0; i < 2; i++) {
-        light_timer_delete(&s->cct[i].timed);
-        light_timer_delete(&s->cct[i].hold_stop);
+        light_timer_delete(&ledch_state->cct[i].timed);
+        light_timer_delete(&ledch_state->cct[i].hold_stop);
     }
 }

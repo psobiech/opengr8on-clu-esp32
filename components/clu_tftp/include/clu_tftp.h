@@ -44,7 +44,7 @@ bool clu_tftp_enabled(void);
 typedef void (*clu_tftp_upload_cb_t)(const char *path);
 
 /** @brief Set the upload callback. */
-void clu_tftp_set_upload_cb(clu_tftp_upload_cb_t cb);
+void clu_tftp_set_upload_cb(clu_tftp_upload_cb_t upload_callback);
 
 #ifdef __cplusplus
 }

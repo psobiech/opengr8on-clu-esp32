@@ -81,90 +81,90 @@ typedef struct {
 } dimm_t;
 
 /** @brief Driver state of @p m, allocated on first use. */
-static dimm_t *ctx(tfbus_module_t *m)
+static dimm_t *ctx(tfbus_module_t *module)
 {
-    if (!m->drv_ctx) {
-        dimm_t *c = calloc(1, sizeof *c);
-        if (!c) {
+    if (!module->drv_ctx) {
+        dimm_t *dimmer_state = calloc(1, sizeof *dimmer_state);
+        if (!dimmer_state) {
             abort(); // out of memory while loading OM.LUA
         }
-        c->max = 1;
-        c->last_on = 1;
-        c->ramp = 500;
-        c->saved = ~0u;
-        nvs_handle_t h;
-        if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        dimmer_state->max = 1;
+        dimmer_state->last_on = 1;
+        dimmer_state->ramp = 500;
+        dimmer_state->saved = ~0u;
+        nvs_handle_t nvs_handle;
+        if (nvs_open(NVS_NS, NVS_READONLY, &nvs_handle) == ESP_OK) {
             char key[16];
             uint32_t lvl;
-            snprintf(key, sizeof key, "d%08lx", (unsigned long)m->sn);
-            if (nvs_get_u32(h, key, &lvl) == ESP_OK && lvl > 0 && lvl <= 1000) {
-                c->saved = lvl;
-                c->last_on = lvl / 1000.0;
+            snprintf(key, sizeof key, "d%08lx", (unsigned long)module->sn);
+            if (nvs_get_u32(nvs_handle, key, &lvl) == ESP_OK && lvl > 0 && lvl <= 1000) {
+                dimmer_state->saved = lvl;
+                dimmer_state->last_on = lvl / 1000.0;
             }
-            nvs_close(h);
+            nvs_close(nvs_handle);
         }
-        m->drv_ctx = c;
+        module->drv_ctx = dimmer_state;
     }
-    return m->drv_ctx;
+    return module->drv_ctx;
 }
 
 /** @brief Deferred save (bus task): write last_on to NVS if it changed. */
-static void save_last(tfbus_module_t *m, void *owner)
+static void save_last(tfbus_module_t *module, void *owner)
 {
-    dimm_t *c = owner;
-    unsigned lvl = (unsigned)lround(c->last_on * 1000);
-    nvs_handle_t h;
-    if (lvl == c->saved || nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+    dimm_t *dimmer_state = owner;
+    unsigned lvl = (unsigned)lround(dimmer_state->last_on * 1000);
+    nvs_handle_t nvs_handle;
+    if (lvl == dimmer_state->saved || nvs_open(NVS_NS, NVS_READWRITE, &nvs_handle) != ESP_OK) {
         return;
     }
     char key[16];
-    snprintf(key, sizeof key, "d%08lx", (unsigned long)m->sn);
-    if (nvs_set_u32(h, key, lvl) == ESP_OK && nvs_commit(h) == ESP_OK) {
-        c->saved = lvl;
+    snprintf(key, sizeof key, "d%08lx", (unsigned long)module->sn);
+    if (nvs_set_u32(nvs_handle, key, lvl) == ESP_OK && nvs_commit(nvs_handle) == ESP_OK) {
+        dimmer_state->saved = lvl;
     }
-    nvs_close(h);
+    nvs_close(nvs_handle);
 }
 
 /** @brief Remember @p v as the last value the output was on with (Mode LastValue). */
-static void set_last(tfbus_module_t *m, dimm_t *c, double v)
+static void set_last(tfbus_module_t *module, dimm_t *dimmer_state, double requested_value)
 {
-    if (v != c->last_on) {
-        c->last_on = v;
-        light_timer_start(&c->save, m, c, save_last, LASTVAL_SAVE_MS);
+    if (requested_value != dimmer_state->last_on) {
+        dimmer_state->last_on = requested_value;
+        light_timer_start(&dimmer_state->save, module, dimmer_state, save_last, LASTVAL_SAVE_MS);
     }
 }
 
 /** @brief Fire the value events for a change @p old -> @p nv. */
-static void events(const dimm_t *c, double old, double nv)
+static void events(const dimm_t *dimmer_state, double old, double new_value)
 {
-    if (!c->name[0] || old == nv) {
+    if (!dimmer_state->name[0] || old == new_value) {
         return;
     }
-    clu_lua_post_event(c->name, EV_CHANGE);
-    clu_lua_post_event(c->name, nv > old ? EV_RISE : EV_LOWER);
-    if (old <= c->min && nv > c->min) {
-        clu_lua_post_event(c->name, EV_ON);
-    } else if (nv <= c->min && old > c->min) {
-        clu_lua_post_event(c->name, EV_OFF);
+    clu_lua_post_event(dimmer_state->name, EV_CHANGE);
+    clu_lua_post_event(dimmer_state->name, new_value > old ? EV_RISE : EV_LOWER);
+    if (old <= dimmer_state->min && new_value > dimmer_state->min) {
+        clu_lua_post_event(dimmer_state->name, EV_ON);
+    } else if (new_value <= dimmer_state->min && old > dimmer_state->min) {
+        clu_lua_post_event(dimmer_state->name, EV_OFF);
     }
 }
 
 /** @brief Queue a [0, level LE u16] record (0x0c DIMMER_SET_VALUE, 0x0e START_LEVEL). */
-static void queue_level(tfbus_module_t *m, uint8_t type, double v)
+static void queue_level(tfbus_module_t *module, uint8_t type, double level)
 {
-    unsigned lvl = (unsigned)lround(v * 1000);
-    drv_queue_record(m, type, 0x00, (uint8_t[]){0, (uint8_t)lvl, (uint8_t)(lvl >> 8)}, 3);
+    unsigned lvl = (unsigned)lround(level * 1000);
+    drv_queue_record(module, type, 0x00, (uint8_t[]){0, (uint8_t)lvl, (uint8_t)(lvl >> 8)}, 3);
 }
 
 /** @brief Queue SET_RAMP_TIME (unless @p ramp is NO_RAMP) + DIMMER_SET_VALUE for the current target. */
 #define NO_RAMP UINT32_MAX
-static void send_level(tfbus_module_t *m, dimm_t *c, uint32_t ramp)
+static void send_level(tfbus_module_t *module, dimm_t *dimmer_state, uint32_t ramp)
 {
     if (ramp != NO_RAMP) {
-        light_queue_ramp(m, ramp);
+        light_queue_ramp(module, ramp);
     }
-    queue_level(m, 0x0c, c->value);
-    c->cmd_at = esp_timer_get_time();
+    queue_level(module, 0x0c, dimmer_state->value);
+    dimmer_state->cmd_at = esp_timer_get_time();
 }
 
 /**
@@ -172,73 +172,73 @@ static void send_level(tfbus_module_t *m, dimm_t *c, uint32_t ramp)
  * @param L   Lua state when called from a Lua hook (Value stored on the object at @p obj),
  *            NULL from the bus task (Value posted).
  */
-static void apply(tfbus_module_t *m, dimm_t *c, lua_State *L, int obj, double v, uint32_t ramp)
+static void apply(tfbus_module_t *module, dimm_t *dimmer_state, lua_State *L, int obj, double new_level, uint32_t ramp)
 {
-    double old = c->value;
-    c->value = v;
-    c->have_target = true;
-    if (v > c->min) {
-        set_last(m, c, v);
+    double old = dimmer_state->value;
+    dimmer_state->value = new_level;
+    dimmer_state->have_target = true;
+    if (new_level > dimmer_state->min) {
+        set_last(module, dimmer_state, new_level);
     }
-    send_level(m, c, ramp);
+    send_level(module, dimmer_state, ramp);
     if (L) {
-        tfbus_obj_store(L, obj, F_VALUE, v);
-    } else if (c->name[0]) {
-        clu_lua_post_number(c->name, F_VALUE, v);
+        tfbus_obj_store(L, obj, F_VALUE, new_level);
+    } else if (dimmer_state->name[0]) {
+        clu_lua_post_number(dimmer_state->name, F_VALUE, new_level);
     }
-    events(c, old, v);
+    events(dimmer_state, old, new_level);
 }
 
 /** @brief Clamp a requested value to [MinValue, MaxValue]; out of range fires OnOutOfRange. */
-static double clamp_req(const dimm_t *c, double v)
+static double clamp_req(const dimm_t *dimmer_state, double requested_value)
 {
-    if ((v < c->min || v > c->max) && c->name[0]) {
-        clu_lua_post_event(c->name, EV_RANGE);
+    if ((requested_value < dimmer_state->min || requested_value > dimmer_state->max) && dimmer_state->name[0]) {
+        clu_lua_post_event(dimmer_state->name, EV_RANGE);
     }
-    return light_clamp(v, c->min, c->max);
+    return light_clamp(requested_value, dimmer_state->min, dimmer_state->max);
 }
 
 /** @brief Timed switch expired (bus task): return to the previous value (level only, as the real CLU). */
-static void revert(tfbus_module_t *m, void *owner)
+static void revert(tfbus_module_t *module, void *owner)
 {
-    dimm_t *c = owner;
-    apply(m, c, NULL, 0, c->revert_to, NO_RAMP);
+    dimm_t *dimmer_state = owner;
+    apply(module, dimmer_state, NULL, 0, dimmer_state->revert_to, NO_RAMP);
 }
 
 /** @brief tfbus_driver_t::deinit: stop the timer. */
-static void deinit(tfbus_module_t *m)
+static void deinit(tfbus_module_t *module)
 {
-    dimm_t *c = m->drv_ctx;
-    light_timer_delete(&c->timed);
-    light_timer_delete(&c->save);
-    save_last(m, c); // Lua reload / reset: do not lose a pending save
+    dimm_t *dimmer_state = module->drv_ctx;
+    light_timer_delete(&dimmer_state->timed);
+    light_timer_delete(&dimmer_state->save);
+    save_last(module, dimmer_state); // Lua reload / reset: do not lose a pending save
 }
 
 /** @brief tfbus_driver_t::overdue: run expired timers whose deferred call was dropped. */
-static void overdue(tfbus_module_t *m)
+static void overdue(tfbus_module_t *module)
 {
-    dimm_t *c = m->drv_ctx;
-    light_timer_overdue(&c->timed);
-    light_timer_overdue(&c->save);
+    dimm_t *dimmer_state = module->drv_ctx;
+    light_timer_overdue(&dimmer_state->timed);
+    light_timer_overdue(&dimmer_state->save);
 }
 
 /** @brief tfbus_driver_t::io_new: remember the DIMM object's name. */
-static void io_new(tfbus_module_t *m, int cls, int ch, const char *name)
+static void io_new(tfbus_module_t *module, int cls, int channel, const char *name)
 {
-    if (cls == CLS_DIMM && ch == 0) {
-        strlcpy(ctx(m)->name, name, sizeof ctx(m)->name);
+    if (cls == CLS_DIMM && channel == 0) {
+        strlcpy(ctx(module)->name, name, sizeof ctx(module)->name);
     }
 }
 
 /** @brief tfbus_driver_t::init: re-apply StartLevel and the level Lua set (module re-addressed / back online). */
-static void init(tfbus_module_t *m)
+static void init(tfbus_module_t *module)
 {
-    dimm_t *c = ctx(m);
-    if (c->start > 0) {
-        queue_level(m, 0x0e, c->start);
+    dimm_t *dimmer_state = ctx(module);
+    if (dimmer_state->start > 0) {
+        queue_level(module, 0x0e, dimmer_state->start);
     }
-    if (c->have_target) {
-        send_level(m, c, 0);
+    if (dimmer_state->have_target) {
+        send_level(module, dimmer_state, 0);
     }
 }
 
@@ -246,33 +246,33 @@ static void init(tfbus_module_t *m)
  * @brief tfbus_driver_t::io_set: Value drives the output, RampTime, StartLevel and
  *        DistributedLogicGroup go to the module at once, Min / MaxValue are cached.
  */
-static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int val)
+static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel, int idx, int val)
 {
-    if (cls != CLS_DIMM || ch != 0) {
+    if (cls != CLS_DIMM || channel != 0) {
         return false;
     }
-    dimm_t *c = ctx(m);
+    dimm_t *dimmer_state = ctx(module);
     switch (idx) {
     case F_VALUE:
-        light_timer_cancel(&c->timed);
-        apply(m, c, L, obj, clamp_req(c, luaL_checknumber(L, val)), c->ramp);
+        light_timer_cancel(&dimmer_state->timed);
+        apply(module, dimmer_state, L, obj, clamp_req(dimmer_state, luaL_checknumber(L, val)), dimmer_state->ramp);
         return true;
     case F_RAMP:
-        c->ramp = (uint32_t)light_clamp(luaL_checknumber(L, val), 0, LIGHT_RAMP_MAX);
-        light_queue_ramp(m, c->ramp);
+        dimmer_state->ramp = (uint32_t)light_clamp(luaL_checknumber(L, val), 0, LIGHT_RAMP_MAX);
+        light_queue_ramp(module, dimmer_state->ramp);
         break;
     case F_MIN:
-        c->min = light_clamp(luaL_checknumber(L, val), 0, 1);
+        dimmer_state->min = light_clamp(luaL_checknumber(L, val), 0, 1);
         break;
     case F_MAX:
-        c->max = light_clamp(luaL_checknumber(L, val), 0, 1);
+        dimmer_state->max = light_clamp(luaL_checknumber(L, val), 0, 1);
         break;
     case F_START:
-        c->start = light_clamp(luaL_checknumber(L, val), 0, 1);
-        queue_level(m, 0x0e, c->start);
+        dimmer_state->start = light_clamp(luaL_checknumber(L, val), 0, 1);
+        queue_level(module, 0x0e, dimmer_state->start);
         break;
     case F_DLG:
-        light_queue_dlg(m, 0, (uint32_t)light_clamp(luaL_checknumber(L, val), 0, 10000));
+        light_queue_dlg(module, 0, (uint32_t)light_clamp(luaL_checknumber(L, val), 0, 10000));
         break;
     default:
         break;
@@ -284,75 +284,75 @@ static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, in
  * @brief tfbus_driver_t::io_execute: HoldValue(Ramp), Switch / SwitchOn(Time, Ramp, Mode),
  *        SwitchOff(Time, Ramp).
  */
-static int io_execute(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int first,
+static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel, int idx, int first,
                       int nargs)
 {
-    if (cls != CLS_DIMM || ch != 0) {
+    if (cls != CLS_DIMM || channel != 0) {
         return -1;
     }
-    dimm_t *c = ctx(m);
-    double cur = c->value;
+    dimm_t *dimmer_state = ctx(module);
+    double cur = dimmer_state->value;
     if (idx == X_HOLD) {
-        uint32_t sweep = light_ramp_arg(L, first, nargs, 0, c->ramp);
-        light_timer_cancel(&c->timed);
-        int dir = light_hold_dir(&c->hold, esp_timer_get_time(), cur, c->min, c->max);
+        uint32_t sweep = light_ramp_arg(L, first, nargs, 0, dimmer_state->ramp);
+        light_timer_cancel(&dimmer_state->timed);
+        int dir = light_hold_dir(&dimmer_state->hold, esp_timer_get_time(), cur, dimmer_state->min, dimmer_state->max);
         // one step = LIGHT_HOLD_STEP_MS of the sweep, in whole levels (3000 ms -> 33/1000)
-        double d = sweep ? floor(1000.0 * LIGHT_HOLD_STEP_MS / sweep) / 1000 : 1;
-        apply(m, c, L, obj, light_clamp(cur + dir * d, c->min, c->max), sweep);
+        double value_step = sweep ? floor(1000.0 * LIGHT_HOLD_STEP_MS / sweep) / 1000 : 1;
+        apply(module, dimmer_state, L, obj, light_clamp(cur + dir * value_step, dimmer_state->min, dimmer_state->max), sweep);
         return 0;
     }
     if (idx != X_SWITCH && idx != X_ON && idx != X_OFF) {
         return -1;
     }
     double ms = light_arg(L, first, nargs, 0, 0);
-    uint32_t ramp = light_ramp_arg(L, first, nargs, 1, c->ramp);
+    uint32_t ramp = light_ramp_arg(L, first, nargs, 1, dimmer_state->ramp);
     bool last = idx != X_OFF && light_arg(L, first, nargs, 2, 0) == 1;
-    double on_level = last && c->last_on > c->min ? light_clamp(c->last_on, c->min, c->max) : c->max;
-    double v = idx == X_ON ? on_level : idx == X_OFF ? c->min : (cur > c->min ? c->min : on_level);
-    light_timer_cancel(&c->timed);
-    if (ms > 0 && v != cur) {
-        c->revert_to = cur;
-        light_timer_start(&c->timed, m, c, revert, (uint32_t)ms);
+    double on_level = last && dimmer_state->last_on > dimmer_state->min ? light_clamp(dimmer_state->last_on, dimmer_state->min, dimmer_state->max) : dimmer_state->max;
+    double output_level = idx == X_ON ? on_level : idx == X_OFF ? dimmer_state->min : (cur > dimmer_state->min ? dimmer_state->min : on_level);
+    light_timer_cancel(&dimmer_state->timed);
+    if (ms > 0 && output_level != cur) {
+        dimmer_state->revert_to = cur;
+        light_timer_start(&dimmer_state->timed, module, dimmer_state, revert, (uint32_t)ms);
     }
-    apply(m, c, L, obj, v, ramp);
+    apply(module, dimmer_state, L, obj, output_level, ramp);
     return 0;
 }
 
 /** @brief tfbus_driver_t::on_status: a level other than the target (after the hold-off) is taken over. */
-static void on_status(tfbus_module_t *m, const uint8_t *pl, size_t len)
+static void on_status(tfbus_module_t *module, const uint8_t *status_payload, size_t len)
 {
-    dimm_t *c = ctx(m);
-    tfbus_tlv_t r[4];
-    int n = tfbus_parse_tlv(pl, len, r, 4);
-    for (int i = 0; i < n; i++) {
-        if (r[i].type != 0x01 || r[i].len < 2) {
+    dimm_t *dimmer_state = ctx(module);
+    tfbus_tlv_t status_records[4];
+    int status_record_count = tfbus_parse_tlv(status_payload, len, status_records, 4);
+    for (int i = 0; i < status_record_count; i++) {
+        if (status_records[i].type != 0x01 || status_records[i].len < 2) {
             continue;
         }
-        unsigned lvl = r[i].data[0] | r[i].data[1] << 8;
-        double v = light_clamp(lvl / 1000.0, 0, 1);
-        bool first = !c->have_status;
-        c->have_status = true;
-        if (first && !c->have_target) {
+        unsigned lvl = status_records[i].data[0] | status_records[i].data[1] << 8;
+        double reported_level = light_clamp(lvl / 1000.0, 0, 1);
+        bool first = !dimmer_state->have_status;
+        dimmer_state->have_status = true;
+        if (first && !dimmer_state->have_target) {
             // Nothing requested yet: take the module's level silently.
-            c->value = v;
-            if (v > c->min) {
-                set_last(m, c, v);
+            dimmer_state->value = reported_level;
+            if (reported_level > dimmer_state->min) {
+                set_last(module, dimmer_state, reported_level);
             }
-            if (c->name[0]) {
-                clu_lua_post_number(c->name, F_VALUE, v);
+            if (dimmer_state->name[0]) {
+                clu_lua_post_number(dimmer_state->name, F_VALUE, reported_level);
             }
             return;
         }
-        if (lvl == (unsigned)lround(c->value * 1000) ||
-            esp_timer_get_time() - c->cmd_at < STATUS_HOLDOFF_US) {
+        if (lvl == (unsigned)lround(dimmer_state->value * 1000) ||
+            esp_timer_get_time() - dimmer_state->cmd_at < STATUS_HOLDOFF_US) {
             return;
         }
-        double old = c->value;
-        c->value = v;
-        if (c->name[0]) {
-            clu_lua_post_number(c->name, F_VALUE, v);
+        double old = dimmer_state->value;
+        dimmer_state->value = reported_level;
+        if (dimmer_state->name[0]) {
+            clu_lua_post_number(dimmer_state->name, F_VALUE, reported_level);
         }
-        events(c, old, v);
+        events(dimmer_state, old, reported_level);
         return;
     }
 }

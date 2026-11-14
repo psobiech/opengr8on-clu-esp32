@@ -21,19 +21,19 @@ const uint8_t CLU_DEFAULT_BROADCAST_IV[16] = {
     0x04, 0x02, 0x09, 0x03, 0x04, 0x01, 0x05, 0x07,
 };
 
-void clu_derive_key(const uint8_t iv[16], const uint8_t pk[8], uint8_t out[16])
+void clu_derive_key(const uint8_t initialization_vector[16], const uint8_t private_key[8], uint8_t out[16])
 {
     for (int i = 0; i < 8; i++) {
-        out[i] = iv[i] ^ pk[i];
+        out[i] = initialization_vector[i] ^ private_key[i];
     }
     for (int i = 8; i < 16; i++) {
-        out[i] = iv[i] ^ pk[15 - i];
+        out[i] = initialization_vector[i] ^ private_key[15 - i];
     }
 }
 
-void clu_default_key(const uint8_t pk[8], uint8_t out[16])
+void clu_default_key(const uint8_t private_key[8], uint8_t out[16])
 {
-    clu_derive_key(CLU_DEFAULT_IV, pk, out);
+    clu_derive_key(CLU_DEFAULT_IV, private_key, out);
 }
 
 void clu_discovery_hash(const uint8_t *in, size_t len, uint8_t *out)
@@ -45,20 +45,20 @@ void clu_discovery_hash(const uint8_t *in, size_t len, uint8_t *out)
     // like Java's, so do the same on int8_t; unsigned math differs for any byte >= 0x80.
     int8_t prev = (int8_t)(out[0] = in[0] ^ in[len - 1]);
     for (size_t i = 1; i < len; i++) {
-        int a = prev % 13;
-        int b = (int8_t)in[i] % 19;
-        out[i] = (uint8_t)((a + 1) * (b + 1));
+        int previous_hash_component = prev % 13;
+        int input_byte_component = (int8_t)in[i] % 19;
+        out[i] = (uint8_t)((previous_hash_component + 1) * (input_byte_component + 1));
         prev = (int8_t)out[i];
     }
 }
 
 size_t clu_pkcs7_pad(uint8_t *buf, size_t len)
 {
-    uint8_t p = (uint8_t)(16 - (len % 16));
-    for (uint8_t i = 0; i < p; i++) {
-        buf[len + i] = p;
+    uint8_t padding_length = (uint8_t)(16 - (len % 16));
+    for (uint8_t i = 0; i < padding_length; i++) {
+        buf[len + i] = padding_length;
     }
-    return len + p;
+    return len + padding_length;
 }
 
 int clu_pkcs7_unpad(const uint8_t *buf, size_t len)
@@ -66,14 +66,14 @@ int clu_pkcs7_unpad(const uint8_t *buf, size_t len)
     if (len == 0 || len % 16) {
         return -1;
     }
-    uint8_t p = buf[len - 1];
-    if (p == 0 || p > 16) {
+    uint8_t padding_length = buf[len - 1];
+    if (padding_length == 0 || padding_length > 16) {
         return -1;
     }
-    for (size_t i = len - p; i < len; i++) {
-        if (buf[i] != p) {
+    for (size_t i = len - padding_length; i < len; i++) {
+        if (buf[i] != padding_length) {
             return -1;
         }
     }
-    return (int)(len - p);
+    return (int)(len - padding_length);
 }

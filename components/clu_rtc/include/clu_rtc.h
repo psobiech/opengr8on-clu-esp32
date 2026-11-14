@@ -42,7 +42,7 @@ bool clu_rtc_get(time_t *out);
 /**
  * @brief Set the RTC (clears the OS / OSF flag). Thread-safe (I2C bus lock).
  *
- * @param t UTC epoch; ignored if before CLU_RTC_MIN_VALID.
+ * @param timestamp UTC epoch; ignored if before CLU_RTC_MIN_VALID.
  * @return true if written.
  */
-bool clu_rtc_set(time_t t);
+bool clu_rtc_set(time_t timestamp);

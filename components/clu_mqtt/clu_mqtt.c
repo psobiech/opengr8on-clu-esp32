@@ -83,66 +83,66 @@ bool clu_mqtt_connected(void)
 /**
  * @brief Subscribe to the command topics (`<root>/+/set`, position, system tree, object API, HA birth).
  */
-static void subscribe_all(esp_mqtt_client_handle_t c)
+static void subscribe_all(esp_mqtt_client_handle_t client_handle)
 {
-    char t[MAX_TOPIC];
-    snprintf(t, sizeof t, "%s/+/set", s_root);
-    esp_mqtt_client_subscribe(c, t, 0);
-    snprintf(t, sizeof t, "%s/+/position/set", s_root);
-    esp_mqtt_client_subscribe(c, t, 0);
+    char topic_buffer[MAX_TOPIC];
+    snprintf(topic_buffer, sizeof topic_buffer, "%s/+/set", s_root);
+    esp_mqtt_client_subscribe(client_handle, topic_buffer, 0);
+    snprintf(topic_buffer, sizeof topic_buffer, "%s/+/position/set", s_root);
+    esp_mqtt_client_subscribe(client_handle, topic_buffer, 0);
     // Firmware entities live in a tree: "<root>/system/clu/restart/set".
-    snprintf(t, sizeof t, "%s/system/+/+/set", s_root);
-    esp_mqtt_client_subscribe(c, t, 0);
+    snprintf(topic_buffer, sizeof topic_buffer, "%s/system/+/+/set", s_root);
+    esp_mqtt_client_subscribe(client_handle, topic_buffer, 0);
 #if CONFIG_CLU_MQTT_OBJECT_API
     // "execute/+" is one level: our own ".../execute/<idx>/result" replies never loop back.
-    snprintf(t, sizeof t, "%s/+/feature/+/get", s_root);
-    esp_mqtt_client_subscribe(c, t, 0);
-    snprintf(t, sizeof t, "%s/+/feature/+/set", s_root);
-    esp_mqtt_client_subscribe(c, t, 0);
-    snprintf(t, sizeof t, "%s/+/execute/+", s_root);
-    esp_mqtt_client_subscribe(c, t, 0);
+    snprintf(topic_buffer, sizeof topic_buffer, "%s/+/feature/+/get", s_root);
+    esp_mqtt_client_subscribe(client_handle, topic_buffer, 0);
+    snprintf(topic_buffer, sizeof topic_buffer, "%s/+/feature/+/set", s_root);
+    esp_mqtt_client_subscribe(client_handle, topic_buffer, 0);
+    snprintf(topic_buffer, sizeof topic_buffer, "%s/+/execute/+", s_root);
+    esp_mqtt_client_subscribe(client_handle, topic_buffer, 0);
 #endif
 #if CONFIG_CLU_MQTT_HA_DISCOVERY
     // HA birth message: "online" after a Home Assistant restart -> discovery is resent.
-    snprintf(t, sizeof t, "%s/status", CONFIG_CLU_MQTT_HA_PREFIX);
-    esp_mqtt_client_subscribe(c, t, 0);
+    snprintf(topic_buffer, sizeof topic_buffer, "%s/status", CONFIG_CLU_MQTT_HA_PREFIX);
+    esp_mqtt_client_subscribe(client_handle, topic_buffer, 0);
 #endif
 }
 
 /** @brief Queue an inbound message for Lua; fragmented or oversized messages are dropped. */
-static void on_data(const esp_mqtt_event_t *e)
+static void on_data(const esp_mqtt_event_t *event)
 {
     // Fragmented (larger than the RX buffer) or oversized messages are not commands: drop.
-    if (e->current_data_offset != 0 || e->data_len != e->total_data_len || e->topic_len <= 0 ||
-        e->topic_len >= MAX_TOPIC || e->data_len >= MAX_PAYLOAD) {
-        ESP_LOGW(TAG, "dropped inbound message (%d/%d bytes)", e->topic_len, e->total_data_len);
+    if (event->current_data_offset != 0 || event->data_len != event->total_data_len || event->topic_len <= 0 ||
+        event->topic_len >= MAX_TOPIC || event->data_len >= MAX_PAYLOAD) {
+        ESP_LOGW(TAG, "dropped inbound message (%d/%d bytes)", event->topic_len, event->total_data_len);
         return;
     }
-    rx_msg_t *m = malloc(sizeof *m + e->topic_len + 1 + e->data_len + 1);
-    if (!m) {
+    rx_msg_t *message = malloc(sizeof *message + event->topic_len + 1 + event->data_len + 1);
+    if (!message) {
         return;
     }
-    m->topic = m->buf;
-    memcpy(m->topic, e->topic, e->topic_len);
-    m->topic[e->topic_len] = 0;
-    m->payload = m->topic + e->topic_len + 1;
-    memcpy(m->payload, e->data, e->data_len);
-    m->payload[e->data_len] = 0;
-    if (xQueueSend(s_rx, &m, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "inbound queue full, dropped %s", m->topic);
-        free(m);
+    message->topic = message->buf;
+    memcpy(message->topic, event->topic, event->topic_len);
+    message->topic[event->topic_len] = 0;
+    message->payload = message->topic + event->topic_len + 1;
+    memcpy(message->payload, event->data, event->data_len);
+    message->payload[event->data_len] = 0;
+    if (xQueueSend(s_rx, &message, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "inbound queue full, dropped %s", message->topic);
+        free(message);
     }
 }
 
 /** @brief esp-mqtt event handler: birth message, subscriptions and connection state. */
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
-    esp_mqtt_event_handle_t e = data;
+    esp_mqtt_event_handle_t event = data;
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED:
         ESP_LOGI(TAG, "connected to %s", broker_uri());
-        esp_mqtt_client_publish(e->client, s_status, "online", 0, 1, 1);
-        subscribe_all(e->client);
+        esp_mqtt_client_publish(event->client, s_status, "online", 0, 1, 1);
+        subscribe_all(event->client);
         s_gen++;
         s_connected = true;
         break;
@@ -153,14 +153,14 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         s_connected = false;
         break;
     case MQTT_EVENT_DATA:
-        on_data(e);
+        on_data(event);
         break;
     case MQTT_EVENT_ERROR:
-        if (e->error_handle && e->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
-            ESP_LOGE(TAG, "broker refused connection (code %d)", e->error_handle->connect_return_code);
-        } else if (e->error_handle && e->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
-            ESP_LOGW(TAG, "transport error: %s (tls 0x%x)", esp_err_to_name(e->error_handle->esp_tls_last_esp_err),
-                     e->error_handle->esp_tls_stack_err);
+        if (event->error_handle && event->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
+            ESP_LOGE(TAG, "broker refused connection (code %d)", event->error_handle->connect_return_code);
+        } else if (event->error_handle && event->error_handle->error_type == MQTT_ERROR_TYPE_TCP_TRANSPORT) {
+            ESP_LOGW(TAG, "transport error: %s (tls 0x%x)", esp_err_to_name(event->error_handle->esp_tls_last_esp_err),
+                     event->error_handle->esp_tls_stack_err);
         }
         break;
     default:
@@ -177,18 +177,18 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
  */
 static char *read_file(const char *path, size_t max)
 {
-    FILE *f = path ? fopen(path, "rb") : NULL;
-    if (!f) {
+    FILE *file = path ? fopen(path, "rb") : NULL;
+    if (!file) {
         return NULL;
     }
     char *buf = malloc(max + 1);
-    size_t n = buf ? fread(buf, 1, max, f) : 0;
-    fclose(f);
-    if (!buf || n == 0 || n == max) { // empty or too big to be a CA
+    size_t bytes_read = buf ? fread(buf, 1, max, file) : 0;
+    fclose(file);
+    if (!buf || bytes_read == 0 || bytes_read == max) { // empty or too big to be a CA
         free(buf);
         return NULL;
     }
-    buf[n] = 0;
+    buf[bytes_read] = 0;
     return buf;
 }
 
@@ -197,7 +197,7 @@ static char *read_file(const char *path, size_t max)
  */
 static bool client_create(void)
 {
-    esp_mqtt_client_config_t mc = {
+    esp_mqtt_client_config_t client_config = {
         .broker.address.uri = broker_uri(),
         .credentials.client_id = s_client_id,
         .session.keepalive = CONFIG_CLU_MQTT_KEEPALIVE,
@@ -206,20 +206,20 @@ static bool client_create(void)
         .buffer.size = 2048,
     };
     if (username()[0]) {
-        mc.credentials.username = username();
-        mc.credentials.authentication.password = password();
+        client_config.credentials.username = username();
+        client_config.credentials.authentication.password = password();
     }
     if (strncmp(broker_uri(), "mqtts://", 8) == 0 ||
         strncmp(broker_uri(), "wss://", 6) == 0) {
         s_ca_pem = read_file(s_cfg.ca_path, CA_MAX);
         if (s_ca_pem) {
             ESP_LOGI(TAG, "TLS: CA from %s", s_cfg.ca_path);
-            mc.broker.verification.certificate = s_ca_pem;
+            client_config.broker.verification.certificate = s_ca_pem;
         } else {
-            mc.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
+            client_config.broker.verification.crt_bundle_attach = esp_crt_bundle_attach;
         }
     }
-    s_client = esp_mqtt_client_init(&mc);
+    s_client = esp_mqtt_client_init(&client_config);
     if (!s_client) {
         ESP_LOGE(TAG, "client init failed (URI %s)", broker_uri());
         return false;
@@ -347,25 +347,25 @@ static int l_outbox(lua_State *L)
 /** @brief lua_pcall body of l_recv: push the ::rx_msg_t (light userdata at 1) as topic, payload. */
 static int recv_push(lua_State *L)
 {
-    const rx_msg_t *m = lua_touserdata(L, 1);
-    lua_pushstring(L, m->topic);
-    lua_pushstring(L, m->payload);
+    const rx_msg_t *message = lua_touserdata(L, 1);
+    lua_pushstring(L, message->topic);
+    lua_pushstring(L, message->payload);
     return 2;
 }
 
 // __clu.mqtt_recv() -> topic, payload | nil
 static int l_recv(lua_State *L)
 {
-    rx_msg_t *m;
-    if (!s_rx || xQueueReceive(s_rx, &m, 0) != pdTRUE) {
+    rx_msg_t *message;
+    if (!s_rx || xQueueReceive(s_rx, &message, 0) != pdTRUE) {
         return 0;
     }
     // Pushing can raise (out of memory): push under pcall so m is freed either way.
     lua_pushcfunction(L, recv_push);
-    lua_pushlightuserdata(L, m);
-    int st = lua_pcall(L, 1, 2, 0);
-    free(m);
-    if (st != LUA_OK) {
+    lua_pushlightuserdata(L, message);
+    int call_status = lua_pcall(L, 1, 2, 0);
+    free(message);
+    if (call_status != LUA_OK) {
         return lua_error(L);
     }
     return 2;

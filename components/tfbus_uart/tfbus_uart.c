@@ -19,18 +19,18 @@ static bool s_nowire; // initialised without a UART: only local endpoints answer
 static tfbus_uart_local_fn_t s_local[TFBUS_UART_MAX_LOCAL];
 static int s_nlocal;
 
-void tfbus_uart_set_local(tfbus_uart_local_fn_t fn)
+void tfbus_uart_set_local(tfbus_uart_local_fn_t local_endpoint)
 {
     s_nlocal = 0;
-    tfbus_uart_add_local(fn);
+    tfbus_uart_add_local(local_endpoint);
 }
 
-bool tfbus_uart_add_local(tfbus_uart_local_fn_t fn)
+bool tfbus_uart_add_local(tfbus_uart_local_fn_t local_endpoint)
 {
-    if (!fn || s_nlocal == TFBUS_UART_MAX_LOCAL) {
+    if (!local_endpoint || s_nlocal == TFBUS_UART_MAX_LOCAL) {
         return false;
     }
-    s_local[s_nlocal++] = fn;
+    s_local[s_nlocal++] = local_endpoint;
     return true;
 }
 
@@ -38,9 +38,9 @@ bool tfbus_uart_add_local(tfbus_uart_local_fn_t fn)
 static int local(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap)
 {
     for (int i = 0; i < s_nlocal; i++) {
-        int r = s_local[i](tx, txlen, rx, rxcap);
-        if (r != 0) {
-            return r;
+        int reply_length = s_local[i](tx, txlen, rx, rxcap);
+        if (reply_length != 0) {
+            return reply_length;
         }
     }
     return 0;
@@ -53,7 +53,7 @@ esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg)
         ESP_LOGI(TAG, "no RS485 wire: emulated modules only");
         return ESP_OK;
     }
-    const uart_config_t uc = {
+    const uart_config_t uart_config = {
         .baud_rate = cfg->baud,
         .data_bits = UART_DATA_8_BITS,
         .parity = UART_PARITY_DISABLE,
@@ -62,7 +62,7 @@ esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg)
         .source_clk = UART_SCLK_DEFAULT,
     };
     ESP_ERROR_CHECK(uart_driver_install(cfg->uart_num, 512, 0, 0, NULL, 0));
-    ESP_ERROR_CHECK(uart_param_config(cfg->uart_num, &uc));
+    ESP_ERROR_CHECK(uart_param_config(cfg->uart_num, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(cfg->uart_num, cfg->tx_pin, cfg->rx_pin, cfg->de_pin, UART_PIN_NO_CHANGE));
     ESP_ERROR_CHECK(uart_set_mode(cfg->uart_num, UART_MODE_RS485_HALF_DUPLEX));
     // ~3 byte times at 115200 -> frame boundary detection
@@ -109,32 +109,32 @@ typedef struct {
 
 /**
  * @brief RX parser callback: keep the first module -> CLU frame that is not our own echo.
- * @param f   Complete frame.
- * @param len Frame length.
- * @param ctx ::collect_t.
+ * @param frame Complete frame.
+ * @param len   Frame length.
+ * @param ctx   ::collect_t.
  */
-static void on_frame(const uint8_t *f, size_t len, void *ctx)
+static void on_frame(const uint8_t *frame, size_t len, void *ctx)
 {
-    collect_t *c = ctx;
-    if (c->got > 0) {
+    collect_t *collector = ctx;
+    if (collector->got > 0) {
         return;
     }
     // Some transceivers echo our own TX (RE tied low) — skip it.
-    if (len == c->txlen && memcmp(f, c->tx, len) == 0) {
+    if (len == collector->txlen && memcmp(frame, collector->tx, len) == 0) {
         return;
     }
-    if (f[1] != TFBUS_CLU_ADDR || len > c->rxcap) {
+    if (frame[1] != TFBUS_CLU_ADDR || len > collector->rxcap) {
         return;
     }
-    memcpy(c->rx, f, len);
-    c->got = (int)len;
+    memcpy(collector->rx, frame, len);
+    collector->got = (int)len;
 }
 
 int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap, int timeout_ms)
 {
-    int r = local(tx, txlen, rx, rxcap);
-    if (r != 0) {
-        return r > 0 ? r : 0;
+    int local_reply_length = local(tx, txlen, rx, rxcap);
+    if (local_reply_length != 0) {
+        return local_reply_length > 0 ? local_reply_length : 0;
     }
     if (s_nowire) {
         return 0; // no module on a wire answers
@@ -144,12 +144,12 @@ int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxc
     }
     tfbus_rx_t parser;
     tfbus_rx_init(&parser);
-    collect_t c = {.tx = tx, .txlen = txlen, .rx = rx, .rxcap = rxcap};
+    collect_t collector = {.tx = tx, .txlen = txlen, .rx = rx, .rxcap = rxcap};
     int64_t deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     uint8_t chunk[64];
     uint8_t raw[24];
     size_t nraw = 0, total = 0;
-    while (c.got == 0) {
+    while (collector.got == 0) {
         int64_t left_us = deadline - esp_timer_get_time();
         if (left_us <= 0) {
             break;
@@ -158,8 +158,8 @@ int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxc
         // for one byte, then take whatever else is already buffered, so a reply is parsed as
         // soon as it is complete instead of after the full timeout.
         TickType_t ticks = pdMS_TO_TICKS(left_us / 1000);
-        int n = uart_read_bytes(s_uart, chunk, 1, ticks ? ticks : 1);
-        if (n <= 0) {
+        int bytes_read = uart_read_bytes(s_uart, chunk, 1, ticks ? ticks : 1);
+        if (bytes_read <= 0) {
             continue;
         }
         size_t more = 0;
@@ -167,19 +167,19 @@ int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxc
             if (more > sizeof chunk - 1) {
                 more = sizeof chunk - 1;
             }
-            int m = uart_read_bytes(s_uart, chunk + 1, more, 0);
-            if (m > 0) {
-                n += m;
+            int extra_bytes_read = uart_read_bytes(s_uart, chunk + 1, more, 0);
+            if (extra_bytes_read > 0) {
+                bytes_read += extra_bytes_read;
             }
         }
-        for (int i = 0; i < n && nraw < sizeof raw; i++) {
+        for (int i = 0; i < bytes_read && nraw < sizeof raw; i++) {
             raw[nraw++] = chunk[i];
         }
-        total += (size_t)n;
-        tfbus_rx_push(&parser, chunk, (size_t)n, on_frame, &c);
+        total += (size_t)bytes_read;
+        tfbus_rx_push(&parser, chunk, (size_t)bytes_read, on_frame, &collector);
     }
     // Discovery diagnostics: a broadcast got bytes back that do not parse (collision / turnaround).
-    if (c.got == 0 && total > 0 && txlen >= 3 && tx[1] == TFBUS_BROADCAST) {
+    if (collector.got == 0 && total > 0 && txlen >= 3 && tx[1] == TFBUS_BROADCAST) {
         char hex[3 * sizeof raw + 1] = "";
         for (size_t i = 0; i < nraw; i++) {
             snprintf(hex + 3 * i, 4, "%02x ", raw[i]);
@@ -187,5 +187,5 @@ int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxc
         ESP_LOGW(TAG, "bcast type 0x%02x: no reply parsed, %u byte(s) received: %s", tx[2],
                  (unsigned)total, hex);
     }
-    return c.got;
+    return collector.got;
 }

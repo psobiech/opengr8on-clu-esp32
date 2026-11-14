@@ -33,8 +33,8 @@ static bool s_have_in;      // s_in / s_raw valid
 static int64_t s_sampled;   // time of the last good sample
 static int64_t s_failed;    // time of the last failed read (0 = none since the last good one)
 
-static int din8_status(tfbus_vmod_t *m, uint8_t *p, size_t cap);
-static bool din8_command(tfbus_vmod_t *m, uint8_t type, const uint8_t *pl, size_t plen);
+static int din8_status(tfbus_vmod_t *module, uint8_t *status_buffer, size_t cap);
+static bool din8_command(tfbus_vmod_t *module, uint8_t type, const uint8_t *payload, size_t plen);
 
 static const tfbus_vmod_ops_t s_ops = {
     .hw_type = LOCALIO_HW_TYPE,
@@ -45,13 +45,13 @@ static const tfbus_vmod_ops_t s_ops = {
     .command = din8_command,
 };
 
-void localio_setup(const uint32_t *sn, int n, const localio_hw_t *hw)
+void localio_setup(const uint32_t *serial_numbers, int module_count, const localio_hw_t *hardware)
 {
-    s_nmod = n < 1 ? 1 : n > LOCALIO_MAX_MODULES ? LOCALIO_MAX_MODULES : n;
+    s_nmod = module_count < 1 ? 1 : module_count > LOCALIO_MAX_MODULES ? LOCALIO_MAX_MODULES : module_count;
     for (int i = 0; i < s_nmod; i++) {
-        s_mod[i] = (tfbus_vmod_t){.sn = sn[i], .ops = &s_ops, .ctx = (void *)(intptr_t)i};
+        s_mod[i] = (tfbus_vmod_t){.sn = serial_numbers[i], .ops = &s_ops, .ctx = (void *)(intptr_t)i};
     }
-    s_hw = hw;
+    s_hw = hardware;
     s_out = 0;
     s_have_in = false;
     s_failed = 0;
@@ -89,33 +89,33 @@ static bool sample(void)
 }
 
 /** @brief Module @p m: byte i of the 16-bit IO words. */
-static int index_of(const tfbus_vmod_t *m)
+static int index_of(const tfbus_vmod_t *module)
 {
-    return (int)(intptr_t)m->ctx;
+    return (int)(intptr_t)module->ctx;
 }
 
-static int din8_status(tfbus_vmod_t *m, uint8_t *p, size_t cap)
+static int din8_status(tfbus_vmod_t *module, uint8_t *status_buffer, size_t cap)
 {
     if (!sample()) {
         return -1; // no reply: the master takes the module offline
     }
-    int i = index_of(m);
-    tfbus_din8_status((uint8_t)(s_in >> (8 * i)), (uint8_t)(s_out >> (8 * i)), p);
+    int module_index = index_of(module);
+    tfbus_din8_status((uint8_t)(s_in >> (8 * module_index)), (uint8_t)(s_out >> (8 * module_index)), status_buffer);
     return TFBUS_DIN8_STATUS_LEN;
 }
 
 /** @brief MODULE_CMD: ACTIVATE / DEACTIVATE this module's outputs; false (no reply) on a write error. */
-static bool din8_command(tfbus_vmod_t *m, uint8_t type, const uint8_t *pl, size_t plen)
+static bool din8_command(tfbus_vmod_t *module, uint8_t type, const uint8_t *payload, size_t plen)
 {
     if (type != TFBUS_T_MODULE_CMD) {
         return true;
     }
-    int i = index_of(m);
-    uint8_t mine = (uint8_t)(s_out >> (8 * i));
-    if (!tfbus_din8_cmd(pl, plen, &mine)) {
+    int module_index = index_of(module);
+    uint8_t mine = (uint8_t)(s_out >> (8 * module_index));
+    if (!tfbus_din8_cmd(payload, plen, &mine)) {
         return false;
     }
-    uint16_t out = (uint16_t)((s_out & ~(0xffu << (8 * i))) | (uint16_t)(mine << (8 * i)));
+    uint16_t out = (uint16_t)((s_out & ~(0xffu << (8 * module_index))) | (uint16_t)(mine << (8 * module_index)));
     if (out != s_out) {
         if (!s_hw->write(out, s_hw->ctx)) {
             return false;

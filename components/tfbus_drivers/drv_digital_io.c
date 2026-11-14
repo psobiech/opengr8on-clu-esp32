@@ -77,36 +77,36 @@ struct io8 {
 };
 
 /** @brief Driver state of @p m, allocated on first use. */
-static io8_t *ctx(tfbus_module_t *m)
+static io8_t *ctx(tfbus_module_t *module)
 {
-    if (!m->drv_ctx) {
-        io8_t *c = calloc(1, sizeof *c);
-        if (!c) {
+    if (!module->drv_ctx) {
+        io8_t *io_state = calloc(1, sizeof *io_state);
+        if (!io_state) {
             abort(); // out of memory while loading OM.LUA: reboot instead of a NULL dereference
         }
-        c->cfg = m->drv->cfg;
+        io_state->cfg = module->drv->cfg;
         for (int i = 0; i < CH; i++) {
-            c->hold_delay[i] = 500;
-            c->hold_interval[i] = 100;
+            io_state->hold_delay[i] = 500;
+            io_state->hold_interval[i] = 100;
         }
-        m->drv_ctx = c;
+        module->drv_ctx = io_state;
     }
-    return m->drv_ctx;
+    return module->drv_ctx;
 }
 
-static void set_output(tfbus_module_t *m, int ch, bool on);
+static void set_output(tfbus_module_t *module, int channel, bool on);
 
 /**
  * @brief Timed output expired: revert the channel unless the timer was restarted / cancelled (@p gen).
  *
  * Bus task (deferred), under the driver lock: Lua cannot start/cancel concurrently.
  */
-static void timed_fire(tfbus_module_t *m, void *arg, uint32_t gen)
+static void timed_fire(tfbus_module_t *module, void *arg, uint32_t gen)
 {
-    dout_timer_t *t = arg;
-    if (gen == t->gen && t->due_us) {
-        t->due_us = 0;
-        set_output(m, t->ch, t->revert_to);
+    dout_timer_t *timer_context = arg;
+    if (gen == timer_context->gen && timer_context->due_us) {
+        timer_context->due_us = 0;
+        set_output(module, timer_context->ch, timer_context->revert_to);
     }
 }
 
@@ -115,133 +115,133 @@ static void timed_fire(tfbus_module_t *m, void *arg, uint32_t gen)
  */
 static void timed_cb(void *arg)
 {
-    dout_timer_t *t = arg;
-    tfbus_master_defer(timed_fire, t->m, t, t->gen);
+    dout_timer_t *timer_context = arg;
+    tfbus_master_defer(timed_fire, timer_context->m, timer_context, timer_context->gen);
 }
 
 /** @brief Cancel a channel's timed output (a fire already queued becomes stale). */
-static void timed_cancel(io8_t *c, int ch)
+static void timed_cancel(io8_t *io_state, int channel)
 {
-    c->timed[ch].gen++;
-    c->timed[ch].due_us = 0;
-    if (c->timed[ch].timer) {
-        esp_timer_stop(c->timed[ch].timer);
+    io_state->timed[channel].gen++;
+    io_state->timed[channel].due_us = 0;
+    if (io_state->timed[channel].timer) {
+        esp_timer_stop(io_state->timed[channel].timer);
     }
 }
 
 /** @brief tfbus_driver_t::overdue: revert outputs whose timer expired but whose deferred call was dropped. */
-static void overdue(tfbus_module_t *m)
+static void overdue(tfbus_module_t *module)
 {
-    io8_t *c = m->drv_ctx;
+    io8_t *io_state = module->drv_ctx;
     int64_t now = esp_timer_get_time();
     for (int ch = 0; ch < CH; ch++) {
-        dout_timer_t *t = &c->timed[ch];
-        if (t->due_us && now >= t->due_us) {
-            t->due_us = 0;
-            set_output(m, t->ch, t->revert_to);
+        dout_timer_t *timer_context = &io_state->timed[ch];
+        if (timer_context->due_us && now >= timer_context->due_us) {
+            timer_context->due_us = 0;
+            set_output(module, timer_context->ch, timer_context->revert_to);
         }
     }
 }
 
 /** @brief tfbus_driver_t::deinit: stop and delete the output timers. */
-static void deinit(tfbus_module_t *m)
+static void deinit(tfbus_module_t *module)
 {
-    io8_t *c = m->drv_ctx;
+    io8_t *io_state = module->drv_ctx;
     for (int ch = 0; ch < CH; ch++) {
-        if (c->timed[ch].timer) {
-            esp_timer_stop(c->timed[ch].timer);
-            esp_timer_delete(c->timed[ch].timer);
-            c->timed[ch].timer = NULL;
+        if (io_state->timed[ch].timer) {
+            esp_timer_stop(io_state->timed[ch].timer);
+            esp_timer_delete(io_state->timed[ch].timer);
+            io_state->timed[ch].timer = NULL;
         }
     }
 }
 
 /** @brief Start (or restart) a channel's timed output: revert to @p revert_to after @p ms. */
-static void timed_start(tfbus_module_t *m, io8_t *c, int ch, bool revert_to, uint32_t ms)
+static void timed_start(tfbus_module_t *module, io8_t *io_state, int channel, bool revert_to, uint32_t ms)
 {
-    dout_timer_t *t = &c->timed[ch];
-    if (!t->timer) {
-        t->m = m;
-        t->ch = ch;
-        const esp_timer_create_args_t a = {.callback = timed_cb, .arg = t, .name = "dout"};
-        if (esp_timer_create(&a, &t->timer) != ESP_OK) {
+    dout_timer_t *timer_context = &io_state->timed[channel];
+    if (!timer_context->timer) {
+        timer_context->m = module;
+        timer_context->ch = channel;
+        const esp_timer_create_args_t timer_args = {.callback = timed_cb, .arg = timer_context, .name = "dout"};
+        if (esp_timer_create(&timer_args, &timer_context->timer) != ESP_OK) {
             return;
         }
     }
-    t->revert_to = revert_to;
-    esp_timer_stop(t->timer);
-    t->gen++;
-    t->due_us = esp_timer_get_time() + (int64_t)ms * 1000;
-    esp_timer_start_once(t->timer, (uint64_t)ms * 1000);
+    timer_context->revert_to = revert_to;
+    esp_timer_stop(timer_context->timer);
+    timer_context->gen++;
+    timer_context->due_us = esp_timer_get_time() + (int64_t)ms * 1000;
+    esp_timer_start_once(timer_context->timer, (uint64_t)ms * 1000);
 }
 
 /** @brief tfbus_driver_t::io_new: remember the Lua name of a DIN / DOUT channel. */
-static void io_new(tfbus_module_t *m, int cls, int ch, const char *name)
+static void io_new(tfbus_module_t *module, int cls, int channel, const char *name)
 {
-    io8_t *c = ctx(m);
-    if (ch < 0 || ch >= CH) {
+    io8_t *io_state = ctx(module);
+    if (channel < 0 || channel >= CH) {
         return;
     }
     if (cls == CLS_DOUT) {
-        strlcpy(c->dout[ch], name, sizeof c->dout[ch]);
+        strlcpy(io_state->dout[channel], name, sizeof io_state->dout[channel]);
     } else if (cls == CLS_DIN) {
-        strlcpy(c->din[ch], name, sizeof c->din[ch]);
+        strlcpy(io_state->din[channel], name, sizeof io_state->din[channel]);
     }
 }
 
 /**
  * @brief tfbus_driver_t::init: queue the channel init sequence and re-apply the outputs Lua requested.
  */
-static void init(tfbus_module_t *m)
+static void init(tfbus_module_t *module)
 {
-    const dio_cfg_t *cfg = ctx(m)->cfg;
+    const dio_cfg_t *cfg = ctx(module)->cfg;
     for (int ch = 0; ch < cfg->ndout; ch++) {
-        bool on = ctx(m)->desired & (1 << ch); // real CLU sends DEACTIVATE (all off at boot)
-        drv_queue_record(m, on ? 0x08 : 0x09, 0x01, (uint8_t[]){(uint8_t)(1 << ch)}, 1);
+        bool on = ctx(module)->desired & (1 << ch); // real CLU sends DEACTIVATE (all off at boot)
+        drv_queue_record(module, on ? 0x08 : 0x09, 0x01, (uint8_t[]){(uint8_t)(1 << ch)}, 1);
         if (cfg->relay) {
-            drv_queue_record(m, 0x0b, 0x00, (uint8_t[]){(uint8_t)ch, 0x02}, 2);       // CHANNEL_MAP
+            drv_queue_record(module, 0x0b, 0x00, (uint8_t[]){(uint8_t)ch, 0x02}, 2);       // CHANNEL_MAP
         }
-        drv_queue_record(m, 0x0f, 0x00, (uint8_t[]){(uint8_t)ch, 1, 0, 0}, 4);          // MODULE_PARAM out
+        drv_queue_record(module, 0x0f, 0x00, (uint8_t[]){(uint8_t)ch, 1, 0, 0}, 4);          // MODULE_PARAM out
     }
     if (cfg->relay) {
         for (int ch = cfg->ndout - 1; ch >= 0; ch--) {
-            drv_queue_record(m, 0x0b, 0x00, (uint8_t[]){(uint8_t)ch, 0x02}, 2);
+            drv_queue_record(module, 0x0b, 0x00, (uint8_t[]){(uint8_t)ch, 0x02}, 2);
         }
     }
     for (int ch = 0; ch < cfg->ndin; ch++) {
-        drv_queue_record(m, 0x04, 0x00, (uint8_t[]){0, (uint8_t)ch, 0}, 3);             // CHANNEL_INIT
-        drv_queue_record(m, 0x0f, 0x00, (uint8_t[]){(uint8_t)ch, 0, 0, 0}, 4);          // MODULE_PARAM in
+        drv_queue_record(module, 0x04, 0x00, (uint8_t[]){0, (uint8_t)ch, 0}, 3);             // CHANNEL_INIT
+        drv_queue_record(module, 0x0f, 0x00, (uint8_t[]){(uint8_t)ch, 0, 0, 0}, 4);          // MODULE_PARAM in
     }
 }
 
 /** @brief Queue ACTIVATE / DEACTIVATE for one output channel. */
-static void set_output(tfbus_module_t *m, int ch, bool on)
+static void set_output(tfbus_module_t *module, int channel, bool on)
 {
-    io8_t *c = ctx(m);
-    c->desired = on ? (c->desired | (1 << ch)) : (c->desired & ~(1 << ch));
-    drv_queue_record(m, on ? 0x08 : 0x09, 0x01, (uint8_t[]){(uint8_t)(1 << ch)}, 1);
+    io8_t *io_state = ctx(module);
+    io_state->desired = on ? (io_state->desired | (1 << channel)) : (io_state->desired & ~(1 << channel));
+    drv_queue_record(module, on ? 0x08 : 0x09, 0x01, (uint8_t[]){(uint8_t)(1 << channel)}, 1);
 }
 
 /**
  * @brief tfbus_driver_t::io_set: DOUT Value (0) drives the output; DIN HoldDelay (2) / HoldInterval (3) are cached.
  */
-static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int val)
+static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel, int idx, int val)
 {
-    io8_t *c = ctx(m);
-    if (ch < 0 || ch >= CH) {
+    io8_t *io_state = ctx(module);
+    if (channel < 0 || channel >= CH) {
         return false;
     }
     if (cls == CLS_DOUT && idx == 0) { // Value
         bool on = lua_toboolean(L, val) && !(lua_isnumber(L, val) && lua_tonumber(L, val) == 0);
-        timed_cancel(c, ch);
-        set_output(m, ch, on);
+        timed_cancel(io_state, channel);
+        set_output(module, channel, on);
         tfbus_obj_store(L, obj, 0, on);
         return true;
     }
     if (cls == CLS_DIN && idx == 2) {
-        c->hold_delay[ch] = (uint16_t)luaL_optinteger(L, val, 500);
+        io_state->hold_delay[channel] = (uint16_t)luaL_optinteger(L, val, 500);
     } else if (cls == CLS_DIN && idx == 3) {
-        c->hold_interval[ch] = (uint16_t)luaL_optinteger(L, val, 100);
+        io_state->hold_interval[channel] = (uint16_t)luaL_optinteger(L, val, 100);
     }
     return false; // store generically
 }
@@ -251,10 +251,10 @@ static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, in
  *
  * Time > 0: output takes the new state for that time, then returns to the previous one.
  */
-static int io_execute(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int first,
+static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel, int idx, int first,
                       int nargs)
 {
-    if (cls != CLS_DOUT || ch < 0 || ch >= CH) {
+    if (cls != CLS_DOUT || channel < 0 || channel >= CH) {
         return -1;
     }
     lua_getfield(L, obj, "_f");
@@ -271,12 +271,12 @@ static int io_execute(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch,
     }
     // Time [ms] > 0: output takes the new state for that time, then returns to the previous one.
     lua_Integer ms = nargs > 0 ? luaL_optinteger(L, first, 0) : 0;
-    io8_t *c = ctx(m);
-    timed_cancel(c, ch);
+    io8_t *io_state = ctx(module);
+    timed_cancel(io_state, channel);
     if (ms > 0 && on != cur) {
-        timed_start(m, c, ch, cur, (uint32_t)ms);
+        timed_start(module, io_state, channel, cur, (uint32_t)ms);
     }
-    set_output(m, ch, on);
+    set_output(module, channel, on);
     tfbus_obj_store(L, obj, 0, on);
     return 0;
 }
@@ -284,85 +284,85 @@ static int io_execute(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch,
 /**
  * @brief Turn input bitmask changes into DIN values and events (change, on/off, click/short/long, hold).
  */
-static void din_edges(tfbus_module_t *m, io8_t *c, uint8_t inputs)
+static void din_edges(tfbus_module_t *module, io8_t *io_state, uint8_t inputs)
 {
     int64_t now = esp_timer_get_time();
     for (int ch = 0; ch < CH; ch++) {
-        const char *n = c->din[ch];
-        bool was = c->inputs & (1 << ch);
-        bool is = inputs & (1 << ch);
-        if (!n[0]) {
+        const char *input_object_name = io_state->din[ch];
+        bool was = io_state->inputs & (1 << ch);
+        bool input_active = inputs & (1 << ch);
+        if (!input_object_name[0]) {
             continue;
         }
-        if (is != was) {
-            clu_lua_post_number(n, 0, is);
-            clu_lua_post_event(n, EV_CHANGE);
-            clu_lua_post_event(n, is ? EV_ON : EV_OFF);
-            if (is) {
-                c->pressed_at[ch] = now;
-                c->next_hold[ch] = now + (int64_t)c->hold_delay[ch] * 1000;
-            } else if (c->pressed_at[ch]) {
-                int64_t ms = (now - c->pressed_at[ch]) / 1000;
-                clu_lua_post_event(n, ms < 500 ? EV_CLICK : ms < 2000 ? EV_SHORT : EV_LONG);
-                c->pressed_at[ch] = 0;
+        if (input_active != was) {
+            clu_lua_post_number(input_object_name, 0, input_active);
+            clu_lua_post_event(input_object_name, EV_CHANGE);
+            clu_lua_post_event(input_object_name, input_active ? EV_ON : EV_OFF);
+            if (input_active) {
+                io_state->pressed_at[ch] = now;
+                io_state->next_hold[ch] = now + (int64_t)io_state->hold_delay[ch] * 1000;
+            } else if (io_state->pressed_at[ch]) {
+                int64_t ms = (now - io_state->pressed_at[ch]) / 1000;
+                clu_lua_post_event(input_object_name, ms < 500 ? EV_CLICK : ms < 2000 ? EV_SHORT : EV_LONG);
+                io_state->pressed_at[ch] = 0;
             }
-        } else if (is && c->pressed_at[ch] && now >= c->next_hold[ch]) {
-            clu_lua_post_event(n, EV_HOLD);
-            c->next_hold[ch] = now + (int64_t)c->hold_interval[ch] * 1000;
+        } else if (input_active && io_state->pressed_at[ch] && now >= io_state->next_hold[ch]) {
+            clu_lua_post_event(input_object_name, EV_HOLD);
+            io_state->next_hold[ch] = now + (int64_t)io_state->hold_interval[ch] * 1000;
         }
     }
-    c->inputs = inputs;
+    io_state->inputs = inputs;
 }
 
 /**
  * @brief Report output bitmask changes to the DOUT objects (Value + OnValueChange / OnSwitchOn / OnSwitchOff).
  */
-static void dout_report(io8_t *c, uint8_t outputs)
+static void dout_report(io8_t *io_state, uint8_t outputs)
 {
     for (int ch = 0; ch < CH; ch++) {
-        bool was = c->outputs & (1 << ch);
-        bool is = outputs & (1 << ch);
-        if (is != was && c->dout[ch][0]) {
-            clu_lua_post_number(c->dout[ch], 0, is);
-            clu_lua_post_event(c->dout[ch], 0);          // OnValueChange
-            clu_lua_post_event(c->dout[ch], is ? 1 : 2); // OnSwitchOn / OnSwitchOff
+        bool was = io_state->outputs & (1 << ch);
+        bool output_active = outputs & (1 << ch);
+        if (output_active != was && io_state->dout[ch][0]) {
+            clu_lua_post_number(io_state->dout[ch], 0, output_active);
+            clu_lua_post_event(io_state->dout[ch], 0);          // OnValueChange
+            clu_lua_post_event(io_state->dout[ch], output_active ? 1 : 2); // OnSwitchOn / OnSwitchOff
         }
     }
-    c->outputs = outputs;
+    io_state->outputs = outputs;
 }
 
 /** @brief tfbus_driver_t::on_status: track inputs / outputs; the first status is taken without edge events. */
-static void on_status(tfbus_module_t *m, const uint8_t *pl, size_t len)
+static void on_status(tfbus_module_t *module, const uint8_t *status_payload, size_t len)
 {
-    io8_t *c = ctx(m);
-    tfbus_tlv_t r[4];
-    int n = tfbus_parse_tlv(pl, len, r, 4);
-    uint8_t inputs = c->inputs, outputs = c->outputs;
-    for (int i = 0; i < n; i++) {
-        if (r[i].type == 0x00 && r[i].len >= 1) {
-            inputs = r[i].data[0];
-        } else if (r[i].type == 0x01 && r[i].len >= 1) {
-            outputs = r[i].data[0];
+    io8_t *io_state = ctx(module);
+    tfbus_tlv_t status_records[4];
+    int status_record_count = tfbus_parse_tlv(status_payload, len, status_records, 4);
+    uint8_t inputs = io_state->inputs, outputs = io_state->outputs;
+    for (int i = 0; i < status_record_count; i++) {
+        if (status_records[i].type == 0x00 && status_records[i].len >= 1) {
+            inputs = status_records[i].data[0];
+        } else if (status_records[i].type == 0x01 && status_records[i].len >= 1) {
+            outputs = status_records[i].data[0];
         }
     }
-    if (!c->have_status) {
+    if (!io_state->have_status) {
         // First status after boot: take state silently (no edge events), publish values.
-        c->have_status = true;
-        c->inputs = inputs;
-        c->outputs = outputs;
+        io_state->have_status = true;
+        io_state->inputs = inputs;
+        io_state->outputs = outputs;
         for (int ch = 0; ch < CH; ch++) {
-            if (c->din[ch][0]) {
-                clu_lua_post_number(c->din[ch], 0, (inputs >> ch) & 1);
+            if (io_state->din[ch][0]) {
+                clu_lua_post_number(io_state->din[ch], 0, (inputs >> ch) & 1);
             }
-            if (c->dout[ch][0]) {
-                clu_lua_post_number(c->dout[ch], 0, (outputs >> ch) & 1);
+            if (io_state->dout[ch][0]) {
+                clu_lua_post_number(io_state->dout[ch], 0, (outputs >> ch) & 1);
             }
         }
         return;
     }
-    din_edges(m, c, inputs);
-    if (outputs != c->outputs) {
-        dout_report(c, outputs);
+    din_edges(module, io_state, inputs);
+    if (outputs != io_state->outputs) {
+        dout_report(io_state, outputs);
     }
 }
 

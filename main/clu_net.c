@@ -29,36 +29,36 @@ static net_if_t s_if[CLU_NET_IF_COUNT];
 static uint32_t s_dns[2]; // network byte order
 
 /** @brief Write one u32 NVS key (errors ignored). */
-static void put_u32(nvs_handle_t h, const char *k, uint32_t v)
+static void put_u32(nvs_handle_t nvs_handle, const char *key, uint32_t value)
 {
-    nvs_set_u32(h, k, v);
+    nvs_set_u32(nvs_handle, key, value);
 }
 
-/** @brief Persist the static IP config of interface @p i to NVS. */
-static void save(clu_net_if_t i)
+/** @brief Persist the static IP config of interface @p interface_index to NVS. */
+static void save(clu_net_if_t interface_index)
 {
-    nvs_handle_t h;
-    if (nvs_open(s_ns[i], NVS_READWRITE, &h) != ESP_OK) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(s_ns[interface_index], NVS_READWRITE, &nvs_handle) != ESP_OK) {
         return;
     }
-    put_u32(h, "ip", s_if[i].ip);
-    put_u32(h, "gw", s_if[i].gw);
-    put_u32(h, "mask", s_if[i].mask);
-    nvs_commit(h);
-    nvs_close(h);
+    put_u32(nvs_handle, "ip", s_if[interface_index].ip);
+    put_u32(nvs_handle, "gw", s_if[interface_index].gw);
+    put_u32(nvs_handle, "mask", s_if[interface_index].mask);
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
 }
 
 /** @brief Persist the DNS servers to NVS. */
 static void save_dns(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS_DNS, NVS_READWRITE, &h) != ESP_OK) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NS_DNS, NVS_READWRITE, &nvs_handle) != ESP_OK) {
         return;
     }
-    put_u32(h, "dns1", s_dns[0]);
-    put_u32(h, "dns2", s_dns[1]);
-    nvs_commit(h);
-    nvs_close(h);
+    put_u32(nvs_handle, "dns1", s_dns[0]);
+    put_u32(nvs_handle, "dns2", s_dns[1]);
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
 }
 
 /** @brief Apply DNS server @p idx (0 = main, 1 = backup) to @p netif; no-op for address 0. */
@@ -67,96 +67,96 @@ static void set_dns(esp_netif_t *netif, int idx, uint32_t addr)
     if (!netif || !addr) {
         return;
     }
-    esp_netif_dns_info_t d = {.ip.type = ESP_IPADDR_TYPE_V4, .ip.u_addr.ip4.addr = addr};
-    esp_netif_set_dns_info(netif, idx == 0 ? ESP_NETIF_DNS_MAIN : ESP_NETIF_DNS_BACKUP, &d);
+    esp_netif_dns_info_t dns_info = {.ip.type = ESP_IPADDR_TYPE_V4, .ip.u_addr.ip4.addr = addr};
+    esp_netif_set_dns_info(netif, idx == 0 ? ESP_NETIF_DNS_MAIN : ESP_NETIF_DNS_BACKUP, &dns_info);
 }
 
-void clu_net_init(clu_net_if_t i, esp_netif_t *netif)
+void clu_net_init(clu_net_if_t interface_index, esp_netif_t *netif)
 {
-    net_if_t *n = &s_if[i];
-    n->netif = netif;
-    nvs_handle_t h;
-    if (nvs_open(s_ns[i], NVS_READONLY, &h) == ESP_OK) {
-        nvs_get_u32(h, "ip", &n->ip);
-        nvs_get_u32(h, "gw", &n->gw);
-        nvs_get_u32(h, "mask", &n->mask);
-        nvs_close(h);
+    net_if_t *interface_config = &s_if[interface_index];
+    interface_config->netif = netif;
+    nvs_handle_t nvs_handle;
+    if (nvs_open(s_ns[interface_index], NVS_READONLY, &nvs_handle) == ESP_OK) {
+        nvs_get_u32(nvs_handle, "ip", &interface_config->ip);
+        nvs_get_u32(nvs_handle, "gw", &interface_config->gw);
+        nvs_get_u32(nvs_handle, "mask", &interface_config->mask);
+        nvs_close(nvs_handle);
     }
-    if (nvs_open(NVS_NS_DNS, NVS_READONLY, &h) == ESP_OK) {
-        nvs_get_u32(h, "dns1", &s_dns[0]);
-        nvs_get_u32(h, "dns2", &s_dns[1]);
-        nvs_close(h);
+    if (nvs_open(NVS_NS_DNS, NVS_READONLY, &nvs_handle) == ESP_OK) {
+        nvs_get_u32(nvs_handle, "dns1", &s_dns[0]);
+        nvs_get_u32(nvs_handle, "dns2", &s_dns[1]);
+        nvs_close(nvs_handle);
     }
-    clu_net_apply(i);
+    clu_net_apply(interface_index);
 }
 
-void clu_net_apply(clu_net_if_t i)
+void clu_net_apply(clu_net_if_t interface_index)
 {
-    net_if_t *n = &s_if[i];
-    if (!n->netif) {
+    net_if_t *interface_config = &s_if[interface_index];
+    if (!interface_config->netif) {
         return;
     }
-    if (!n->ip) {
-        esp_netif_dhcpc_start(n->netif); // ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED is fine
-        ESP_LOGI(TAG, "%s: DHCP", s_name[i]);
+    if (!interface_config->ip) {
+        esp_netif_dhcpc_start(interface_config->netif); // ESP_ERR_ESP_NETIF_DHCP_ALREADY_STARTED is fine
+        ESP_LOGI(TAG, "%s: DHCP", s_name[interface_index]);
         return;
     }
-    esp_netif_dhcpc_stop(n->netif);
-    esp_netif_ip_info_t ii = {.ip.addr = n->ip, .gw.addr = n->gw, .netmask.addr = n->mask};
-    esp_err_t err = esp_netif_set_ip_info(n->netif, &ii);
-    set_dns(n->netif, 0, s_dns[0] ? s_dns[0] : n->gw);
-    set_dns(n->netif, 1, s_dns[1]);
-    ESP_LOGI(TAG, "%s: static " IPSTR " gw " IPSTR " mask " IPSTR " (%s)", s_name[i], IP2STR(&ii.ip),
-             IP2STR(&ii.gw), IP2STR(&ii.netmask), esp_err_to_name(err));
+    esp_netif_dhcpc_stop(interface_config->netif);
+    esp_netif_ip_info_t ip_info = {.ip.addr = interface_config->ip, .gw.addr = interface_config->gw, .netmask.addr = interface_config->mask};
+    esp_err_t err = esp_netif_set_ip_info(interface_config->netif, &ip_info);
+    set_dns(interface_config->netif, 0, s_dns[0] ? s_dns[0] : interface_config->gw);
+    set_dns(interface_config->netif, 1, s_dns[1]);
+    ESP_LOGI(TAG, "%s: static " IPSTR " gw " IPSTR " mask " IPSTR " (%s)", s_name[interface_index], IP2STR(&ip_info.ip),
+             IP2STR(&ip_info.gw), IP2STR(&ip_info.netmask), esp_err_to_name(err));
 }
 
-bool clu_net_set_static(clu_net_if_t i, const char *ip, const char *gw)
+bool clu_net_set_static(clu_net_if_t interface_index, const char *ip, const char *gateway_address)
 {
-    net_if_t *n = &s_if[i];
-    struct in_addr a, g = {0};
-    if (!inet_aton(ip, &a)) {
+    net_if_t *interface_config = &s_if[interface_index];
+    struct in_addr ip_address, gateway = {0};
+    if (!inet_aton(ip, &ip_address)) {
         return false;
     }
-    if (a.s_addr == 0) { // 0.0.0.0 -> back to DHCP (not a Grenton convention)
-        n->ip = n->gw = n->mask = 0;
-        save(i);
+    if (ip_address.s_addr == 0) { // 0.0.0.0 -> back to DHCP (not a Grenton convention)
+        interface_config->ip = interface_config->gw = interface_config->mask = 0;
+        save(interface_index);
         return true;
     }
-    if (gw && *gw && !inet_aton(gw, &g)) {
+    if (gateway_address && *gateway_address && !inet_aton(gateway_address, &gateway)) {
         return false;
     }
-    n->ip = a.s_addr;
-    n->gw = g.s_addr;
-    n->mask = htonl(0xffffff00); // req_set_clu_ip carries no netmask: assume /24
-    if (n->gw && ((n->gw ^ n->ip) & n->mask)) {
-        n->mask = 0; // gateway outside /24: let lwIP route everything on-link
+    interface_config->ip = ip_address.s_addr;
+    interface_config->gw = gateway.s_addr;
+    interface_config->mask = htonl(0xffffff00); // req_set_clu_ip carries no netmask: assume /24
+    if (interface_config->gw && ((interface_config->gw ^ interface_config->ip) & interface_config->mask)) {
+        interface_config->mask = 0; // gateway outside /24: let lwIP route everything on-link
     }
-    save(i);
+    save(interface_index);
     return true;
 }
 
 void clu_net_set_dns(int idx, const char *addr)
 {
-    struct in_addr a;
-    if (idx < 0 || idx > 1 || !addr || !inet_aton(addr, &a) || s_dns[idx] == a.s_addr) {
+    struct in_addr dns_address;
+    if (idx < 0 || idx > 1 || !addr || !inet_aton(addr, &dns_address) || s_dns[idx] == dns_address.s_addr) {
         return;
     }
-    s_dns[idx] = a.s_addr;
+    s_dns[idx] = dns_address.s_addr;
     save_dns();
     for (int i = 0; i < CLU_NET_IF_COUNT; i++) {
         if (s_if[i].ip) {
-            set_dns(s_if[i].netif, idx, a.s_addr);
+            set_dns(s_if[i].netif, idx, dns_address.s_addr);
         }
     }
 }
 
-uint32_t clu_net_ip(clu_net_if_t i)
+uint32_t clu_net_ip(clu_net_if_t interface_index)
 {
-    esp_netif_ip_info_t ii;
-    if (!s_if[i].netif || esp_netif_get_ip_info(s_if[i].netif, &ii) != ESP_OK) {
+    esp_netif_ip_info_t ip_info;
+    if (!s_if[interface_index].netif || esp_netif_get_ip_info(s_if[interface_index].netif, &ip_info) != ESP_OK) {
         return 0;
     }
-    return ii.ip.addr;
+    return ip_info.ip.addr;
 }
 
 // Preference when the subnet does not decide: wired first.
@@ -164,12 +164,12 @@ static const clu_net_if_t s_order[CLU_NET_IF_COUNT] = {CLU_NET_ETH, CLU_NET_WIFI
 
 clu_net_if_t clu_net_if_for(uint32_t peer_be)
 {
-    esp_netif_ip_info_t ii;
+    esp_netif_ip_info_t ip_info;
     if (peer_be) {
         for (int k = 0; k < CLU_NET_IF_COUNT; k++) {
-            const net_if_t *n = &s_if[s_order[k]];
-            if (n->netif && esp_netif_get_ip_info(n->netif, &ii) == ESP_OK && ii.ip.addr &&
-                ((ii.ip.addr ^ peer_be) & ii.netmask.addr) == 0) {
+            const net_if_t *interface_config = &s_if[s_order[k]];
+            if (interface_config->netif && esp_netif_get_ip_info(interface_config->netif, &ip_info) == ESP_OK && ip_info.ip.addr &&
+                ((ip_info.ip.addr ^ peer_be) & ip_info.netmask.addr) == 0) {
                 return s_order[k];
             }
         }

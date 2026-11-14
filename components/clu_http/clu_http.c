@@ -83,25 +83,25 @@ static SemaphoreHandle_t s_wait_sem;
 static uint32_t s_aborted[ABORTED_MAX]; // under s_lock
 static int s_aborted_pos;
 
-static void msg_free(msg_t *m)
+static void msg_free(msg_t *message)
 {
-    if (!m) {
+    if (!message) {
         return;
     }
-    free(m->method);
-    free(m->path);
-    free(m->query);
-    free(m->headers);
-    free(m->body);
-    free(m);
+    free(message->method);
+    free(message->path);
+    free(message->query);
+    free(message->headers);
+    free(message->body);
+    free(message);
 }
 
-static void job_free(job_t *j)
+static void job_free(job_t *job)
 {
-    free(j->url);
-    free(j->headers);
-    free(j->body);
-    free(j);
+    free(job->url);
+    free(job->headers);
+    free(job->body);
+    free(job);
 }
 
 static uint32_t next_id(void)
@@ -117,22 +117,22 @@ static uint32_t next_id(void)
 
 static bool is_aborted(uint32_t id)
 {
-    bool r = false;
+    bool aborted = false;
     xSemaphoreTake(s_lock, portMAX_DELAY);
     for (int i = 0; i < ABORTED_MAX; i++) {
-        r |= s_aborted[i] == id;
+        aborted |= s_aborted[i] == id;
     }
     xSemaphoreGive(s_lock);
-    return r;
+    return aborted;
 }
 
 /** @brief Hand @p m to the Lua task; freed if the queue stays full. */
-static bool post(msg_t *m)
+static bool post(msg_t *message)
 {
-    if (xQueueSend(s_msgs, &m, pdMS_TO_TICKS(100)) != pdTRUE) {
-        ESP_LOGW(TAG, "queue to Lua full: %s %lu dropped", m->kind == MSG_REQ ? "request" : "response",
-                 (unsigned long)m->id);
-        msg_free(m);
+    if (xQueueSend(s_msgs, &message, pdMS_TO_TICKS(100)) != pdTRUE) {
+        ESP_LOGW(TAG, "queue to Lua full: %s %lu dropped", message->kind == MSG_REQ ? "request" : "response",
+                 (unsigned long)message->id);
+        msg_free(message);
         return false;
     }
     return true;
@@ -148,58 +148,58 @@ typedef struct {
     bool overflow;
 } buf_t;
 
-static void buf_add(buf_t *b, const char *s, size_t n)
+static void buf_add(buf_t *buffer, const char *source, size_t source_length)
 {
-    if (b->overflow || b->len + n > b->max) {
-        b->overflow = true;
+    if (buffer->overflow || buffer->len + source_length > buffer->max) {
+        buffer->overflow = true;
         return;
     }
-    if (b->len + n + 1 > b->cap) {
-        size_t cap = b->cap ? b->cap : 256;
-        while (cap < b->len + n + 1) {
+    if (buffer->len + source_length + 1 > buffer->cap) {
+        size_t cap = buffer->cap ? buffer->cap : 256;
+        while (cap < buffer->len + source_length + 1) {
             cap *= 2;
         }
-        char *p = realloc(b->p, cap);
-        if (!p) {
-            b->overflow = true;
+        char *resized_data = realloc(buffer->p, cap);
+        if (!resized_data) {
+            buffer->overflow = true;
             return;
         }
-        b->p = p;
-        b->cap = cap;
+        buffer->p = resized_data;
+        buffer->cap = cap;
     }
-    memcpy(b->p + b->len, s, n);
-    b->len += n;
-    b->p[b->len] = 0;
+    memcpy(buffer->p + buffer->len, source, source_length);
+    buffer->len += source_length;
+    buffer->p[buffer->len] = 0;
 }
 
 typedef struct {
     buf_t hdr, body;
 } acc_t;
 
-static esp_err_t on_client_event(esp_http_client_event_t *e)
+static esp_err_t on_client_event(esp_http_client_event_t *event)
 {
-    acc_t *a = e->user_data;
-    switch (e->event_id) {
+    acc_t *accumulator = event->user_data;
+    switch (event->event_id) {
     case HTTP_EVENT_HEADERS_SENT: // (again) after a redirect: keep the final response only
-        a->hdr.len = a->body.len = 0;
-        a->hdr.overflow = a->body.overflow = false;
+        accumulator->hdr.len = accumulator->body.len = 0;
+        accumulator->hdr.overflow = accumulator->body.overflow = false;
         break;
     case HTTP_EVENT_ON_HEADER:
-        buf_add(&a->hdr, e->header_key, strlen(e->header_key));
-        buf_add(&a->hdr, ": ", 2);
-        buf_add(&a->hdr, e->header_value, strlen(e->header_value));
-        buf_add(&a->hdr, "\r\n", 2);
+        buf_add(&accumulator->hdr, event->header_key, strlen(event->header_key));
+        buf_add(&accumulator->hdr, ": ", 2);
+        buf_add(&accumulator->hdr, event->header_value, strlen(event->header_value));
+        buf_add(&accumulator->hdr, "\r\n", 2);
         break;
-    case HTTP_EVENT_ON_DATA: buf_add(&a->body, e->data, (size_t)e->data_len); break;
+    case HTTP_EVENT_ON_DATA: buf_add(&accumulator->body, event->data, (size_t)event->data_len); break;
     default: break;
     }
     return ESP_OK;
 }
 
 /** @brief Apply "Name: value\r\n" lines to the client. */
-static void set_headers(esp_http_client_handle_t c, char *h)
+static void set_headers(esp_http_client_handle_t http_client, char *header_lines)
 {
-    for (char *line = h; line && *line;) {
+    for (char *line = header_lines; line && *line;) {
         char *eol = strstr(line, "\r\n");
         if (eol) {
             *eol = 0;
@@ -207,143 +207,143 @@ static void set_headers(esp_http_client_handle_t c, char *h)
         char *colon = strchr(line, ':');
         if (colon && colon > line) {
             *colon = 0;
-            char *v = colon + 1;
-            while (*v == ' ') {
-                v++;
+            char *trimmed_value = colon + 1;
+            while (*trimmed_value == ' ') {
+                trimmed_value++;
             }
-            esp_http_client_set_header(c, line, v);
+            esp_http_client_set_header(http_client, line, trimmed_value);
         }
         line = eol ? eol + 2 : NULL;
     }
 }
 
 /** @brief Run one job; the result goes to the Lua task. */
-static void run_job(job_t *j)
+static void run_job(job_t *job)
 {
-    msg_t *m = calloc(1, sizeof *m);
-    if (!m) {
+    msg_t *message = calloc(1, sizeof *message);
+    if (!message) {
         return;
     }
-    m->kind = MSG_RESP;
-    m->id = j->id;
-    m->status = -1;
+    message->kind = MSG_RESP;
+    message->id = job->id;
+    message->status = -1;
     acc_t acc = {.hdr = {.max = HEAD_MAX}, .body = {.max = s_cfg.max_body}};
-    esp_http_client_config_t cc = {
-        .url = j->url,
-        .method = j->method,
-        .timeout_ms = j->timeout_ms,
+    esp_http_client_config_t client_config = {
+        .url = job->url,
+        .method = job->method,
+        .timeout_ms = job->timeout_ms,
         .event_handler = on_client_event,
         .user_data = &acc,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .keep_alive_enable = false,
     };
-    esp_http_client_handle_t c = esp_http_client_init(&cc);
-    if (!c) {
-        ESP_LOGW(TAG, "request %lu: bad URL %s", (unsigned long)j->id, j->url);
+    esp_http_client_handle_t http_client = esp_http_client_init(&client_config);
+    if (!http_client) {
+        ESP_LOGW(TAG, "request %lu: bad URL %s", (unsigned long)job->id, job->url);
     } else {
-        set_headers(c, j->headers);
-        if (j->body_len) {
-            esp_http_client_set_post_field(c, j->body, (int)j->body_len);
+        set_headers(http_client, job->headers);
+        if (job->body_len) {
+            esp_http_client_set_post_field(http_client, job->body, (int)job->body_len);
         }
-        esp_err_t err = esp_http_client_perform(c);
+        esp_err_t err = esp_http_client_perform(http_client);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "request %lu: %s %s", (unsigned long)j->id, j->url, esp_err_to_name(err));
+            ESP_LOGW(TAG, "request %lu: %s %s", (unsigned long)job->id, job->url, esp_err_to_name(err));
         } else if (acc.body.overflow || acc.hdr.overflow) {
-            ESP_LOGW(TAG, "request %lu: response larger than %u bytes, dropped", (unsigned long)j->id,
+            ESP_LOGW(TAG, "request %lu: response larger than %u bytes, dropped", (unsigned long)job->id,
                      (unsigned)s_cfg.max_body);
         } else {
-            m->status = esp_http_client_get_status_code(c);
+            message->status = esp_http_client_get_status_code(http_client);
         }
-        esp_http_client_cleanup(c);
+        esp_http_client_cleanup(http_client);
     }
-    if (m->status >= 0) {
-        m->headers = acc.hdr.p;
-        m->body = acc.body.p;
-        m->body_len = acc.body.len;
+    if (message->status >= 0) {
+        message->headers = acc.hdr.p;
+        message->body = acc.body.p;
+        message->body_len = acc.body.len;
         acc.hdr.p = acc.body.p = NULL;
     }
     free(acc.hdr.p);
     free(acc.body.p);
-    if (is_aborted(j->id)) {
-        msg_free(m);
+    if (is_aborted(job->id)) {
+        msg_free(message);
         return;
     }
-    post(m);
+    post(message);
 }
 
 static void worker_task(void *arg)
 {
     for (;;) {
-        job_t *j;
-        if (xQueueReceive(s_jobs, &j, portMAX_DELAY) != pdTRUE) {
+        job_t *job;
+        if (xQueueReceive(s_jobs, &job, portMAX_DELAY) != pdTRUE) {
             continue;
         }
-        if (!is_aborted(j->id)) {
-            run_job(j);
+        if (!is_aborted(job->id)) {
+            run_job(job);
         }
-        job_free(j);
+        job_free(job);
     }
 }
 
 // ---------------------------------------------------------------------------
 // Incoming requests (HttpListener)
 // ---------------------------------------------------------------------------
-static void send_all(int s, const char *p, size_t n)
+static void send_all(int socket_fd, const char *buffer, size_t remaining_bytes)
 {
-    while (n) {
-        ssize_t w = send(s, p, n, 0);
-        if (w <= 0) {
+    while (remaining_bytes) {
+        ssize_t bytes_sent = send(socket_fd, buffer, remaining_bytes, 0);
+        if (bytes_sent <= 0) {
             return;
         }
-        p += w;
-        n -= (size_t)w;
+        buffer += bytes_sent;
+        remaining_bytes -= (size_t)bytes_sent;
     }
 }
 
-static void reply(int s, int status, const char *headers, const char *body, size_t body_len, bool head_only)
+static void reply(int socket_fd, int status, const char *headers, const char *body, size_t body_len, bool head_only)
 {
-    char *h = malloc(HEAD_MAX + 128);
-    if (!h) {
+    char *response_head = malloc(HEAD_MAX + 128);
+    if (!response_head) {
         return;
     }
-    int n = http_format_head(h, HEAD_MAX + 128, status, headers, body_len);
-    if (n < 0) {
-        n = http_format_head(h, HEAD_MAX + 128, 500, NULL, 0);
+    int formatted_head_length = http_format_head(response_head, HEAD_MAX + 128, status, headers, body_len);
+    if (formatted_head_length < 0) {
+        formatted_head_length = http_format_head(response_head, HEAD_MAX + 128, 500, NULL, 0);
         body_len = 0;
     }
-    send_all(s, h, (size_t)n);
-    free(h);
+    send_all(socket_fd, response_head, (size_t)formatted_head_length);
+    free(response_head);
     if (!head_only && body_len) {
-        send_all(s, body, body_len);
+        send_all(socket_fd, body, body_len);
     }
 }
 
 /** @brief Read one request from @p s, hand it to Lua, send the answer. */
-static void serve(int s, const char *peer)
+static void serve(int socket_fd, const char *peer)
 {
-    struct timeval tv = {.tv_sec = RECV_TIMEOUT};
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    struct timeval socket_timeout = {.tv_sec = RECV_TIMEOUT};
+    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &socket_timeout, sizeof socket_timeout);
     char *buf = malloc(HEAD_MAX + 1);
     if (!buf) {
         return;
     }
     size_t len = 0;
     int head_len = 0;
-    http_req_head_t h;
+    http_req_head_t request_head;
     while (len < HEAD_MAX) {
-        ssize_t r = recv(s, buf + len, HEAD_MAX - len, 0);
-        if (r <= 0) {
+        ssize_t bytes_received = recv(socket_fd, buf + len, HEAD_MAX - len, 0);
+        if (bytes_received <= 0) {
             free(buf);
             return; // closed / timeout before a full head
         }
-        len += (size_t)r;
+        len += (size_t)bytes_received;
         char *copy = malloc(len + 1); // the parser writes terminators: keep buf intact while incomplete
         if (!copy) {
             free(buf);
             return;
         }
         memcpy(copy, buf, len);
-        head_len = http_parse_head(copy, len, &h);
+        head_len = http_parse_head(copy, len, &request_head);
         if (head_len != 0) {
             free(buf);
             buf = copy;
@@ -352,124 +352,124 @@ static void serve(int s, const char *peer)
         free(copy);
     }
     if (head_len <= 0) {
-        reply(s, head_len < 0 ? 400 : 431, NULL, NULL, 0, false);
+        reply(socket_fd, head_len < 0 ? 400 : 431, NULL, NULL, 0, false);
         free(buf);
         return;
     }
-    if (h.chunked) {
-        reply(s, 411, NULL, NULL, 0, false);
+    if (request_head.chunked) {
+        reply(socket_fd, 411, NULL, NULL, 0, false);
         free(buf);
         return;
     }
-    if (h.content_length > s_cfg.max_body) {
-        reply(s, 413, NULL, NULL, 0, false);
+    if (request_head.content_length > s_cfg.max_body) {
+        reply(socket_fd, 413, NULL, NULL, 0, false);
         free(buf);
         return;
     }
-    msg_t *m = calloc(1, sizeof *m);
-    char *body = malloc(h.content_length + 1);
-    if (!m || !body) {
-        free(m);
+    msg_t *message = calloc(1, sizeof *message);
+    char *body = malloc(request_head.content_length + 1);
+    if (!message || !body) {
+        free(message);
         free(body);
-        reply(s, 503, NULL, NULL, 0, false);
+        reply(socket_fd, 503, NULL, NULL, 0, false);
         free(buf);
         return;
     }
     size_t have = len - (size_t)head_len;
-    if (have > h.content_length) {
-        have = h.content_length; // pipelined data after the body is ignored (Connection: close)
+    if (have > request_head.content_length) {
+        have = request_head.content_length; // pipelined data after the body is ignored (Connection: close)
     }
     memcpy(body, buf + head_len, have);
-    while (have < h.content_length) {
-        ssize_t r = recv(s, body + have, h.content_length - have, 0);
-        if (r <= 0) {
-            free(m);
+    while (have < request_head.content_length) {
+        ssize_t bytes_received = recv(socket_fd, body + have, request_head.content_length - have, 0);
+        if (bytes_received <= 0) {
+            free(message);
             free(body);
             free(buf);
             return;
         }
-        have += (size_t)r;
+        have += (size_t)bytes_received;
     }
     body[have] = 0;
-    bool head_only = strcmp(h.method, "HEAD") == 0;
-    m->kind = MSG_REQ;
-    m->id = next_id();
-    m->method = strdup(h.method);
-    m->path = strdup(h.path);
-    m->query = strdup(h.query);
-    m->headers = strdup(h.headers);
-    m->body = body;
-    m->body_len = have;
-    strlcpy(m->peer, peer, sizeof m->peer);
+    bool head_only = strcmp(request_head.method, "HEAD") == 0;
+    message->kind = MSG_REQ;
+    message->id = next_id();
+    message->method = strdup(request_head.method);
+    message->path = strdup(request_head.path);
+    message->query = strdup(request_head.query);
+    message->headers = strdup(request_head.headers);
+    message->body = body;
+    message->body_len = have;
+    strlcpy(message->peer, peer, sizeof message->peer);
     free(buf);
-    if (!m->method || !m->path || !m->query || !m->headers) {
-        msg_free(m);
-        reply(s, 503, NULL, NULL, 0, false);
+    if (!message->method || !message->path || !message->query || !message->headers) {
+        msg_free(message);
+        reply(socket_fd, 503, NULL, NULL, 0, false);
         return;
     }
-    uint32_t rid = m->id;
+    uint32_t rid = message->id;
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_wait.rid = rid;
     s_wait.done = false;
     xSemaphoreGive(s_lock);
     xSemaphoreTake(s_wait_sem, 0); // drop a stale give
-    if (!post(m)) {
+    if (!post(message)) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
         s_wait.rid = 0;
         xSemaphoreGive(s_lock);
-        reply(s, 503, NULL, NULL, 0, false);
+        reply(socket_fd, 503, NULL, NULL, 0, false);
         return;
     }
     xSemaphoreTake(s_wait_sem, pdMS_TO_TICKS(s_cfg.listener_timeout_ms));
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool done = s_wait.done;
     int status = s_wait.status;
-    char *rh = s_wait.headers, *rb = s_wait.body;
+    char *response_headers = s_wait.headers, *response_body = s_wait.body;
     size_t rbl = s_wait.body_len;
     s_wait.rid = 0;
     s_wait.done = false;
     s_wait.headers = s_wait.body = NULL;
     xSemaphoreGive(s_lock);
     if (done) {
-        reply(s, status, rh, rb, rbl, head_only);
+        reply(socket_fd, status, response_headers, response_body, rbl, head_only);
     } else {
         ESP_LOGW(TAG, "request %lu from %s: no SendResponse within %d ms", (unsigned long)rid, peer,
                  s_cfg.listener_timeout_ms);
-        reply(s, 504, NULL, NULL, 0, head_only);
+        reply(socket_fd, 504, NULL, NULL, 0, head_only);
     }
-    free(rh);
-    free(rb);
+    free(response_headers);
+    free(response_body);
 }
 
 static void server_task(void *arg)
 {
-    int ls = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    int listen_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     int one = 1;
-    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(s_cfg.port), .sin_addr.s_addr = htonl(INADDR_ANY)};
-    if (ls < 0 || bind(ls, (struct sockaddr *)&a, sizeof a) != 0 || listen(ls, 4) != 0) {
+    setsockopt(listen_socket, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+    struct sockaddr_in listen_address = {.sin_family = AF_INET, .sin_port = htons(s_cfg.port), .sin_addr.s_addr = htonl(INADDR_ANY)};
+    if (listen_socket < 0 || bind(listen_socket, (struct sockaddr *)&listen_address, sizeof listen_address) != 0 || listen(listen_socket, 4) != 0) {
         ESP_LOGE(TAG, "listener: cannot bind TCP port %u", s_cfg.port);
-        if (ls >= 0) {
-            close(ls);
+        if (listen_socket >= 0) {
+            close(listen_socket);
         }
         vTaskDelete(NULL);
         return;
     }
     ESP_LOGI(TAG, "HttpListener on TCP port %u", s_cfg.port);
     for (;;) {
-        struct sockaddr_in pa;
-        socklen_t pl = sizeof pa;
-        int c = accept(ls, (struct sockaddr *)&pa, &pl);
-        if (c < 0) {
+        struct sockaddr_in peer_address;
+        socklen_t peer_address_length = sizeof peer_address;
+        int client_socket = accept(listen_socket, (struct sockaddr *)&peer_address, &peer_address_length);
+        if (client_socket < 0) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
         char peer[16];
-        inet_ntoa_r(pa.sin_addr, peer, sizeof peer);
-        serve(c, peer);
-        shutdown(c, SHUT_RDWR);
-        close(c);
+        inet_ntoa_r(peer_address.sin_addr, peer, sizeof peer);
+        serve(client_socket, peer);
+        shutdown(client_socket, SHUT_RDWR);
+        close(client_socket);
     }
 }
 
@@ -482,14 +482,14 @@ static const char *const METHODS[] = {
     [HTTP_METHOD_OPTIONS] = "OPTIONS",
 };
 
-static char *dup_n(const char *s, size_t n)
+static char *dup_n(const char *source, size_t source_length)
 {
-    char *p = malloc(n + 1);
-    if (p) {
-        memcpy(p, s, n);
-        p[n] = 0;
+    char *duplicated_string = malloc(source_length + 1);
+    if (duplicated_string) {
+        memcpy(duplicated_string, source, source_length);
+        duplicated_string[source_length] = 0;
     }
-    return p;
+    return duplicated_string;
 }
 
 // __clu.http_send(method, url, headers, body, timeout_s) -> id | nil, err
@@ -501,13 +501,13 @@ static int l_send(lua_State *L)
     size_t blen = 0;
     const char *body = luaL_optlstring(L, 4, "", &blen);
     lua_Integer timeout = luaL_optinteger(L, 5, 5);
-    int m = -1;
+    int method_index = -1;
     for (int i = 0; i < (int)(sizeof METHODS / sizeof METHODS[0]); i++) {
         if (METHODS[i] && strcmp(METHODS[i], method) == 0) {
-            m = i;
+            method_index = i;
         }
     }
-    if (m < 0) {
+    if (method_index < 0) {
         lua_pushnil(L);
         lua_pushfstring(L, "unsupported method %s", method);
         return 2;
@@ -522,28 +522,28 @@ static int l_send(lua_State *L)
         lua_pushstring(L, "HTTP client not running");
         return 2;
     }
-    job_t *j = calloc(1, sizeof *j);
-    if (!j) {
+    job_t *job = calloc(1, sizeof *job);
+    if (!job) {
         return luaL_error(L, "out of memory");
     }
-    j->id = next_id();
-    j->method = m;
-    j->timeout_ms = (int)(timeout < 1 ? 1 : timeout > 255 ? 255 : timeout) * 1000;
-    j->url = strdup(url);
-    j->headers = strdup(headers);
-    j->body = dup_n(body, blen);
-    j->body_len = blen;
-    if (!j->url || !j->headers || !j->body) {
-        job_free(j);
+    job->id = next_id();
+    job->method = method_index;
+    job->timeout_ms = (int)(timeout < 1 ? 1 : timeout > 255 ? 255 : timeout) * 1000;
+    job->url = strdup(url);
+    job->headers = strdup(headers);
+    job->body = dup_n(body, blen);
+    job->body_len = blen;
+    if (!job->url || !job->headers || !job->body) {
+        job_free(job);
         return luaL_error(L, "out of memory");
     }
-    if (xQueueSend(s_jobs, &j, 0) != pdTRUE) {
-        job_free(j);
+    if (xQueueSend(s_jobs, &job, 0) != pdTRUE) {
+        job_free(job);
         lua_pushnil(L);
         lua_pushstring(L, "too many requests in progress");
         return 2;
     }
-    lua_pushinteger(L, j->id);
+    lua_pushinteger(L, job->id);
     return 1;
 }
 
@@ -561,40 +561,40 @@ static int l_abort(lua_State *L)
 /** @brief lua_pcall body of l_poll: push the ::msg_t (light userdata at 1). */
 static int poll_push(lua_State *L)
 {
-    const msg_t *m = lua_touserdata(L, 1);
-    if (m->kind == MSG_RESP) {
+    const msg_t *message = lua_touserdata(L, 1);
+    if (message->kind == MSG_RESP) {
         lua_pushstring(L, "resp");
-        lua_pushinteger(L, m->id);
-        lua_pushinteger(L, m->status);
-        lua_pushstring(L, m->headers ? m->headers : "");
-        lua_pushlstring(L, m->body ? m->body : "", m->body_len);
+        lua_pushinteger(L, message->id);
+        lua_pushinteger(L, message->status);
+        lua_pushstring(L, message->headers ? message->headers : "");
+        lua_pushlstring(L, message->body ? message->body : "", message->body_len);
         return 5;
     }
     lua_pushstring(L, "req");
-    lua_pushinteger(L, m->id);
-    lua_pushstring(L, m->method);
-    lua_pushstring(L, m->path);
-    lua_pushstring(L, m->query);
-    lua_pushstring(L, m->headers);
-    lua_pushlstring(L, m->body, m->body_len);
-    lua_pushstring(L, m->peer);
+    lua_pushinteger(L, message->id);
+    lua_pushstring(L, message->method);
+    lua_pushstring(L, message->path);
+    lua_pushstring(L, message->query);
+    lua_pushstring(L, message->headers);
+    lua_pushlstring(L, message->body, message->body_len);
+    lua_pushstring(L, message->peer);
     return 8;
 }
 
 // __clu.http_poll() -> "resp", id, status, headers, body | "req", id, method, path, query, headers, body, peer | nil
 static int l_poll(lua_State *L)
 {
-    msg_t *m;
-    if (!s_msgs || xQueueReceive(s_msgs, &m, 0) != pdTRUE) {
+    msg_t *message;
+    if (!s_msgs || xQueueReceive(s_msgs, &message, 0) != pdTRUE) {
         return 0;
     }
     int top = lua_gettop(L);
     // Pushing can raise (out of memory): push under pcall so m is freed either way.
     lua_pushcfunction(L, poll_push);
-    lua_pushlightuserdata(L, m);
-    int st = lua_pcall(L, 1, LUA_MULTRET, 0);
-    msg_free(m);
-    if (st != LUA_OK) {
+    lua_pushlightuserdata(L, message);
+    int call_status = lua_pcall(L, 1, LUA_MULTRET, 0);
+    msg_free(message);
+    if (call_status != LUA_OK) {
         return lua_error(L);
     }
     return lua_gettop(L) - top;

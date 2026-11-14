@@ -118,20 +118,20 @@ int tfbus_master_count(void)
 }
 
 /** @brief Slot holds a module on the bus side (not empty, not gone after a refresh). */
-static bool live(const tfbus_module_t *m)
+static bool live(const tfbus_module_t *module)
 {
-    return m->sn && !m->gone;
+    return module->sn && !module->gone;
 }
 
-tfbus_module_t *tfbus_master_get(int i)
+tfbus_module_t *tfbus_master_get(int module_index)
 {
-    return (i >= 0 && i < s_nmod && live(&s_mod[i])) ? &s_mod[i] : NULL;
+    return (module_index >= 0 && module_index < s_nmod && live(&s_mod[module_index])) ? &s_mod[module_index] : NULL;
 }
 
-tfbus_module_t *tfbus_master_find_sn(uint32_t sn)
+tfbus_module_t *tfbus_master_find_sn(uint32_t serial_number)
 {
-    for (int i = 0; i < s_nmod && sn; i++) {
-        if (live(&s_mod[i]) && s_mod[i].sn == sn) {
+    for (int i = 0; i < s_nmod && serial_number; i++) {
+        if (live(&s_mod[i]) && s_mod[i].sn == serial_number) {
             return &s_mod[i];
         }
     }
@@ -167,25 +167,25 @@ static void reg_save(void)
     static saved_mod_t buf[TFBUS_MAX_MODULES];
     xSemaphoreTake(s_save_lock, portMAX_DELAY);
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    int n = 0;
+    int saved_entry_count = 0;
     for (int i = 0; i < s_nmod; i++) {
-        const tfbus_module_t *m = &s_mod[i];
-        if (m->sn) {
-            buf[n++] = (saved_mod_t){.sn = m->sn, .addr = (uint8_t)(m->addr | (m->gone ? SAVED_GONE : 0)),
-                                     .hw_type = m->hw_type, .fw_type = m->fw_type, .fw_api_ver = m->fw_api_ver};
+        const tfbus_module_t *module = &s_mod[i];
+        if (module->sn) {
+            buf[saved_entry_count++] = (saved_mod_t){.sn = module->sn, .addr = (uint8_t)(module->addr | (module->gone ? SAVED_GONE : 0)),
+                                     .hw_type = module->hw_type, .fw_type = module->fw_type, .fw_api_ver = module->fw_api_ver};
         }
     }
     xSemaphoreGive(s_lock);
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &nvs_handle) != ESP_OK) {
         ESP_LOGE(TAG, "registry not saved (NVS)");
         xSemaphoreGive(s_save_lock);
         return;
     }
-    if (nvs_set_blob(h, NVS_KEY, buf, (size_t)n * sizeof *buf) != ESP_OK || nvs_commit(h) != ESP_OK) {
+    if (nvs_set_blob(nvs_handle, NVS_KEY, buf, (size_t)saved_entry_count * sizeof *buf) != ESP_OK || nvs_commit(nvs_handle) != ESP_OK) {
         ESP_LOGE(TAG, "registry not saved (NVS write)");
     }
-    nvs_close(h);
+    nvs_close(nvs_handle);
     xSemaphoreGive(s_save_lock);
 }
 
@@ -194,33 +194,33 @@ static void reg_load(void)
 {
     static saved_mod_t buf[TFBUS_MAX_MODULES];
     size_t len = sizeof buf;
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NS, NVS_READONLY, &nvs_handle) != ESP_OK) {
         return;
     }
-    if (nvs_get_blob(h, NVS_KEY, buf, &len) != ESP_OK) {
+    if (nvs_get_blob(nvs_handle, NVS_KEY, buf, &len) != ESP_OK) {
         len = 0;
     }
-    nvs_close(h);
+    nvs_close(nvs_handle);
     for (size_t i = 0; i < len / sizeof *buf; i++) {
-        const saved_mod_t *e = &buf[i];
-        uint8_t addr = e->addr & ~SAVED_GONE;
-        bool dup = !e->sn || !addr || addr > TFBUS_MAX_MODULES;
+        const saved_mod_t *saved_entry = &buf[i];
+        uint8_t addr = saved_entry->addr & ~SAVED_GONE;
+        bool dup = !saved_entry->sn || !addr || addr > TFBUS_MAX_MODULES;
         for (int j = 0; j < s_nmod && !dup; j++) {
-            dup = s_mod[j].sn == e->sn || s_mod[j].addr == addr;
+            dup = s_mod[j].sn == saved_entry->sn || s_mod[j].addr == addr;
         }
         if (dup) {
             continue; // corrupt entry: the module is found again by DISCOVER
         }
-        tfbus_module_t *m = &s_mod[s_nmod++];
-        memset(m, 0, sizeof *m);
-        m->sn = e->sn;
-        m->addr = addr;
-        m->gone = (e->addr & SAVED_GONE) != 0;
-        m->hw_type = e->hw_type;
-        m->fw_type = e->fw_type;
-        m->fw_api_ver = e->fw_api_ver;
-        m->drv = driver_for(m->hw_type);
+        tfbus_module_t *module = &s_mod[s_nmod++];
+        memset(module, 0, sizeof *module);
+        module->sn = saved_entry->sn;
+        module->addr = addr;
+        module->gone = (saved_entry->addr & SAVED_GONE) != 0;
+        module->hw_type = saved_entry->hw_type;
+        module->fw_type = saved_entry->fw_type;
+        module->fw_api_ver = saved_entry->fw_api_ver;
+        module->drv = driver_for(module->hw_type);
     }
     ESP_LOGI(TAG, "%d module(s) in the saved registry", s_nmod);
 }
@@ -234,25 +234,25 @@ static void reg_load(void)
  *
  * @return The entry; NULL if all addresses are held by modules on the bus.
  */
-static tfbus_module_t *mod_add(uint32_t sn, uint8_t hw_type)
+static tfbus_module_t *mod_add(uint32_t serial_number, uint8_t hw_type)
 {
     uint64_t used = 0;
     int slot = s_nmod < TFBUS_MAX_MODULES ? s_nmod : -1, gone = -1;
     for (int i = 0; i < s_nmod; i++) {
-        tfbus_module_t *m = &s_mod[i];
-        if (m->sn == sn && m->gone) {
-            m->gone = false;
-            m->hw_type = hw_type;
-            m->drv = driver_for(hw_type);
-            m->fails = 0;
-            return m;
+        tfbus_module_t *module = &s_mod[i];
+        if (module->sn == serial_number && module->gone) {
+            module->gone = false;
+            module->hw_type = hw_type;
+            module->drv = driver_for(hw_type);
+            module->fails = 0;
+            return module;
         }
-        if (m->sn) {
-            used |= 1ULL << m->addr;
+        if (module->sn) {
+            used |= 1ULL << module->addr;
         } else if (slot == s_nmod || slot < 0) {
             slot = i;
         }
-        if (m->gone && gone < 0) {
+        if (module->gone && gone < 0) {
             gone = i;
         }
     }
@@ -268,16 +268,16 @@ static tfbus_module_t *mod_add(uint32_t sn, uint8_t hw_type)
         addr = s_mod[gone].addr;
         ESP_LOGI(TAG, "sn=%lu forgotten, addr %u reused", (unsigned long)s_mod[gone].sn, addr);
     }
-    tfbus_module_t *m = &s_mod[slot];
-    memset(m, 0, sizeof *m);
-    m->hw_type = hw_type;
-    m->addr = (uint8_t)addr;
-    m->drv = driver_for(hw_type);
-    m->sn = sn; // last: the bus task skips slots with sn 0 and reads the rest without the lock
+    tfbus_module_t *module = &s_mod[slot];
+    memset(module, 0, sizeof *module);
+    module->hw_type = hw_type;
+    module->addr = (uint8_t)addr;
+    module->drv = driver_for(hw_type);
+    module->sn = serial_number; // last: the bus task skips slots with sn 0 and reads the rest without the lock
     if (slot == s_nmod) {
         s_nmod++;
     }
-    return m;
+    return module;
 }
 
 /**
@@ -287,24 +287,24 @@ static tfbus_module_t *mod_add(uint32_t sn, uint8_t hw_type)
  * address kept, saved) so the module gets the same address if it comes back. Its Lua objects
  * resolve to nothing from now on (io_module() by SN).
  */
-static void mod_forget(tfbus_module_t *m)
+static void mod_forget(tfbus_module_t *module)
 {
-    ESP_LOGW(TAG, "refresh: sn=%lu addr=%u not found, dropped", (unsigned long)m->sn, m->addr);
+    ESP_LOGW(TAG, "refresh: sn=%lu addr=%u not found, dropped", (unsigned long)module->sn, module->addr);
     xSemaphoreTake(s_drv_lock, portMAX_DELAY);
-    if (m->drv_ctx && m->drv && m->drv->deinit) {
-        m->drv->deinit(m);
+    if (module->drv_ctx && module->drv && module->drv->deinit) {
+        module->drv->deinit(module);
     }
     xSemaphoreGive(s_drv_lock);
     vTaskDelay(pdMS_TO_TICKS(20)); // a driver timer callback that fired before deinit may still run
     xSemaphoreTake(s_drv_lock, portMAX_DELAY);
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    void *ctx = m->drv_ctx;
-    m->drv_ctx = NULL;
-    m->name[0] = 0;
-    m->online = false;
-    m->assigned = false;
-    m->status_len = 0;
-    m->gone = true;
+    void *ctx = module->drv_ctx;
+    module->drv_ctx = NULL;
+    module->name[0] = 0;
+    module->online = false;
+    module->assigned = false;
+    module->status_len = 0;
+    module->gone = true;
     xSemaphoreGive(s_lock);
     xSemaphoreGive(s_drv_lock);
     free(ctx);
@@ -317,24 +317,24 @@ esp_err_t tfbus_master_queue(const uint8_t *frame, size_t len)
     if (!s_cmds || len > TFBUS_MAX_FRAME) {
         return ESP_ERR_INVALID_ARG;
     }
-    cmd_t c = {.len = (uint8_t)len};
-    memcpy(c.frame, frame, len);
+    cmd_t command = {.len = (uint8_t)len};
+    memcpy(command.frame, frame, len);
     if (xTaskGetCurrentTaskHandle() == s_task) {
         // Bus task (driver init / on_status): never block on its own queue. A full queue is
         // flushed to the bus right here (SMART_PANEL init alone is ~275 frames per panel).
-        if (xQueueSend(s_cmds, &c, 0) == pdTRUE) {
+        if (xQueueSend(s_cmds, &command, 0) == pdTRUE) {
             return ESP_OK;
         }
         drain_cmds();
-        return xQueueSend(s_cmds, &c, 0) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+        return xQueueSend(s_cmds, &command, 0) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
     }
-    return xQueueSend(s_cmds, &c, pdMS_TO_TICKS(50)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+    return xQueueSend(s_cmds, &command, pdMS_TO_TICKS(50)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
-bool tfbus_master_defer(tfbus_defer_fn_t fn, tfbus_module_t *m, void *arg, uint32_t tag)
+bool tfbus_master_defer(tfbus_defer_fn_t deferred_callback, tfbus_module_t *module, void *arg, uint32_t tag)
 {
-    defer_t d = {.fn = fn, .m = m, .arg = arg, .tag = tag};
-    if (!s_defer || xQueueSend(s_defer, &d, 0) != pdTRUE) {
+    defer_t deferred_call = {.fn = deferred_callback, .m = module, .arg = arg, .tag = tag};
+    if (!s_defer || xQueueSend(s_defer, &deferred_call, 0) != pdTRUE) {
         s_defer_lost = true; // recovered by deadline: run_deferred() -> tfbus_driver_t::overdue
         ESP_LOGW(TAG, "defer queue full, call dropped (timers recovered by deadline)");
         return false;
@@ -350,19 +350,19 @@ static void run_deferred(void)
     if (xSemaphoreTake(s_drv_lock, 0) != pdTRUE) {
         return;
     }
-    defer_t d;
-    while (xQueueReceive(s_defer, &d, 0) == pdTRUE) {
-        if (!live(d.m)) {
+    defer_t deferred_call;
+    while (xQueueReceive(s_defer, &deferred_call, 0) == pdTRUE) {
+        if (!live(deferred_call.m)) {
             continue; // module dropped by a refresh
         }
-        d.fn(d.m, d.arg, d.tag);
+        deferred_call.fn(deferred_call.m, deferred_call.arg, deferred_call.tag);
     }
     if (s_defer_lost) {
         s_defer_lost = false; // before the scan: a drop during it triggers another one
         for (int i = 0; i < s_nmod; i++) {
-            tfbus_module_t *m = &s_mod[i];
-            if (live(m) && m->drv_ctx && m->drv && m->drv->overdue) {
-                m->drv->overdue(m);
+            tfbus_module_t *module = &s_mod[i];
+            if (live(module) && module->drv_ctx && module->drv && module->drv->overdue) {
+                module->drv->overdue(module);
             }
         }
     }
@@ -383,33 +383,33 @@ static void run_deferred(void)
 static void module_on_new(lua_State *L, int obj)
 {
     lua_getfield(L, obj, "_sn");
-    lua_Integer sn = lua_tointeger(L, -1);
+    lua_Integer serial_number = lua_tointeger(L, -1);
     lua_getfield(L, obj, "_hwType");
-    lua_Integer hw = lua_tointeger(L, -1);
+    lua_Integer hardware_type = lua_tointeger(L, -1);
     lua_pop(L, 2);
 
-    if (hw <= 0 || hw > 0xFF) {
+    if (hardware_type <= 0 || hardware_type > 0xFF) {
         // e.g. 0x008500030011 = Z-Wave node, not on the RS485 bus (skipped by the real CLU too)
-        ESP_LOGI(TAG, "skip non-TFBUS module %s (type 0x%llx)", clu_obj_name(L, obj), (long long)hw);
+        ESP_LOGI(TAG, "skip non-TFBUS module %s (type 0x%llx)", clu_obj_name(L, obj), (long long)hardware_type);
         return;
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    tfbus_module_t *m = tfbus_master_find_sn((uint32_t)sn);
-    bool added = !m;
-    if (m && m->hw_type != (uint8_t)hw) {
+    tfbus_module_t *module = tfbus_master_find_sn((uint32_t)serial_number);
+    bool added = !module;
+    if (module && module->hw_type != (uint8_t)hardware_type) {
         ESP_LOGW(TAG, "module sn=%lu declared with hw 0x%02x, bus says 0x%02x: keeping the bus type",
-                 (unsigned long)m->sn, (unsigned)hw, m->hw_type);
+                 (unsigned long)module->sn, (unsigned)hardware_type, module->hw_type);
     }
-    if (!m) {
-        m = mod_add((uint32_t)sn, (uint8_t)hw);
+    if (!module) {
+        module = mod_add((uint32_t)serial_number, (uint8_t)hardware_type);
     }
-    if (!m) {
+    if (!module) {
         xSemaphoreGive(s_lock);
         ESP_LOGE(TAG, "too many modules");
         return;
     }
-    strlcpy(m->name, clu_obj_name(L, obj), sizeof m->name);
-    uint8_t addr = m->addr;
+    strlcpy(module->name, clu_obj_name(L, obj), sizeof module->name);
+    uint8_t addr = module->addr;
     xSemaphoreGive(s_lock);
     if (added) {
         reg_save();
@@ -417,8 +417,8 @@ static void module_on_new(lua_State *L, int obj)
 
     lua_pushinteger(L, addr);
     lua_setfield(L, obj, "_addr");
-    ESP_LOGI(TAG, "module %s sn=%lu hw=0x%02x addr=%u%s driver=%s", m->name, (unsigned long)m->sn,
-             m->hw_type, addr, added ? " (new, not found on the bus)" : "", m->drv ? m->drv->name : "-");
+    ESP_LOGI(TAG, "module %s sn=%lu hw=0x%02x addr=%u%s driver=%s", module->name, (unsigned long)module->sn,
+             module->hw_type, addr, added ? " (new, not found on the bus)" : "", module->drv ? module->drv->name : "-");
 }
 
 static const clu_class_ops_t s_module_ops = {.on_new = module_on_new};
@@ -426,13 +426,13 @@ static const clu_class_ops_t s_module_ops = {.on_new = module_on_new};
 // ---------------------------------------------------------------------------
 // IO objects: OBJECT:new(class, moduleObj, channel, name) -> module driver
 // ---------------------------------------------------------------------------
-void tfbus_obj_store(lua_State *L, int obj, int idx, lua_Number v)
+void tfbus_obj_store(lua_State *L, int obj, int idx, lua_Number numeric_value)
 {
     lua_getfield(L, obj, "_f");
-    if (v == (lua_Number)(lua_Integer)v) {
-        lua_pushinteger(L, (lua_Integer)v);
+    if (numeric_value == (lua_Number)(lua_Integer)numeric_value) {
+        lua_pushinteger(L, (lua_Integer)numeric_value);
     } else {
-        lua_pushnumber(L, v);
+        lua_pushnumber(L, numeric_value);
     }
     lua_rawseti(L, -2, idx);
     lua_pop(L, 1);
@@ -444,7 +444,7 @@ void tfbus_obj_store(lua_State *L, int obj, int idx, lua_Number v)
  * @param obj Stack index of the object table.
  * @param ch  Out: channel on the module.
  */
-static tfbus_module_t *io_module(lua_State *L, int obj, int *ch)
+static tfbus_module_t *io_module(lua_State *L, int obj, int *channel_index)
 {
     lua_getfield(L, obj, "_module");
     if (!lua_istable(L, -1)) {
@@ -452,22 +452,22 @@ static tfbus_module_t *io_module(lua_State *L, int obj, int *ch)
         return NULL;
     }
     lua_getfield(L, -1, "_sn");
-    tfbus_module_t *m = tfbus_master_find_sn((uint32_t)lua_tointeger(L, -1));
+    tfbus_module_t *module = tfbus_master_find_sn((uint32_t)lua_tointeger(L, -1));
     lua_pop(L, 2);
     lua_getfield(L, obj, "_channel");
-    *ch = (int)lua_tointeger(L, -1);
+    *channel_index = (int)lua_tointeger(L, -1);
     lua_pop(L, 1);
-    return (m && m->drv) ? m : NULL;
+    return (module && module->drv) ? module : NULL;
 }
 
 /** @brief IO class hook on_new: forward to the driver's io_new. */
 static void io_on_new(lua_State *L, int obj)
 {
-    int ch;
-    tfbus_module_t *m = io_module(L, obj, &ch);
-    if (m && m->drv->io_new) {
+    int channel_index;
+    tfbus_module_t *module = io_module(L, obj, &channel_index);
+    if (module && module->drv->io_new) {
         xSemaphoreTake(s_drv_lock, portMAX_DELAY);
-        m->drv->io_new(m, clu_obj_class(L, obj), ch, clu_obj_name(L, obj));
+        module->drv->io_new(module, clu_obj_class(L, obj), channel_index, clu_obj_name(L, obj));
         xSemaphoreGive(s_drv_lock);
     }
 }
@@ -491,12 +491,12 @@ typedef struct {
  */
 static int io_call_p(lua_State *L)
 {
-    io_call_t *c = lua_touserdata(L, 1);
-    if (c->execute) {
-        c->ret = c->m->drv->io_execute(c->m, L, 2, c->cls, c->ch, c->idx, 3, c->nargs);
-        return c->ret > 0 ? c->ret : 0;
+    io_call_t *call_context = lua_touserdata(L, 1);
+    if (call_context->execute) {
+        call_context->ret = call_context->m->drv->io_execute(call_context->m, L, 2, call_context->cls, call_context->ch, call_context->idx, 3, call_context->nargs);
+        return call_context->ret > 0 ? call_context->ret : 0;
     }
-    c->ret = c->m->drv->io_set(c->m, L, 2, c->cls, c->ch, c->idx, 3);
+    call_context->ret = call_context->m->drv->io_set(call_context->m, L, 2, call_context->cls, call_context->ch, call_context->idx, 3);
     return 0;
 }
 
@@ -504,54 +504,54 @@ static int io_call_p(lua_State *L)
  * @brief Run a driver io hook in a protected call under s_drv_lock; re-raise its error after unlocking.
  * @return ::io_call_t::ret.
  */
-static int io_call(lua_State *L, io_call_t *c, int obj, int first)
+static int io_call(lua_State *L, io_call_t *call_context, int obj, int first)
 {
     lua_pushcfunction(L, io_call_p);
-    lua_pushlightuserdata(L, c);
+    lua_pushlightuserdata(L, call_context);
     lua_pushvalue(L, obj);
-    for (int i = 0; i < c->nargs; i++) {
+    for (int i = 0; i < call_context->nargs; i++) {
         lua_pushvalue(L, first + i);
     }
     xSemaphoreTake(s_drv_lock, portMAX_DELAY);
-    int st = lua_pcall(L, 2 + c->nargs, LUA_MULTRET, 0);
+    int call_status = lua_pcall(L, 2 + call_context->nargs, LUA_MULTRET, 0);
     xSemaphoreGive(s_drv_lock);
-    if (st != LUA_OK) {
+    if (call_status != LUA_OK) {
         lua_error(L); // error object on top
     }
-    return c->ret;
+    return call_context->ret;
 }
 
 /** @brief IO class hook set: forward to the driver's io_set. */
 static bool io_set(lua_State *L, int obj, int idx, int val)
 {
-    int ch;
-    tfbus_module_t *m = io_module(L, obj, &ch);
-    if (!m || !m->drv->io_set) {
+    int channel_index;
+    tfbus_module_t *module = io_module(L, obj, &channel_index);
+    if (!module || !module->drv->io_set) {
         return false;
     }
-    io_call_t c = {.m = m, .cls = clu_obj_class(L, obj), .ch = ch, .idx = idx, .nargs = 1};
+    io_call_t call_context = {.m = module, .cls = clu_obj_class(L, obj), .ch = channel_index, .idx = idx, .nargs = 1};
     int top = lua_gettop(L);
-    io_call(L, &c, obj, val);
+    io_call(L, &call_context, obj, val);
     lua_settop(L, top);
-    return c.ret != 0;
+    return call_context.ret != 0;
 }
 
 /** @brief IO class hook execute: forward to the driver's io_execute. */
 static int io_execute(lua_State *L, int obj, int idx, int first, int nargs)
 {
-    int ch;
-    tfbus_module_t *m = io_module(L, obj, &ch);
-    if (!m || !m->drv->io_execute) {
+    int channel_index;
+    tfbus_module_t *module = io_module(L, obj, &channel_index);
+    if (!module || !module->drv->io_execute) {
         return -1;
     }
-    io_call_t c = {.m = m, .cls = clu_obj_class(L, obj), .ch = ch, .idx = idx, .nargs = nargs,
+    io_call_t call_context = {.m = module, .cls = clu_obj_class(L, obj), .ch = channel_index, .idx = idx, .nargs = nargs,
                    .execute = true};
     int top = lua_gettop(L);
-    io_call(L, &c, obj, first);
-    if (c.ret <= 0) {
+    io_call(L, &call_context, obj, first);
+    if (call_context.ret <= 0) {
         lua_settop(L, top);
     }
-    return c.ret; // results (if any) are on top
+    return call_context.ret; // results (if any) are on top
 }
 
 static const clu_class_ops_t s_io_ops = {.on_new = io_on_new, .set = io_set, .execute = io_execute};
@@ -560,99 +560,99 @@ static const clu_class_ops_t s_io_ops = {.on_new = io_on_new, .set = io_set, .ex
 // Bus task
 // ---------------------------------------------------------------------------
 /** @brief True if the reply is an empty ACK frame (AA 00 01 xor). */
-static bool is_ack(const uint8_t *f, int n)
+static bool is_ack(const uint8_t *response_frame, int response_length)
 {
-    return n == 4 && f[0] == 0xAA && f[1] == 0x00 && f[2] == 0x01;
+    return response_length == 4 && response_frame[0] == 0xAA && response_frame[1] == 0x00 && response_frame[2] == 0x01;
 }
 
 /**
  * @brief Send one queued frame: broadcasts fire-and-forget, others retried up to CMD_TRIES until answered.
  */
-static void send_cmd(const cmd_t *c)
+static void send_cmd(const cmd_t *queued_command)
 {
     uint8_t rx[TFBUS_MAX_FRAME];
-    if (c->frame[1] == TFBUS_BROADCAST && c->frame[2] != TFBUS_T_ADDR_ASSIGN &&
-        c->frame[2] != TFBUS_T_SEEK) {
-        tfbus_uart_send(c->frame, c->len);
+    if (queued_command->frame[1] == TFBUS_BROADCAST && queued_command->frame[2] != TFBUS_T_ADDR_ASSIGN &&
+        queued_command->frame[2] != TFBUS_T_SEEK) {
+        tfbus_uart_send(queued_command->frame, queued_command->len);
         return;
     }
     for (int t = 0; t < CMD_TRIES; t++) {
-        int n = tfbus_uart_transact(c->frame, c->len, rx, sizeof rx, ACK_TIMEOUT_MS);
-        if (n > 0) {
+        int response_length = tfbus_uart_transact(queued_command->frame, queued_command->len, rx, sizeof rx, ACK_TIMEOUT_MS);
+        if (response_length > 0) {
             return; // ACK (or any reply)
         }
     }
-    ESP_LOGW(TAG, "no ACK for cmd type 0x%02x to addr %u", c->frame[2], c->frame[1]);
+    ESP_LOGW(TAG, "no ACK for cmd type 0x%02x to addr %u", queued_command->frame[2], queued_command->frame[1]);
 }
 
 /** @brief Send every queued command now (bus task only). */
 static void drain_cmds(void)
 {
-    cmd_t c;
-    while (xQueueReceive(s_cmds, &c, 0) == pdTRUE) {
-        send_cmd(&c);
+    cmd_t queued_command;
+    while (xQueueReceive(s_cmds, &queued_command, 0) == pdTRUE) {
+        send_cmd(&queued_command);
     }
 }
 
 /** @brief Update the online flag and notify the driver on change. */
 /** @brief Driver init for one module (bus task), under s_drv_lock; flushes the queued frames. */
-static void drv_init(tfbus_module_t *m)
+static void drv_init(tfbus_module_t *module)
 {
-    m->init_pending = false;
-    if (!live(m) || !m->drv || !m->drv->init) {
+    module->init_pending = false;
+    if (!live(module) || !module->drv || !module->drv->init) {
         return;
     }
     xSemaphoreTake(s_drv_lock, portMAX_DELAY);
-    m->drv->init(m);
+    module->drv->init(module);
     xSemaphoreGive(s_drv_lock);
     drain_cmds(); // init runs in this task: flush before the queue fills up
 }
 
-static void set_online(tfbus_module_t *m, bool on)
+static void set_online(tfbus_module_t *module, bool on)
 {
-    if (m->online == on) {
+    if (module->online == on) {
         return;
     }
-    m->online = on;
-    ESP_LOGW(TAG, "addr %u sn=%lu %s", m->addr, (unsigned long)m->sn, on ? "online" : "OFFLINE");
-    if (m->drv && m->drv->on_online) {
+    module->online = on;
+    ESP_LOGW(TAG, "addr %u sn=%lu %s", module->addr, (unsigned long)module->sn, on ? "online" : "OFFLINE");
+    if (module->drv && module->drv->on_online) {
         xSemaphoreTake(s_drv_lock, portMAX_DELAY);
-        m->drv->on_online(m, on);
+        module->drv->on_online(module, on);
         xSemaphoreGive(s_drv_lock);
     }
 }
 
 /** @brief ADDR_ASSIGN the module's SN to its address; true if ACKed (up to CMD_TRIES). */
-static bool assign(tfbus_module_t *m)
+static bool assign(tfbus_module_t *module)
 {
-    uint8_t f[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
-    size_t n = tfbus_addr_assign(f, sizeof f, m->sn, m->addr);
-    m->assigned = false;
-    for (int t = 0; t < CMD_TRIES && !m->assigned; t++) {
-        int r = tfbus_uart_transact(f, n, rx, sizeof rx, ACK_TIMEOUT_MS);
-        m->assigned = is_ack(rx, r);
+    uint8_t assign_frame[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
+    size_t frame_length = tfbus_addr_assign(assign_frame, sizeof assign_frame, module->sn, module->addr);
+    module->assigned = false;
+    for (int t = 0; t < CMD_TRIES && !module->assigned; t++) {
+        int response_length = tfbus_uart_transact(assign_frame, frame_length, rx, sizeof rx, ACK_TIMEOUT_MS);
+        module->assigned = is_ack(rx, response_length);
     }
-    return m->assigned;
+    return module->assigned;
 }
 
-static void poll_module(tfbus_module_t *m);
+static void poll_module(tfbus_module_t *module);
 
 /** @brief Find or append the s_dev entry for @p sn; NULL if the table is full. */
-static tfbus_device_t *dev_get(uint32_t sn)
+static tfbus_device_t *dev_get(uint32_t serial_number)
 {
     for (int i = 0; i < s_ndev; i++) {
-        if (s_dev[i].sn == sn) {
+        if (s_dev[i].sn == serial_number) {
             return &s_dev[i];
         }
     }
     if (s_ndev >= TFBUS_MAX_MODULES) {
         return NULL;
     }
-    tfbus_device_t *d = &s_dev[s_ndev++];
-    memset(d, 0, sizeof *d);
-    d->sn = sn;
-    d->hw_ver = 1; // real CLU default when VERSION_QUERY has no 4th byte / is not sent
-    return d;
+    tfbus_device_t *device = &s_dev[s_ndev++];
+    memset(device, 0, sizeof *device);
+    device->sn = serial_number;
+    device->hw_ver = 1; // real CLU default when VERSION_QUERY has no 4th byte / is not sent
+    return device;
 }
 
 /**
@@ -666,56 +666,56 @@ static tfbus_device_t *dev_get(uint32_t sn)
  */
 static bool scan(void)
 {
-    uint8_t f[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
-    size_t n = tfbus_discover(f, sizeof f);
+    uint8_t discovery_frame[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
+    size_t frame_length = tfbus_discover(discovery_frame, sizeof discovery_frame);
     int garbled = 0;
     bool added = false;
     for (int found = 0; found < TFBUS_MAX_MODULES;) {
-        int r = tfbus_uart_transact(f, n, rx, sizeof rx, DISCOVER_TIMEOUT_MS);
-        const uint8_t *pl;
+        int response_length = tfbus_uart_transact(discovery_frame, frame_length, rx, sizeof rx, DISCOVER_TIMEOUT_MS);
+        const uint8_t *response_payload;
         size_t plen;
         tfbus_ident_t id;
-        if (r <= 0) {
+        if (response_length <= 0) {
             break;
         }
-        if (!tfbus_parse_response(rx, (size_t)r, &pl, &plen)) {
+        if (!tfbus_parse_response(rx, (size_t)response_length, &response_payload, &plen)) {
             if (++garbled > DISCOVER_RETRIES) { // several modules answering at once
                 ESP_LOGW(TAG, "DISCOVER: garbled replies, giving up");
                 break;
             }
             continue;
         }
-        if (plen == 0 || !tfbus_parse_discover(pl, plen, &id)) {
+        if (plen == 0 || !tfbus_parse_discover(response_payload, plen, &id)) {
             break; // plain ACK: no (more) unaddressed modules
         }
         found++;
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        tfbus_module_t *m = tfbus_master_find_sn(id.sn);
-        bool is_new = !m; // or gone: back with its old address
-        if (!m) {
-            m = mod_add(id.sn, id.hw_type);
+        tfbus_module_t *module = tfbus_master_find_sn(id.sn);
+        bool is_new = !module; // or gone: back with its old address
+        if (!module) {
+            module = mod_add(id.sn, id.hw_type);
         }
-        if (m && (m->fw_type != id.fw_type || m->fw_api_ver != id.fw_api_ver)) {
-            m->fw_type = id.fw_type;
-            m->fw_api_ver = id.fw_api_ver;
+        if (module && (module->fw_type != id.fw_type || module->fw_api_ver != id.fw_api_ver)) {
+            module->fw_type = id.fw_type;
+            module->fw_api_ver = id.fw_api_ver;
             added = true; // identity changed (firmware update): save it
         }
-        added |= is_new && m;
-        tfbus_device_t *d = dev_get(id.sn);
-        if (d) {
-            d->hw_type = id.hw_type;
-            d->fw_type = id.fw_type;
-            d->fw_api_ver = id.fw_api_ver;
-            d->known = m != NULL;
+        added |= is_new && module;
+        tfbus_device_t *device = dev_get(id.sn);
+        if (device) {
+            device->hw_type = id.hw_type;
+            device->fw_type = id.fw_type;
+            device->fw_api_ver = id.fw_api_ver;
+            device->known = module != NULL;
         }
         xSemaphoreGive(s_lock);
         ESP_LOGI(TAG, "DISCOVER: sn=%08lx hw=0x%02x fwType=%u fwApiVer=%u%s", (unsigned long)id.sn,
-                 id.hw_type, id.fw_type, id.fw_api_ver, is_new ? (m ? " (new)" : "") : "");
-        if (!m) {
+                 id.hw_type, id.fw_type, id.fw_api_ver, is_new ? (module ? " (new)" : "") : "");
+        if (!module) {
             ESP_LOGW(TAG, "DISCOVER: no free address");
             break;
         }
-        if (!assign(m)) {
+        if (!assign(module)) {
             break; // it would answer the next DISCOVER again
         }
     }
@@ -728,23 +728,23 @@ static bool scan(void)
  * Taken from the previous scan's entry (prev, may be NULL), else from the registry (saved DISCOVER
  * identity, or the type OM.LUA declared). Under s_lock.
  */
-static void dev_fill(tfbus_device_t *d, const tfbus_module_t *m, const tfbus_device_t *prev, int nprev)
+static void dev_fill(tfbus_device_t *device, const tfbus_module_t *module, const tfbus_device_t *prev, int nprev)
 {
-    const tfbus_device_t *p = NULL;
-    for (int j = 0; j < nprev && !p; j++) {
-        p = prev[j].sn == m->sn && prev[j].hw_type ? &prev[j] : NULL;
+    const tfbus_device_t *previous_device = NULL;
+    for (int j = 0; j < nprev && !previous_device; j++) {
+        previous_device = prev[j].sn == module->sn && prev[j].hw_type ? &prev[j] : NULL;
     }
-    if (p) {
-        d->hw_type = p->hw_type;
-        d->hw_ver = p->hw_ver;
-        d->fw_type = p->fw_type;
-        d->fw_api_ver = p->fw_api_ver;
-        memcpy(d->ver, p->ver, sizeof d->ver);
-        d->have_ver = p->have_ver;
+    if (previous_device) {
+        device->hw_type = previous_device->hw_type;
+        device->hw_ver = previous_device->hw_ver;
+        device->fw_type = previous_device->fw_type;
+        device->fw_api_ver = previous_device->fw_api_ver;
+        memcpy(device->ver, previous_device->ver, sizeof device->ver);
+        device->have_ver = previous_device->have_ver;
     } else {
-        d->hw_type = m->hw_type;
-        d->fw_type = m->fw_type ? m->fw_type : m->hw_type == 0x03 ? 3 : 2; // SMART_PANEL 3, IO 2
-        d->fw_api_ver = m->fw_api_ver;
+        device->hw_type = module->hw_type;
+        device->fw_type = module->fw_type ? module->fw_type : module->hw_type == 0x03 ? 3 : 2; // SMART_PANEL 3, IO 2
+        device->fw_api_ver = module->fw_api_ver;
     }
 }
 
@@ -753,33 +753,33 @@ static void dev_fill(tfbus_device_t *d, const tfbus_module_t *m, const tfbus_dev
  *
  * Matches the real CONFIG.JSON. The real CLU skips SMART_PANELs with fwApiVer < 5 (they do not answer).
  */
-static void version_query(tfbus_device_t *d, uint8_t addr)
+static void version_query(tfbus_device_t *device, uint8_t addr)
 {
-    if (d->hw_type == 0x03 && d->fw_api_ver && d->fw_api_ver < 5) {
+    if (device->hw_type == 0x03 && device->fw_api_ver && device->fw_api_ver < 5) {
         return;
     }
-    uint8_t f[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
-    size_t n = tfbus_version_query(f, sizeof f, addr);
-    int r = tfbus_uart_transact(f, n, rx, sizeof rx, ACK_TIMEOUT_MS);
-    const uint8_t *pl;
+    uint8_t version_query_frame[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
+    size_t frame_length = tfbus_version_query(version_query_frame, sizeof version_query_frame, addr);
+    int response_length = tfbus_uart_transact(version_query_frame, frame_length, rx, sizeof rx, ACK_TIMEOUT_MS);
+    const uint8_t *response_payload;
     size_t plen;
-    if (r > 0 && tfbus_parse_response(rx, (size_t)r, &pl, &plen) && plen >= 3) {
+    if (response_length > 0 && tfbus_parse_response(rx, (size_t)response_length, &response_payload, &plen) && plen >= 3) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        d->fw_api_ver = pl[0];
-        memcpy(d->ver, pl, 3);
-        d->hw_ver = plen >= 4 ? pl[3] : 1;
-        d->have_ver = true;
+        device->fw_api_ver = response_payload[0];
+        memcpy(device->ver, response_payload, 3);
+        device->hw_ver = plen >= 4 ? response_payload[3] : 1;
+        device->have_ver = true;
         xSemaphoreGive(s_lock);
     }
 }
 
 /** @brief qsort: tfbusDevices in address order (the CLU's module order), unaddressed last. */
-static int dev_cmp(const void *a, const void *b)
+static int dev_cmp(const void *left_device, const void *right_device)
 {
-    unsigned x = ((const tfbus_device_t *)a)->addr, y = ((const tfbus_device_t *)b)->addr;
-    x = x ? x : 256;
-    y = y ? y : 256;
-    return (x > y) - (x < y);
+    unsigned left_address = ((const tfbus_device_t *)left_device)->addr, right_address = ((const tfbus_device_t *)right_device)->addr;
+    left_address = left_address ? left_address : 256;
+    right_address = right_address ? right_address : 256;
+    return (left_address > right_address) - (left_address < right_address);
 }
 
 /**
@@ -798,33 +798,33 @@ static int dev_cmp(const void *a, const void *b)
  */
 static void discover(bool refresh)
 {
-    uint8_t f[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
-    size_t n;
+    uint8_t request_frame[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
+    size_t frame_length;
 
     if (refresh && s_refresh_cb) {
         s_refresh_cb(); // e.g. emulated modules of devices that are gone removed before the RESET
     }
     ESP_LOGI(TAG, "%s: %d module(s) in the registry", refresh ? "refresh" : "discovery", s_nmod);
-    n = tfbus_reset(f, sizeof f, TFBUS_BROADCAST);
-    tfbus_uart_send(f, n);
+    frame_length = tfbus_reset(request_frame, sizeof request_frame, TFBUS_BROADCAST);
+    tfbus_uart_send(request_frame, frame_length);
     vTaskDelay(pdMS_TO_TICKS(refresh ? REFRESH_SETTLE_MS : RESET_SETTLE_MS));
 
     if (!refresh) {
-        n = tfbus_seek(f, sizeof f);
-        int r = tfbus_uart_transact(f, n, rx, sizeof rx, ACK_TIMEOUT_MS * 5);
-        ESP_LOGI(TAG, "SEEK %s", r > 0 ? "acked" : "no reply");
-        (void)r; // log-only
+        frame_length = tfbus_seek(request_frame, sizeof request_frame);
+        int response_length = tfbus_uart_transact(request_frame, frame_length, rx, sizeof rx, ACK_TIMEOUT_MS * 5);
+        ESP_LOGI(TAG, "SEEK %s", response_length > 0 ? "acked" : "no reply");
+        (void)response_length; // log-only
     }
 
     for (int i = 0; i < s_nmod; i++) {
-        tfbus_module_t *m = &s_mod[i];
-        if (!live(m)) {
+        tfbus_module_t *module = &s_mod[i];
+        if (!live(module)) {
             continue;
         }
-        m->online = false;
-        m->fails = 0;
-        m->status_len = 0;
-        m->assigned = false;
+        module->online = false;
+        module->fails = 0;
+        module->status_len = 0;
+        module->assigned = false;
     }
     // Identity from the previous scan. On refresh the registry modules are addressed before
     // DISCOVER, so they never report hwType/fwType/fwApiVer, and old SMART_PANELs (fwApiVer < 5)
@@ -846,9 +846,9 @@ static void discover(bool refresh)
     bool changed = scan();
     // Registry modules that did not answer DISCOVER (e.g. real Grenton modules): by SN, as before.
     for (int i = 0; i < s_nmod; i++) {
-        tfbus_module_t *m = &s_mod[i];
-        if (live(m) && !m->assigned && !assign(m)) {
-            ESP_LOGW(TAG, "ADDR_ASSIGN sn=%lu addr=%u: no ACK", (unsigned long)m->sn, m->addr);
+        tfbus_module_t *module = &s_mod[i];
+        if (live(module) && !module->assigned && !assign(module)) {
+            ESP_LOGW(TAG, "ADDR_ASSIGN sn=%lu addr=%u: no ACK", (unsigned long)module->sn, module->addr);
         }
     }
     // req_refresh_modules is the only way out of the registry: what is not on the bus now is
@@ -861,18 +861,18 @@ static void discover(bool refresh)
         }
     }
     for (int i = 0; i < s_nmod; i++) {
-        tfbus_module_t *m = &s_mod[i];
-        if (!live(m) || !m->assigned) {
+        tfbus_module_t *module = &s_mod[i];
+        if (!live(module) || !module->assigned) {
             continue;
         }
         xSemaphoreTake(s_lock, portMAX_DELAY);
-        tfbus_device_t *d = dev_get(m->sn);
-        if (d && !d->hw_type) { // not reported by DISCOVER: last scan's identity, else the registry
-            dev_fill(d, m, prev, nprev);
+        tfbus_device_t *device = dev_get(module->sn);
+        if (device && !device->hw_type) { // not reported by DISCOVER: last scan's identity, else the registry
+            dev_fill(device, module, prev, nprev);
         }
-        if (d) {
-            d->known = true;
-            d->addr = m->addr;
+        if (device) {
+            device->known = true;
+            device->addr = module->addr;
         }
         xSemaphoreGive(s_lock);
     }
@@ -898,34 +898,34 @@ static void discover(bool refresh)
  * SN reacts, an addressed one just re-takes the same address) and re-run the driver init, since
  * a module that rebooted has lost its configuration.
  */
-static void rejoin(tfbus_module_t *m)
+static void rejoin(tfbus_module_t *module)
 {
-    if (!assign(m)) {
+    if (!assign(module)) {
         return;
     }
-    poll_module(m);
-    if (!m->online) {
+    poll_module(module);
+    if (!module->online) {
         return;
     }
-    ESP_LOGI(TAG, "addr %u sn=%lu rejoined", m->addr, (unsigned long)m->sn);
+    ESP_LOGI(TAG, "addr %u sn=%lu rejoined", module->addr, (unsigned long)module->sn);
     if (s_started) {
-        drv_init(m);
+        drv_init(module);
     }
     // Absent at the last discovery (plugged in later): list it in tfbusDevices now, so
     // CONFIG.JSON / config.txt do not wait for the next req_refresh_modules.
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    tfbus_device_t *d = dev_get(m->sn);
-    bool fresh = d && !d->addr;
+    tfbus_device_t *device = dev_get(module->sn);
+    bool fresh = device && !device->addr;
     if (fresh) {
-        if (!d->hw_type) {
-            dev_fill(d, m, NULL, 0);
+        if (!device->hw_type) {
+            dev_fill(device, module, NULL, 0);
         }
-        d->known = true;
-        d->addr = m->addr;
+        device->known = true;
+        device->addr = module->addr;
     }
     xSemaphoreGive(s_lock);
     if (fresh) {
-        version_query(d, m->addr);
+        version_query(device, module->addr);
         if (s_scan_cb) {
             s_scan_cb();
         }
@@ -937,47 +937,47 @@ static void rejoin(tfbus_module_t *m)
 /**
  * @brief STATUS_POLL one module: track online/fails, keep the last status and pass every reply to the driver.
  */
-static void poll_module(tfbus_module_t *m)
+static void poll_module(tfbus_module_t *module)
 {
-    uint8_t f[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
-    size_t n = tfbus_status_poll(f, sizeof f, m->addr);
-    int r = tfbus_uart_transact(f, n, rx, sizeof rx, POLL_TIMEOUT_MS);
-    const uint8_t *pl;
+    uint8_t status_poll_frame[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
+    size_t frame_length = tfbus_status_poll(status_poll_frame, sizeof status_poll_frame, module->addr);
+    int response_length = tfbus_uart_transact(status_poll_frame, frame_length, rx, sizeof rx, POLL_TIMEOUT_MS);
+    const uint8_t *response_payload;
     size_t plen;
-    if (r <= 0 || !tfbus_parse_response(rx, (size_t)r, &pl, &plen)) {
-        m->fails_total++;
-        if (m->fails < 255) {
-            m->fails++;
+    if (response_length <= 0 || !tfbus_parse_response(rx, (size_t)response_length, &response_payload, &plen)) {
+        module->fails_total++;
+        if (module->fails < 255) {
+            module->fails++;
         }
-        if (m->fails >= OFFLINE_AFTER) {
-            set_online(m, false);
+        if (module->fails >= OFFLINE_AFTER) {
+            set_online(module, false);
         }
         return;
     }
-    m->fails = 0;
-    m->polls++;
-    set_online(m, true);
+    module->fails = 0;
+    module->polls++;
+    set_online(module, true);
 
-    if (plen > sizeof m->status) {
-        plen = sizeof m->status;
+    if (plen > sizeof module->status) {
+        plen = sizeof module->status;
     }
-    bool changed = plen != m->status_len || memcmp(pl, m->status, plen) != 0;
+    bool changed = plen != module->status_len || memcmp(response_payload, module->status, plen) != 0;
     if (changed) {
-        memcpy(m->status, pl, plen);
-        m->status_len = (uint8_t)plen;
-        if (!m->drv) {
+        memcpy(module->status, response_payload, plen);
+        module->status_len = (uint8_t)plen;
+        if (!module->drv) {
             char hex[3 * TFBUS_MAX_PAYLOAD + 1];
-            int o = 0;
+            int log_length = 0;
             for (size_t i = 0; i < plen; i++) {
-                o += snprintf(hex + o, sizeof hex - o, "%02x ", pl[i]);
+                log_length += snprintf(hex + log_length, sizeof hex - log_length, "%02x ", response_payload[i]);
             }
-            ESP_LOGD(TAG, "addr %u status: %s", m->addr, hex);
+            ESP_LOGD(TAG, "addr %u status: %s", module->addr, hex);
         }
     }
     // Button events etc. arrive as repeated queued records: drivers see every reply.
-    if (m->drv && m->drv->on_status) {
+    if (module->drv && module->drv->on_status) {
         xSemaphoreTake(s_drv_lock, portMAX_DELAY);
-        m->drv->on_status(m, pl, plen);
+        module->drv->on_status(module, response_payload, plen);
         xSemaphoreGive(s_drv_lock);
     }
 }
@@ -1044,20 +1044,20 @@ static void bus_task(void *arg)
             for (int i = 0; i < s_nmod && !s_restart; i++) {
                 run_deferred(); // driver timer work queues frames: send them right after
                 drain_cmds();
-                tfbus_module_t *m = &s_mod[i];
-                if (!live(m)) {
+                tfbus_module_t *module = &s_mod[i];
+                if (!live(module)) {
                     continue; // dropped by a refresh
                 }
-                if (!m->online && m->fails >= OFFLINE_AFTER) {
+                if (!module->online && module->fails >= OFFLINE_AFTER) {
                     if (round % OFFLINE_POLL_EVERY == 0) {
-                        rejoin(m);
+                        rejoin(module);
                     }
                     continue;
                 }
-                poll_module(m);
-                if (m->online && m->init_pending && s_started) {
-                    ESP_LOGI(TAG, "addr %u sn=%lu answers: driver init", m->addr, (unsigned long)m->sn);
-                    drv_init(m);
+                poll_module(module);
+                if (module->online && module->init_pending && s_started) {
+                    ESP_LOGI(TAG, "addr %u sn=%lu answers: driver init", module->addr, (unsigned long)module->sn);
+                    drv_init(module);
                 }
             }
             round++;
@@ -1067,11 +1067,11 @@ static void bus_task(void *arg)
                     online += s_mod[i].online;
                     total += live(&s_mod[i]);
                 }
-                TickType_t t = xTaskGetTickCount();
-                if (online != last_online || t - last_summary >= pdMS_TO_TICKS(SUMMARY_EVERY_MS)) {
+                TickType_t tick_count = xTaskGetTickCount();
+                if (online != last_online || tick_count - last_summary >= pdMS_TO_TICKS(SUMMARY_EVERY_MS)) {
                     ESP_LOGI(TAG, "round %lu: %d/%d online", (unsigned long)round, online, total);
                     last_online = online;
-                    last_summary = t;
+                    last_summary = tick_count;
                 }
             }
             vTaskDelay(1); // let lower-priority tasks run between rounds
@@ -1131,9 +1131,9 @@ bool tfbus_master_reset(uint32_t timeout_ms)
         vTaskDelay(pdMS_TO_TICKS(10));
     }
     for (int i = 0; i < s_nmod; i++) {
-        tfbus_module_t *m = &s_mod[i];
-        if (m->drv_ctx && m->drv && m->drv->deinit) {
-            m->drv->deinit(m);
+        tfbus_module_t *module = &s_mod[i];
+        if (module->drv_ctx && module->drv && module->drv->deinit) {
+            module->drv->deinit(module);
         }
     }
     // A driver esp_timer callback that fired just before deinit may still be running and using
@@ -1143,10 +1143,10 @@ bool tfbus_master_reset(uint32_t timeout_ms)
     // by req_refresh_modules).
     xSemaphoreTake(s_lock, portMAX_DELAY);
     for (int i = 0; i < s_nmod; i++) {
-        tfbus_module_t *m = &s_mod[i];
-        free(m->drv_ctx);
-        m->drv_ctx = NULL;
-        m->name[0] = 0;
+        tfbus_module_t *module = &s_mod[i];
+        free(module->drv_ctx);
+        module->drv_ctx = NULL;
+        module->name[0] = 0;
     }
     xSemaphoreGive(s_lock);
     xQueueReset(s_cmds); // frames queued for the old drivers
@@ -1157,14 +1157,14 @@ bool tfbus_master_reset(uint32_t timeout_ms)
     return true;
 }
 
-void tfbus_master_on_scan(void (*cb)(void))
+void tfbus_master_on_scan(void (*scan_callback)(void))
 {
-    s_scan_cb = cb;
+    s_scan_cb = scan_callback;
 }
 
-void tfbus_master_on_refresh(void (*cb)(void))
+void tfbus_master_on_refresh(void (*refresh_callback)(void))
 {
-    s_refresh_cb = cb;
+    s_refresh_cb = refresh_callback;
 }
 
 bool tfbus_master_refresh(uint32_t timeout_ms)
@@ -1186,8 +1186,8 @@ int tfbus_master_devices(tfbus_device_t *out, int max)
         return 0; // before tfbus_master_init() (boot-time CONFIG.JSON): no bus scan yet
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
-    int n = s_ndev < max ? s_ndev : max;
-    memcpy(out, s_dev, (size_t)n * sizeof *out);
+    int device_count = s_ndev < max ? s_ndev : max;
+    memcpy(out, s_dev, (size_t)device_count * sizeof *out);
     xSemaphoreGive(s_lock);
-    return n;
+    return device_count;
 }

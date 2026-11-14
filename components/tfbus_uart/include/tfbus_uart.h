@@ -68,16 +68,16 @@ typedef int (*tfbus_uart_local_fn_t)(const uint8_t *tx, size_t txlen, uint8_t *r
 /**
  * @brief Add a local bus endpoint; frames are offered to the endpoints in the order added, the
  * first that owns one answers it. Call before the bus master starts.
- * @param fn Endpoint.
- * @return false if @p fn is NULL or TFBUS_UART_MAX_LOCAL are installed.
+ * @param local_endpoint Endpoint.
+ * @return false if @p local_endpoint is NULL or TFBUS_UART_MAX_LOCAL are installed.
  */
-bool tfbus_uart_add_local(tfbus_uart_local_fn_t fn);
+bool tfbus_uart_add_local(tfbus_uart_local_fn_t local_endpoint);
 
 /**
- * @brief Replace all local endpoints with @p fn (NULL = none).
- * @param fn Endpoint.
+ * @brief Replace all local endpoints with @p local_endpoint (NULL = none).
+ * @param local_endpoint Endpoint.
  */
-void tfbus_uart_set_local(tfbus_uart_local_fn_t fn);
+void tfbus_uart_set_local(tfbus_uart_local_fn_t local_endpoint);
 
 #ifdef __cplusplus
 }

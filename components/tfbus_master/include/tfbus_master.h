@@ -62,27 +62,27 @@ typedef struct tfbus_driver {
     const char *name;         /**< Driver name (logs). */
     const void *cfg;          /**< Driver-specific parameters (shared implementations). */
     /** After address assignment: queue init commands with tfbus_master_queue(). */
-    void (*init)(tfbus_module_t *m);
+    void (*init)(tfbus_module_t *module);
     /** STATUS_POLL reply payload (after the length byte). Called for every reply. */
-    void (*on_status)(tfbus_module_t *m, const uint8_t *payload, size_t len);
+    void (*on_status)(tfbus_module_t *module, const uint8_t *payload, size_t len);
     /** Module went offline / came back. */
-    void (*on_online)(tfbus_module_t *m, bool online);
+    void (*on_online)(tfbus_module_t *module, bool online);
     /** Registry reset (Lua reload): stop and delete timers etc. Optional; drv_ctx is freed by the
      *  master afterwards. Runs in the Lua task with the bus task parked. */
-    void (*deinit)(tfbus_module_t *m);
+    void (*deinit)(tfbus_module_t *module);
     /** A tfbus_master_defer() call was dropped (queue full): run the work of every timer whose
      *  deadline has passed, as its deferred call would have. Optional; bus task, driver lock
      *  held, only for modules with a drv_ctx. */
-    void (*overdue)(tfbus_module_t *m);
+    void (*overdue)(tfbus_module_t *module);
 
     /** IO object hosted on the module created: OBJECT:new(class, module, channel, name).
      *  The io_* hooks run in the Lua task; `obj` is the object table's stack index. */
-    void (*io_new)(tfbus_module_t *m, int cls, int ch, const char *name);
+    void (*io_new)(tfbus_module_t *module, int cls, int channel, const char *name);
     /** Feature set. Return true if handled (value not stored generically by the prelude). */
-    bool (*io_set)(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int val);
+    bool (*io_set)(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel, int idx, int val);
     /** Method call, args at [first, first+nargs). Return number of Lua results pushed, -1 if the
      *  method is unknown. */
-    int (*io_execute)(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx,
+    int (*io_execute)(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel, int idx,
                       int first, int nargs);
 } tfbus_driver_t;
 
@@ -91,9 +91,9 @@ typedef struct tfbus_driver {
  * @param L   Lua state.
  * @param obj Stack index of the object table.
  * @param idx Feature index.
- * @param v   Value.
+ * @param numeric_value Value.
  */
-void tfbus_obj_store(lua_State *L, int obj, int idx, lua_Number v);
+void tfbus_obj_store(lua_State *L, int obj, int idx, lua_Number numeric_value);
 
 /**
  * @brief Register a module driver (up to 32). Call before tfbus_master_init().
@@ -154,17 +154,17 @@ int tfbus_master_devices(tfbus_device_t *out, int max);
 
 /**
  * @brief Set a callback run in the bus task after every discovery (e.g. to rewrite a:\\CONFIG.JSON).
- * @param cb Callback (NULL = none).
+ * @param scan_callback Callback (NULL = none).
  */
-void tfbus_master_on_scan(void (*cb)(void));
+void tfbus_master_on_scan(void (*scan_callback)(void));
 
 /**
  * @brief Set a callback run in the bus task at the start of every refresh (tfbus_master_refresh(),
  * req_refresh_modules), before its RESET: firmware-emulated modules may change then (they are all
  * re-addressed after the RESET).
- * @param cb Callback (NULL = none).
+ * @param refresh_callback Callback (NULL = none).
  */
-void tfbus_master_on_refresh(void (*cb)(void));
+void tfbus_master_on_refresh(void (*refresh_callback)(void));
 
 /**
  * @brief Re-run discovery (RESET, SEEK, DISCOVER, ADDR_ASSIGN, VERSION_QUERY) and wait for it.
@@ -191,14 +191,14 @@ esp_err_t tfbus_master_queue(const uint8_t *frame, size_t len);
 
 /**
  * @brief Deferred call run in the bus task.
- * @param m   Module.
+ * @param module Module.
  * @param arg User argument.
  * @param tag User tag (e.g. a timer generation to detect stale calls).
  */
-typedef void (*tfbus_defer_fn_t)(tfbus_module_t *m, void *arg, uint32_t tag);
+typedef void (*tfbus_defer_fn_t)(tfbus_module_t *module, void *arg, uint32_t tag);
 
 /**
- * @brief Run fn(m, arg, tag) in the bus task, between polls.
+ * @brief Run the callback(module, arg, tag) in the bus task, between polls.
  *
  * Meant for esp_timer callbacks: never blocks, so the esp_timer task is not held up and the work
  * does not race the bus task's on_status / init. Calls still queued at tfbus_master_reset() are
@@ -208,7 +208,7 @@ typedef void (*tfbus_defer_fn_t)(tfbus_module_t *m, void *arg, uint32_t tag);
  *
  * @return false if the queue is full.
  */
-bool tfbus_master_defer(tfbus_defer_fn_t fn, tfbus_module_t *m, void *arg, uint32_t tag);
+bool tfbus_master_defer(tfbus_defer_fn_t deferred_callback, tfbus_module_t *module, void *arg, uint32_t tag);
 
 /**
  * @name Registry lookup
@@ -217,13 +217,13 @@ bool tfbus_master_defer(tfbus_defer_fn_t fn, tfbus_module_t *m, void *arg, uint3
  * @{
  */
 /** @brief Module by serial number, NULL if not declared. */
-tfbus_module_t *tfbus_master_find_sn(uint32_t sn);
+tfbus_module_t *tfbus_master_find_sn(uint32_t serial_number);
 /** @brief Module by Lua global name, NULL if not declared. */
 tfbus_module_t *tfbus_master_find_name(const char *name);
 /** @brief Number of declared modules. */
 int tfbus_master_count(void);
-/** @brief Module in slot @p i (0 <= i < tfbus_master_count()), NULL if out of range or dropped by a refresh. */
-tfbus_module_t *tfbus_master_get(int i);
+/** @brief Module in slot @p module_index (0 <= module_index < tfbus_master_count()), NULL if out of range or dropped by a refresh. */
+tfbus_module_t *tfbus_master_get(int module_index);
 /** @} */
 
 #ifdef __cplusplus

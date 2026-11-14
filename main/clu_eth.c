@@ -88,9 +88,9 @@ static esp_err_t eth_new(esp_eth_mac_t **mac, esp_eth_phy_t **phy)
 /** @brief W5500: set the chip's Ethernet MAC address (before esp_eth_start). */
 static void eth_set_mac(esp_eth_handle_t eth)
 {
-    uint8_t m[6];
-    if (esp_read_mac(m, ESP_MAC_ETH) == ESP_OK) {
-        esp_eth_ioctl(eth, ETH_CMD_S_MAC_ADDR, m);
+    uint8_t mac_address[6];
+    if (esp_read_mac(mac_address, ESP_MAC_ETH) == ESP_OK) {
+        esp_eth_ioctl(eth, ETH_CMD_S_MAC_ADDR, mac_address);
     }
 }
 
@@ -167,11 +167,11 @@ static void on_eth(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     switch (id) {
     case ETHERNET_EVENT_CONNECTED: {
-        esp_eth_handle_t h = *(esp_eth_handle_t *)data;
+        esp_eth_handle_t eth_handle = *(esp_eth_handle_t *)data;
         eth_speed_t speed = ETH_SPEED_10M;
         eth_duplex_t duplex = ETH_DUPLEX_HALF;
-        esp_eth_ioctl(h, ETH_CMD_G_SPEED, &speed);
-        esp_eth_ioctl(h, ETH_CMD_G_DUPLEX_MODE, &duplex);
+        esp_eth_ioctl(eth_handle, ETH_CMD_G_SPEED, &speed);
+        esp_eth_ioctl(eth_handle, ETH_CMD_G_DUPLEX_MODE, &duplex);
         ESP_LOGI(TAG, "link up, %s Mbps %s duplex", speed == ETH_SPEED_100M ? "100" : "10",
                  duplex == ETH_DUPLEX_FULL ? "full" : "half");
         break;
@@ -212,9 +212,9 @@ void clu_eth_start(void)
     ESP_ERROR_CHECK(esp_netif_attach(netif, esp_eth_new_netif_glue(eth)));
     ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ESP_EVENT_ANY_ID, on_eth, NULL));
     clu_net_init(CLU_NET_ETH, netif); // after attach: DHCP / static needs the started netif driver
-    uint8_t m[6];
-    esp_eth_ioctl(eth, ETH_CMD_G_MAC_ADDR, m);
-    ESP_LOGI(TAG, ETH_NAME " up, MAC " MACSTR, MAC2STR(m));
+    uint8_t mac_address[6];
+    esp_eth_ioctl(eth, ETH_CMD_G_MAC_ADDR, mac_address);
+    ESP_LOGI(TAG, ETH_NAME " up, MAC " MACSTR, MAC2STR(mac_address));
     ESP_ERROR_CHECK(esp_eth_start(eth));
 }
 

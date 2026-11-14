@@ -33,12 +33,12 @@ typedef struct tfbus_vmod tfbus_vmod_t;
 typedef struct {
     uint8_t hw_type, fw_type, fw_api_ver;  /**< DISCOVER identity. */
     uint8_t version[4];                    /**< VERSION_QUERY reply: fwApiVer verA verB hwVer. */
-    /** STATUS_POLL: write the status payload to @p p; return its length, < 0 for no reply
+    /** STATUS_POLL: write the status payload to @p status_buffer; return its length, < 0 for no reply
      *  (the master takes the module offline). */
-    int (*status)(tfbus_vmod_t *m, uint8_t *p, size_t cap);
+    int (*status)(tfbus_vmod_t *module, uint8_t *status_buffer, size_t cap);
     /** Any other unicast frame (MODULE_CMD, class frames, ...); payload after the type byte.
      *  Return false for no reply. NULL = ACK everything. */
-    bool (*command)(tfbus_vmod_t *m, uint8_t type, const uint8_t *pl, size_t plen);
+    bool (*command)(tfbus_vmod_t *module, uint8_t type, const uint8_t *payload, size_t plen);
 } tfbus_vmod_ops_t;
 
 /** @brief One emulated module. */
@@ -50,11 +50,12 @@ struct tfbus_vmod {
 };
 
 /**
- * @brief Handle one CLU -> module frame for the modules @p m[0..n) (::tfbus_uart_local_fn_t shape).
+ * @brief Handle one CLU -> module frame for the modules @p modules[0..module_count) (::tfbus_uart_local_fn_t shape).
  * @return Reply length in @p rx; 0 if not for these modules (or the reply does not fit); < 0 if
  *         handled without a reply.
  */
-int tfbus_vmod_frame(tfbus_vmod_t *m, int n, const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap);
+int tfbus_vmod_frame(tfbus_vmod_t *modules, int module_count, const uint8_t *tx, size_t txlen, uint8_t *rx,
+                     size_t rxcap);
 
 /** @name IO_MODULE_DIN_8 (hwType 0x1e: 8 DIN + 8 DOUT) wire format
  * @{ */
@@ -65,13 +66,13 @@ int tfbus_vmod_frame(tfbus_vmod_t *m, int n, const uint8_t *tx, size_t txlen, ui
 #define TFBUS_DIN8_STATUS_LEN 9
 
 /** @brief STATUS_POLL payload: 02 | 00 01 01 [inputs] | 01 01 01 [outputs]. */
-void tfbus_din8_status(uint8_t inputs, uint8_t outputs, uint8_t p[TFBUS_DIN8_STATUS_LEN]);
+void tfbus_din8_status(uint8_t inputs, uint8_t outputs, uint8_t status_buffer[TFBUS_DIN8_STATUS_LEN]);
 
 /**
  * @brief Apply a MODULE_CMD's ACTIVATE (08) / DEACTIVATE (09) [bitmask] records to @p out.
  * @return false if the payload does not parse.
  */
-bool tfbus_din8_cmd(const uint8_t *pl, size_t plen, uint8_t *out);
+bool tfbus_din8_cmd(const uint8_t *payload, size_t plen, uint8_t *out);
 /** @} */
 
 #ifdef __cplusplus

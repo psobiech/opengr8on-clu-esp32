@@ -11,27 +11,27 @@
 #include <strings.h>
 
 /** @brief Value of header @p name in the header block [h, end) (case-insensitive), NULL if absent. */
-static const char *find_header(const char *h, const char *name, size_t *vlen)
+static const char *find_header(const char *header_block, const char *name, size_t *vlen)
 {
-    size_t nl = strlen(name);
-    while (*h) {
-        const char *eol = strstr(h, "\r\n");
+    size_t name_length = strlen(name);
+    while (*header_block) {
+        const char *eol = strstr(header_block, "\r\n");
         if (!eol) {
-            eol = h + strlen(h);
+            eol = header_block + strlen(header_block);
         }
-        if ((size_t)(eol - h) > nl && strncasecmp(h, name, nl) == 0 && h[nl] == ':') {
-            const char *v = h + nl + 1;
-            while (v < eol && (*v == ' ' || *v == '\t')) {
-                v++;
+        if ((size_t)(eol - header_block) > name_length && strncasecmp(header_block, name, name_length) == 0 && header_block[name_length] == ':') {
+            const char *header_value = header_block + name_length + 1;
+            while (header_value < eol && (*header_value == ' ' || *header_value == '\t')) {
+                header_value++;
             }
-            const char *e = eol;
-            while (e > v && (e[-1] == ' ' || e[-1] == '\t')) {
-                e--;
+            const char *trimmed_end = eol;
+            while (trimmed_end > header_value && (trimmed_end[-1] == ' ' || trimmed_end[-1] == '\t')) {
+                trimmed_end--;
             }
-            *vlen = (size_t)(e - v);
-            return v;
+            *vlen = (size_t)(trimmed_end - header_value);
+            return header_value;
         }
-        h = *eol ? eol + 2 : eol;
+        header_block = *eol ? eol + 2 : eol;
     }
     return NULL;
 }
@@ -67,41 +67,41 @@ int http_parse_head(char *buf, size_t len, http_req_head_t *out)
     char *target = sp1 + 1;
     if (target[0] != '/') {
         // absolute-form (http://host/path): keep the path only
-        char *p = strstr(target, "://");
-        p = p ? strchr(p + 3, '/') : NULL;
-        if (!p) {
+        char *absolute_path = strstr(target, "://");
+        absolute_path = absolute_path ? strchr(absolute_path + 3, '/') : NULL;
+        if (!absolute_path) {
             return -1;
         }
-        target = p;
+        target = absolute_path;
     }
-    char *q = strchr(target, '?');
-    if (q) {
-        *q++ = 0;
+    char *query_string = strchr(target, '?');
+    if (query_string) {
+        *query_string++ = 0;
     }
     out->method = buf;
     out->path = target;
-    out->query = q ? q : "";
+    out->query = query_string ? query_string : "";
     out->headers = eol + 2;
 
     out->content_length = 0;
-    size_t vl;
-    const char *v = find_header(out->headers, "Content-Length", &vl);
-    if (v) {
+    size_t header_value_length;
+    const char *header_value = find_header(out->headers, "Content-Length", &header_value_length);
+    if (header_value) {
         char num[16];
-        if (vl == 0 || vl >= sizeof num) {
+        if (header_value_length == 0 || header_value_length >= sizeof num) {
             return -1;
         }
-        memcpy(num, v, vl);
-        num[vl] = 0;
-        char *e;
-        unsigned long n = strtoul(num, &e, 10);
-        if (*e || !isdigit((unsigned char)num[0])) {
+        memcpy(num, header_value, header_value_length);
+        num[header_value_length] = 0;
+        char *number_end;
+        unsigned long parsed_content_length = strtoul(num, &number_end, 10);
+        if (*number_end || !isdigit((unsigned char)num[0])) {
             return -1;
         }
-        out->content_length = n;
+        out->content_length = parsed_content_length;
     }
-    v = find_header(out->headers, "Transfer-Encoding", &vl);
-    out->chunked = v && vl >= 7 && strncasecmp(v + vl - 7, "chunked", 7) == 0;
+    header_value = find_header(out->headers, "Transfer-Encoding", &header_value_length);
+    out->chunked = header_value && header_value_length >= 7 && strncasecmp(header_value + header_value_length - 7, "chunked", 7) == 0;
     return head_len;
 }
 
@@ -136,7 +136,7 @@ int http_format_head(char *out, size_t cap, int status, const char *headers, siz
     if (status < 100 || status > 999) {
         status = 500;
     }
-    int n = snprintf(out, cap, "HTTP/1.1 %d %s\r\n%sContent-Length: %u\r\nConnection: close\r\n\r\n", status,
+    int formatted_length = snprintf(out, cap, "HTTP/1.1 %d %s\r\n%sContent-Length: %u\r\nConnection: close\r\n\r\n", status,
                      http_reason(status), headers ? headers : "", (unsigned)body_len);
-    return (n < 0 || (size_t)n >= cap) ? -1 : n;
+    return (formatted_length < 0 || (size_t)formatted_length >= cap) ? -1 : formatted_length;
 }

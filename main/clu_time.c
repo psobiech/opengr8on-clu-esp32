@@ -64,20 +64,20 @@ static int s_zone;
 static bool s_sntp_started;
 static bool s_sntp_off; // GATE UseNTP = 0
 
-/** @brief Persist a string (@p s != NULL) or an i32 (@p n) under @p key. */
-static void nvs_put(const char *key, const char *s, int32_t n)
+/** @brief Persist a string (@p string_value != NULL) or an i32 (@p integer_value) under @p key. */
+static void nvs_put(const char *key, const char *string_value, int32_t integer_value)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &nvs_handle) != ESP_OK) {
         return;
     }
-    if (s) {
-        nvs_set_str(h, key, s);
+    if (string_value) {
+        nvs_set_str(nvs_handle, key, string_value);
     } else {
-        nvs_set_i32(h, key, n);
+        nvs_set_i32(nvs_handle, key, integer_value);
     }
-    nvs_commit(h);
-    nvs_close(h);
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
 }
 
 /**
@@ -94,11 +94,11 @@ static void apply_zone(int zone)
 }
 
 /** @brief SNTP sync notification: keep the RTC in step. Runs in the lwIP task. */
-static void time_synced(struct timeval *tv)
+static void time_synced(struct timeval *synced_time)
 {
     ESP_LOGI(TAG, "time synced from %s", s_ntp);
 #if CONFIG_CLU_RTC
-    clu_rtc_set(tv ? tv->tv_sec : time(NULL));
+    clu_rtc_set(synced_time ? synced_time->tv_sec : time(NULL));
 #endif
 }
 
@@ -117,13 +117,13 @@ static void rtc_restore(void)
     if (!clu_rtc_init(chip, CONFIG_CLU_RTC_SDA_GPIO, CONFIG_CLU_RTC_SCL_GPIO)) {
         return;
     }
-    time_t t;
-    if (clu_rtc_get(&t)) {
-        struct timeval tv = {.tv_sec = t};
-        settimeofday(&tv, NULL);
-        ESP_LOGI(TAG, "clock set from RTC: %lld", (long long)t);
-    } else if ((t = time(NULL)) >= CLU_RTC_MIN_VALID) {
-        clu_rtc_set(t);
+    time_t rtc_time;
+    if (clu_rtc_get(&rtc_time)) {
+        struct timeval time_value = {.tv_sec = rtc_time};
+        settimeofday(&time_value, NULL);
+        ESP_LOGI(TAG, "clock set from RTC: %lld", (long long)rtc_time);
+    } else if ((rtc_time = time(NULL)) >= CLU_RTC_MIN_VALID) {
+        clu_rtc_set(rtc_time);
         ESP_LOGW(TAG, "RTC time invalid, seeded from the system clock kept across the reset");
     } else {
         ESP_LOGW(TAG, "RTC time invalid (no backup cell?): clock wrong until SNTP or SetDateTime");
@@ -146,15 +146,15 @@ static void ntp_restart(void)
 
 void clu_time_init(void)
 {
-    nvs_handle_t h;
+    nvs_handle_t nvs_handle;
     int32_t zone = 0;
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        size_t l = sizeof s_ntp;
-        if (nvs_get_str(h, "ntp", s_ntp, &l) != ESP_OK || !s_ntp[0]) {
+    if (nvs_open(NVS_NS, NVS_READONLY, &nvs_handle) == ESP_OK) {
+        size_t ntp_server_length = sizeof s_ntp;
+        if (nvs_get_str(nvs_handle, "ntp", s_ntp, &ntp_server_length) != ESP_OK || !s_ntp[0]) {
             strlcpy(s_ntp, DEFAULT_NTP, sizeof s_ntp);
         }
-        nvs_get_i32(h, "tz", &zone);
-        nvs_close(h);
+        nvs_get_i32(nvs_handle, "tz", &zone);
+        nvs_close(nvs_handle);
     }
     apply_zone(zone);
     rtc_restore();

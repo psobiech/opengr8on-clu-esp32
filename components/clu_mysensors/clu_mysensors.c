@@ -132,26 +132,26 @@ static bool id_taken(uint8_t id)
 
 static void ids_save(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &nvs_handle) != ESP_OK) {
         ESP_LOGE(TAG, "NVS open failed: node ids not saved");
         return;
     }
-    nvs_set_blob(h, NVS_IDS, s_ids, sizeof s_ids);
-    nvs_commit(h);
-    nvs_close(h);
+    nvs_set_blob(nvs_handle, NVS_IDS, s_ids, sizeof s_ids);
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
 }
 
 static void ids_load(void)
 {
-    nvs_handle_t h;
+    nvs_handle_t nvs_handle;
     size_t len = sizeof s_ids;
     memset(s_ids, 0, sizeof s_ids);
-    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        if (nvs_get_blob(h, NVS_IDS, s_ids, &len) != ESP_OK || len != sizeof s_ids) {
+    if (nvs_open(NVS_NS, NVS_READONLY, &nvs_handle) == ESP_OK) {
+        if (nvs_get_blob(nvs_handle, NVS_IDS, s_ids, &len) != ESP_OK || len != sizeof s_ids) {
             memset(s_ids, 0, sizeof s_ids);
         }
-        nvs_close(h);
+        nvs_close(nvs_handle);
     }
 }
 
@@ -230,39 +230,39 @@ static ms_node_t *node_find(uint8_t id)
 /** @brief Node entry, created (dropping the least recently seen one when full). */
 static ms_node_t *node_get(uint8_t id, int64_t now)
 {
-    ms_node_t *n = node_find(id);
-    if (n) {
-        return n;
+    ms_node_t *node_record = node_find(id);
+    if (node_record) {
+        return node_record;
     }
-    n = &s_nodes[0];
+    node_record = &s_nodes[0];
     for (int i = 0; i < MS_MAX_NODES; i++) {
         if (!s_nodes[i].used) {
-            n = &s_nodes[i];
+            node_record = &s_nodes[i];
             break;
         }
-        if (s_nodes[i].last_ms < n->last_ms) {
-            n = &s_nodes[i];
+        if (s_nodes[i].last_ms < node_record->last_ms) {
+            node_record = &s_nodes[i];
         }
     }
-    memset(n, 0, sizeof *n);
-    n->used = true;
-    n->id = id;
-    n->battery = -1;
-    n->last_ms = now;
-    return n;
+    memset(node_record, 0, sizeof *node_record);
+    node_record->used = true;
+    node_record->id = id;
+    node_record->battery = -1;
+    node_record->last_ms = now;
+    return node_record;
 }
 
 static void child_set(uint8_t node, uint8_t child, uint8_t type, const char *desc)
 {
     ms_child_t *free_slot = NULL;
     for (int i = 0; i < MS_MAX_CHILDREN; i++) {
-        ms_child_t *c = &s_children[i];
-        if (c->used && c->node == node && c->child == child) {
-            free_slot = c;
+        ms_child_t *child_record = &s_children[i];
+        if (child_record->used && child_record->node == node && child_record->child == child) {
+            free_slot = child_record;
             break;
         }
-        if (!c->used && !free_slot) {
-            free_slot = c;
+        if (!child_record->used && !free_slot) {
+            free_slot = child_record;
         }
     }
     if (!free_slot) {
@@ -279,9 +279,9 @@ static void child_set(uint8_t node, uint8_t child, uint8_t type, const char *des
 static ms_value_t *value_find(uint8_t node, uint8_t child, uint8_t type)
 {
     for (int i = 0; i < MS_MAX_VALUES; i++) {
-        ms_value_t *v = &s_values[i];
-        if (v->used && v->node == node && v->child == child && v->type == type) {
-            return v;
+        ms_value_t *cached_value = &s_values[i];
+        if (cached_value->used && cached_value->node == node && cached_value->child == child && cached_value->type == type) {
+            return cached_value;
         }
     }
     return NULL;
@@ -289,34 +289,34 @@ static ms_value_t *value_find(uint8_t node, uint8_t child, uint8_t type)
 
 static void value_set(uint8_t node, uint8_t child, uint8_t type, const char *payload, int64_t now)
 {
-    ms_value_t *v = value_find(node, child, type);
-    if (!v) {
-        v = &s_values[0];
+    ms_value_t *cached_value = value_find(node, child, type);
+    if (!cached_value) {
+        cached_value = &s_values[0];
         for (int i = 0; i < MS_MAX_VALUES; i++) {
             if (!s_values[i].used) {
-                v = &s_values[i];
+                cached_value = &s_values[i];
                 break;
             }
-            if (s_values[i].ms < v->ms) {
-                v = &s_values[i];
+            if (s_values[i].ms < cached_value->ms) {
+                cached_value = &s_values[i];
             }
         }
-        v->used = true;
-        v->node = node;
-        v->child = child;
-        v->type = type;
+        cached_value->used = true;
+        cached_value->node = node;
+        cached_value->child = child;
+        cached_value->type = type;
     }
-    strlcpy(v->payload, payload, sizeof v->payload);
-    v->ms = now;
+    strlcpy(cached_value->payload, payload, sizeof cached_value->payload);
+    cached_value->ms = now;
 }
 
 // ---------------------------------------------------------------------------------------------
 // Wire
 // ---------------------------------------------------------------------------------------------
-static void trace_line(const char *dir, const ms_msg_t *m, const char *note)
+static void trace_line(const char *dir, const ms_msg_t *message, const char *note)
 {
     char line[MS_LINE_CAP];
-    if (ms_format(m, line, sizeof line) <= 0) {
+    if (ms_format(message, line, sizeof line) <= 0) {
         return;
     }
     line[strlen(line) - 1] = 0;
@@ -335,18 +335,18 @@ static void gw_queue(uint8_t to, const uint8_t *data, size_t len)
         ESP_LOGW(TAG, "RS485 send queue full: frame to %u dropped", to);
         return;
     }
-    int i = (s_gwq_head + s_gwq_n++) % GW_QUEUE;
-    s_gwq[i].len = (uint8_t)ms_rs485_encode(to, MS_GATEWAY, data, len, s_gwq[i].buf, sizeof s_gwq[i].buf);
+    int queue_index = (s_gwq_head + s_gwq_n++) % GW_QUEUE;
+    s_gwq[queue_index].len = (uint8_t)ms_rs485_encode(to, MS_GATEWAY, data, len, s_gwq[queue_index].buf, sizeof s_gwq[queue_index].buf);
 }
 
 /** @brief Send queued frames if nobody talked for GW_IDLE_MS (UART task). */
 static void gw_flush(int64_t now)
 {
     while (s_gwq_n && now - s_last_byte_ms >= GW_IDLE_MS) {
-        int i = s_gwq_head;
+        int queue_index = s_gwq_head;
         s_gwq_head = (s_gwq_head + 1) % GW_QUEUE;
         s_gwq_n--;
-        if (uart_write_bytes(s_cfg.uart_num, s_gwq[i].buf, s_gwq[i].len) != s_gwq[i].len) {
+        if (uart_write_bytes(s_cfg.uart_num, s_gwq[queue_index].buf, s_gwq[queue_index].len) != s_gwq[queue_index].len) {
             ESP_LOGW(TAG, "UART write failed");
             continue;
         }
@@ -358,52 +358,52 @@ static void gw_flush(int64_t now)
 }
 
 /** @brief A message (controller side, node = destination) to a node: frame queued (UART task only). */
-static void wire(const ms_msg_t *m)
+static void wire(const ms_msg_t *message)
 {
     uint8_t bin[MS_RS485_MAX_DATA];
-    size_t n = m->node == MS_GATEWAY ? 0 : ms_bin_encode(m, MS_GATEWAY, bin, sizeof bin);
-    if (!n) {
-        ESP_LOGW(TAG, "message to %u/%u not sent (to the gateway itself / too long)", m->node, m->child);
+    size_t encoded_length = message->node == MS_GATEWAY ? 0 : ms_bin_encode(message, MS_GATEWAY, bin, sizeof bin);
+    if (!encoded_length) {
+        ESP_LOGW(TAG, "message to %u/%u not sent (to the gateway itself / too long)", message->node, message->child);
         return;
     }
-    trace_line(">", m, "");
-    gw_queue(m->node, bin, n);
+    trace_line(">", message, "");
+    gw_queue(message->node, bin, encoded_length);
 }
 
 static void reply(uint8_t node, uint8_t child, uint8_t cmd, uint8_t type, const char *payload)
 {
-    ms_msg_t r = {.node = node, .child = child, .cmd = cmd, .type = type};
-    strlcpy(r.payload, payload, sizeof r.payload);
-    wire(&r);
+    ms_msg_t response = {.node = node, .child = child, .cmd = cmd, .type = type};
+    strlcpy(response.payload, payload, sizeof response.payload);
+    wire(&response);
 }
 
 /** @brief Local time as seconds since 1970 (what MySensors nodes expect); 0 if the clock is unset. */
 static long long local_epoch(void)
 {
-    time_t t = time(NULL);
-    struct tm lt;
-    if (t < 1609459200 || !localtime_r(&t, &lt)) { // before 2021: clock not set yet
+    time_t current_time = time(NULL);
+    struct tm local_time;
+    if (current_time < 1609459200 || !localtime_r(&current_time, &local_time)) { // before 2021: clock not set yet
         return 0;
     }
     // days from civil (proleptic Gregorian), no dependency on tm_gmtoff / timegm
-    int y = lt.tm_year + 1900, m = lt.tm_mon + 1;
-    y -= m <= 2;
-    int era = (y >= 0 ? y : y - 399) / 400;
-    int yoe = y - era * 400;
-    int doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + lt.tm_mday - 1;
+    int year = local_time.tm_year + 1900, month = local_time.tm_mon + 1;
+    year -= month <= 2;
+    int era = (year >= 0 ? year : year - 399) / 400;
+    int yoe = year - era * 400;
+    int doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + local_time.tm_mday - 1;
     int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     long long days = (long long)era * 146097 + doe - 719468;
-    return days * 86400 + lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec;
+    return days * 86400 + local_time.tm_hour * 3600 + local_time.tm_min * 60 + local_time.tm_sec;
 }
 
 // ---------------------------------------------------------------------------------------------
 // Controller
 // ---------------------------------------------------------------------------------------------
 /** @brief C_INTERNAL from the network. Lock held. Returns false if the scripts need not see it. */
-static bool on_internal(const ms_msg_t *m, int64_t now)
+static bool on_internal(const ms_msg_t *message, int64_t now)
 {
     char buf[24];
-    switch (m->type) {
+    switch (message->type) {
     case MS_I_ID_REQUEST: {
         uint8_t id = id_alloc();
         if (!id) {
@@ -415,35 +415,35 @@ static bool on_internal(const ms_msg_t *m, int64_t now)
         // child = the request's token (MySensors 2.x AUTO nodes send a random one and take a
         // response carrying it or 255): echoed, so a second node asking at the same time keeps
         // waiting for its own instead of taking this id too
-        reply(MS_BROADCAST, m->child, MS_C_INTERNAL, MS_I_ID_RESPONSE, buf);
+        reply(MS_BROADCAST, message->child, MS_C_INTERNAL, MS_I_ID_RESPONSE, buf);
         break;
     }
     case MS_I_CONFIG:
-        reply(m->node, MS_BROADCAST, MS_C_INTERNAL, MS_I_CONFIG, s_cfg.metric ? "M" : "I");
+        reply(message->node, MS_BROADCAST, MS_C_INTERNAL, MS_I_CONFIG, s_cfg.metric ? "M" : "I");
         break;
     case MS_I_TIME: {
-        long long t = local_epoch();
-        if (t) {
-            snprintf(buf, sizeof buf, "%lld", t);
-            reply(m->node, MS_BROADCAST, MS_C_INTERNAL, MS_I_TIME, buf);
+        long long current_epoch = local_epoch();
+        if (current_epoch) {
+            snprintf(buf, sizeof buf, "%lld", current_epoch);
+            reply(message->node, MS_BROADCAST, MS_C_INTERNAL, MS_I_TIME, buf);
         }
         break;
     }
     case MS_I_LOG_MESSAGE:
-        ESP_LOGD(TAG, "node %u: %s", m->node, m->payload);
+        ESP_LOGD(TAG, "node %u: %s", message->node, message->payload);
         return false;
     case MS_I_SKETCH_NAME:
     case MS_I_SKETCH_VERSION:
     case MS_I_BATTERY_LEVEL:
-        if (m->node != MS_BROADCAST) {
-            ms_node_t *n = node_get(m->node, now);
-            if (m->type == MS_I_SKETCH_NAME) {
-                strlcpy(n->sketch, m->payload, sizeof n->sketch);
-            } else if (m->type == MS_I_SKETCH_VERSION) {
-                strlcpy(n->version, m->payload, sizeof n->version);
+        if (message->node != MS_BROADCAST) {
+            ms_node_t *node_record = node_get(message->node, now);
+            if (message->type == MS_I_SKETCH_NAME) {
+                strlcpy(node_record->sketch, message->payload, sizeof node_record->sketch);
+            } else if (message->type == MS_I_SKETCH_VERSION) {
+                strlcpy(node_record->version, message->payload, sizeof node_record->version);
             } else {
-                int b = atoi(m->payload);
-                n->battery = (int8_t)(b < 0 ? 0 : b > 100 ? 100 : b);
+                int battery_level = atoi(message->payload);
+                node_record->battery = (int8_t)(battery_level < 0 ? 0 : battery_level > 100 ? 100 : battery_level);
             }
         }
         break;
@@ -454,47 +454,47 @@ static bool on_internal(const ms_msg_t *m, int64_t now)
 }
 
 /** @brief A message from a node, for the controller. */
-static void handle(const ms_msg_t *m, int64_t now)
+static void handle(const ms_msg_t *message, int64_t now)
 {
     bool to_lua = true;
     xSemaphoreTake(s_mx, portMAX_DELAY);
     s_rx++;
-    if (m->node != MS_BROADCAST) {
-        id_mark(m->node);
-        node_get(m->node, now)->last_ms = now;
+    if (message->node != MS_BROADCAST) {
+        id_mark(message->node);
+        node_get(message->node, now)->last_ms = now;
     }
-    switch (m->cmd) {
+    switch (message->cmd) {
     case MS_C_PRESENTATION:
-        if (m->child == MS_BROADCAST) {
-            if (m->node != MS_BROADCAST) {
-                ms_node_t *n = node_get(m->node, now);
-                n->type = m->type;
-                strlcpy(n->lib, m->payload, sizeof n->lib);
+        if (message->child == MS_BROADCAST) {
+            if (message->node != MS_BROADCAST) {
+                ms_node_t *node_record = node_get(message->node, now);
+                node_record->type = message->type;
+                strlcpy(node_record->lib, message->payload, sizeof node_record->lib);
             }
         } else {
-            child_set(m->node, m->child, m->type, m->payload);
-            ms_vmod_present(m->node, m->child, m->type, m->payload);
+            child_set(message->node, message->child, message->type, message->payload);
+            ms_vmod_present(message->node, message->child, message->type, message->payload);
         }
         break;
     case MS_C_SET:
-        value_set(m->node, m->child, m->type, m->payload, now);
-        ms_vmod_value(m->node, m->child, m->type, m->payload);
+        value_set(message->node, message->child, message->type, message->payload, now);
+        ms_vmod_value(message->node, message->child, message->type, message->payload);
         break;
     case MS_C_REQ: {
-        const ms_value_t *v = value_find(m->node, m->child, m->type);
-        if (v) {
-            reply(m->node, m->child, MS_C_SET, m->type, v->payload);
+        const ms_value_t *sensor_value = value_find(message->node, message->child, message->type);
+        if (sensor_value) {
+            reply(message->node, message->child, MS_C_SET, message->type, sensor_value->payload);
         }
         break;
     }
     case MS_C_INTERNAL:
-        to_lua = on_internal(m, now);
+        to_lua = on_internal(message, now);
         break;
     default: // C_STREAM: no firmware updates from here
         break;
     }
     xSemaphoreGive(s_mx);
-    if (to_lua && xQueueSend(s_luaq, m, 0) != pdTRUE) {
+    if (to_lua && xQueueSend(s_luaq, message, 0) != pdTRUE) {
         s_dropped++;
     }
 }
@@ -503,50 +503,50 @@ static void handle(const ms_msg_t *m, int64_t now)
 static void gw_answer(uint8_t to, uint8_t type, uint8_t value)
 {
     uint8_t bin[MS_BIN_HEADER + 1];
-    size_t n = ms_bin_encode_byte(MS_GATEWAY, to, MS_BROADCAST, MS_C_INTERNAL, type, value, bin, sizeof bin);
-    gw_queue(to, bin, n);
+    size_t encoded_length = ms_bin_encode_byte(MS_GATEWAY, to, MS_BROADCAST, MS_C_INTERNAL, type, value, bin, sizeof bin);
+    gw_queue(to, bin, encoded_length);
 }
 
 /**
  * @brief A frame for us (node 0) or everyone. What a MySensors gateway answers on its own (find
  * parent, ping, registration, echo) is answered here, the rest goes to the controller.
  */
-static void gw_frame(const ms_rs485_frame_t *f, int64_t now)
+static void gw_frame(const ms_rs485_frame_t *frame, int64_t now)
 {
-    ms_bin_t b;
-    if (!ms_bin_decode(f->data, f->len, &b)) {
+    ms_bin_t decoded_message;
+    if (!ms_bin_decode(frame->data, frame->len, &decoded_message)) {
         s_bad++;
         s_win.bad++;
-        ESP_LOGW(TAG, "RS485 frame from %u: not a MySensors 2.x message", f->from);
+        ESP_LOGW(TAG, "RS485 frame from %u: not a MySensors 2.x message", frame->from);
         return;
     }
     s_win.frames++;
-    trace_line("<", &b.m, f->to == MS_BROADCAST ? " (broadcast)" : "");
-    const uint8_t cmd = b.m.cmd, type = b.m.type;
-    if (f->to == MS_BROADCAST) {
+    trace_line("<", &decoded_message.m, frame->to == MS_BROADCAST ? " (broadcast)" : "");
+    const uint8_t cmd = decoded_message.m.cmd, type = decoded_message.m.type;
+    if (frame->to == MS_BROADCAST) {
         if (cmd != MS_C_INTERNAL) {
-            handle(&b.m, now);
+            handle(&decoded_message.m, now);
         } else if (type == MS_I_FIND_PARENT_REQUEST) {
-            gw_answer(b.sender, MS_I_FIND_PARENT_RESPONSE, 0); // distance to the gateway: 0
+            gw_answer(decoded_message.sender, MS_I_FIND_PARENT_RESPONSE, 0); // distance to the gateway: 0
         }
         return; // other internal broadcasts are for the nodes
     }
-    if (b.req_echo && !b.is_echo) { // the sender wants its message back, flagged as echo
-        uint8_t e[MS_RS485_MAX_DATA];
-        memcpy(e, f->data, f->len);
-        e[0] = MS_GATEWAY;
-        e[1] = MS_GATEWAY;
-        e[2] = b.sender;
-        e[4] = (uint8_t)((e[4] & ~0x08) | 0x10);
-        gw_queue(b.sender, e, f->len);
+    if (decoded_message.req_echo && !decoded_message.is_echo) { // the sender wants its message back, flagged as echo
+        uint8_t echo_frame[MS_RS485_MAX_DATA];
+        memcpy(echo_frame, frame->data, frame->len);
+        echo_frame[0] = MS_GATEWAY;
+        echo_frame[1] = MS_GATEWAY;
+        echo_frame[2] = decoded_message.sender;
+        echo_frame[4] = (uint8_t)((echo_frame[4] & ~0x08) | 0x10);
+        gw_queue(decoded_message.sender, echo_frame, frame->len);
     }
-    if (!b.is_echo && cmd == MS_C_INTERNAL) {
+    if (!decoded_message.is_echo && cmd == MS_C_INTERNAL) {
         switch (type) {
         case MS_I_PING:
-            gw_answer(b.sender, MS_I_PONG, 1);
+            gw_answer(decoded_message.sender, MS_I_PONG, 1);
             return;
         case MS_I_REGISTRATION_REQUEST:
-            gw_answer(b.sender, MS_I_REGISTRATION_RESPONSE, 1); // approved, like a gateway without
+            gw_answer(decoded_message.sender, MS_I_REGISTRATION_RESPONSE, 1); // approved, like a gateway without
             return;                                              // MY_REGISTRATION_CONTROLLER
         case MS_I_PONG:
         case MS_I_SIGNAL_REPORT_REVERSE:
@@ -555,22 +555,22 @@ static void gw_frame(const ms_rs485_frame_t *f, int64_t now)
             break;
         }
     }
-    handle(&b.m, now);
+    handle(&decoded_message.m, now);
 }
 
 /** @brief Bytes from the bus through the frame receiver. */
-static void gw_bytes(const uint8_t *b, size_t len, int64_t now)
+static void gw_bytes(const uint8_t *received_data, size_t len, int64_t now)
 {
     s_last_byte_ms = now;
     for (size_t i = 0; i < len; i++) {
         if (s_win.bytes + i < sizeof s_win.raw) {
-            s_win.raw[s_win.bytes + i] = b[i];
+            s_win.raw[s_win.bytes + i] = received_data[i];
         }
-        ms_rs485_frame_t f;
-        int r = ms_rs485_rx_push(&s_frx, b[i], &f);
-        if (r > 0) {
-            gw_frame(&f, now);
-        } else if (r < 0) {
+        ms_rs485_frame_t frame;
+        int frame_status = ms_rs485_rx_push(&s_frx, received_data[i], &frame);
+        if (frame_status > 0) {
+            gw_frame(&frame, now);
+        } else if (frame_status < 0) {
             s_bad++;
             s_win.bad++;
         }
@@ -582,23 +582,23 @@ static void gw_bytes(const uint8_t *b, size_t len, int64_t now)
 /** @brief Judge the bus from what came in since the last check (only called when bytes did); log changes. */
 static void check_link(void)
 {
-    link_t l = s_win.frames ? LINK_OK : LINK_GARBAGE; // bytes, never a valid frame
-    if (l == s_link) {
+    link_t link_status = s_win.frames ? LINK_OK : LINK_GARBAGE; // bytes, never a valid frame
+    if (link_status == s_link) {
         return;
     }
-    s_link = l;
-    if (l == LINK_OK) {
+    s_link = link_status;
+    if (link_status == LINK_OK) {
         ESP_LOGI(TAG, "RS485 network: valid frames from the nodes");
     } else {
         // the bytes tell: random ones = baud rate, 00 / ff / framing noise = RS485 wiring / bias
         char hex[3 * sizeof s_win.raw + 1], txt[sizeof s_win.raw + 1];
-        size_t n = s_win.bytes < sizeof s_win.raw ? s_win.bytes : sizeof s_win.raw;
-        for (size_t i = 0; i < n; i++) {
+        size_t preview_length = s_win.bytes < sizeof s_win.raw ? s_win.bytes : sizeof s_win.raw;
+        for (size_t i = 0; i < preview_length; i++) {
             snprintf(hex + 3 * i, 4, "%02x ", s_win.raw[i]);
             txt[i] = s_win.raw[i] >= 0x20 && s_win.raw[i] < 0x7f ? (char)s_win.raw[i] : '.';
         }
-        hex[n ? 3 * n - 1 : 0] = 0;
-        txt[n] = 0;
+        hex[preview_length ? 3 * preview_length - 1 : 0] = 0;
+        txt[preview_length] = 0;
         ESP_LOGW(TAG, "RS485 network: %lu byte(s), %lu bad frame(s), no valid one: baud rate (%d) or RS485 "
                       "A/B swapped / no bias?",
                  (unsigned long)s_win.bytes, (unsigned long)s_win.bad, s_cfg.baud);
@@ -611,8 +611,8 @@ static void probe(int64_t now)
 {
     xSemaphoreTake(s_mx, portMAX_DELAY);
     if (s_probe_id) {
-        const ms_node_t *n = node_find((uint8_t)s_probe_id);
-        if ((n && n->last_ms >= s_probe_sent) || now - s_probe_sent >= PROBE_WAIT_MS) {
+        const ms_node_t *node_record = node_find((uint8_t)s_probe_id);
+        if ((node_record && node_record->last_ms >= s_probe_sent) || now - s_probe_sent >= PROBE_WAIT_MS) {
             s_probe_id = 0; // answered / not answering: next one
         }
     }
@@ -677,9 +677,9 @@ void clu_mysensors_refresh(void)
     int heard = 0;
     xSemaphoreTake(s_mx, portMAX_DELAY);
     for (int i = 0; i < MS_MAX_NODES; i++) {
-        const ms_node_t *n = &s_nodes[i];
-        if (n->used && n->last_ms >= s_probe_since) {
-            alive[n->id / 8] |= (uint8_t)(1u << (n->id % 8));
+        const ms_node_t *node_record = &s_nodes[i];
+        if (node_record->used && node_record->last_ms >= s_probe_since) {
+            alive[node_record->id / 8] |= (uint8_t)(1u << (node_record->id % 8));
             heard++;
         }
     }
@@ -699,9 +699,9 @@ static void tick(int64_t now)
         memset(&s_win, 0, sizeof s_win);
         s_check_ms = now + GW_CHECK_MS;
     }
-    ms_msg_t m;
-    while (s_gwq_n < GW_QUEUE && xQueueReceive(s_txq, &m, 0) == pdTRUE) {
-        wire(&m);
+    ms_msg_t message;
+    while (s_gwq_n < GW_QUEUE && xQueueReceive(s_txq, &message, 0) == pdTRUE) {
+        wire(&message);
     }
     probe(now);
     gw_flush(now);
@@ -711,36 +711,36 @@ static void ms_task(void *arg)
 {
     uint8_t buf[64];
     for (;;) {
-        int n = uart_read_bytes(s_cfg.uart_num, buf, sizeof buf, pdMS_TO_TICKS(20));
+        int bytes_read = uart_read_bytes(s_cfg.uart_num, buf, sizeof buf, pdMS_TO_TICKS(20));
         int64_t now = now_ms();
-        if (n > 0) {
-            gw_bytes(buf, (size_t)n, now);
+        if (bytes_read > 0) {
+            gw_bytes(buf, (size_t)bytes_read, now);
         }
         tick(now);
     }
 }
 
-bool clu_mysensors_send(const ms_msg_t *m)
+bool clu_mysensors_send(const ms_msg_t *message)
 {
-    if (!s_txq || strlen(m->payload) > MS_MAX_PAYLOAD || strpbrk(m->payload, "\r\n")) {
+    if (!s_txq || strlen(message->payload) > MS_MAX_PAYLOAD || strpbrk(message->payload, "\r\n")) {
         return false;
     }
-    if (m->cmd == MS_C_SET) {
+    if (message->cmd == MS_C_SET) {
         // a node asking for this value later (C_REQ, e.g. after a reboot) gets it
         xSemaphoreTake(s_mx, portMAX_DELAY);
-        value_set(m->node, m->child, m->type, m->payload, now_ms());
+        value_set(message->node, message->child, message->type, message->payload, now_ms());
         xSemaphoreGive(s_mx);
-        ms_vmod_value(m->node, m->child, m->type, m->payload); // an emulated output follows it
+        ms_vmod_value(message->node, message->child, message->type, message->payload); // an emulated output follows it
     }
-    return xQueueSend(s_txq, m, 0) == pdTRUE;
+    return xQueueSend(s_txq, message, 0) == pdTRUE;
 }
 
 /** @brief ms_vmod_cfg_t::send. */
 static bool vmod_send(uint8_t node, uint8_t child, uint8_t cmd, uint8_t vtype, const char *payload)
 {
-    ms_msg_t m = {.node = node, .child = child, .cmd = cmd, .type = vtype};
-    strlcpy(m.payload, payload, sizeof m.payload);
-    return clu_mysensors_send(&m);
+    ms_msg_t message = {.node = node, .child = child, .cmd = cmd, .type = vtype};
+    strlcpy(message.payload, payload, sizeof message.payload);
+    return clu_mysensors_send(&message);
 }
 
 bool clu_mysensors_connected(void)
@@ -751,43 +751,43 @@ bool clu_mysensors_connected(void)
 // ---------------------------------------------------------------------------------------------
 // Lua (__clu.ms_*), used by mysensors.lua
 // ---------------------------------------------------------------------------------------------
-static uint8_t arg_u8(lua_State *L, int i)
+static uint8_t arg_u8(lua_State *L, int argument_index)
 {
-    lua_Integer v = luaL_checkinteger(L, i);
-    luaL_argcheck(L, v >= 0 && v <= 255, i, "0..255 expected");
-    return (uint8_t)v;
+    lua_Integer argument_value = luaL_checkinteger(L, argument_index);
+    luaL_argcheck(L, argument_value >= 0 && argument_value <= 255, argument_index, "0..255 expected");
+    return (uint8_t)argument_value;
 }
 
 /** @brief `__clu.ms_recv()` -> node, child, cmd, ack, type, payload | nil */
 static int l_recv(lua_State *L)
 {
-    ms_msg_t m;
-    if (xQueueReceive(s_luaq, &m, 0) != pdTRUE) {
+    ms_msg_t message;
+    if (xQueueReceive(s_luaq, &message, 0) != pdTRUE) {
         return 0;
     }
-    lua_pushinteger(L, m.node);
-    lua_pushinteger(L, m.child);
-    lua_pushinteger(L, m.cmd);
-    lua_pushinteger(L, m.ack);
-    lua_pushinteger(L, m.type);
-    lua_pushstring(L, m.payload);
+    lua_pushinteger(L, message.node);
+    lua_pushinteger(L, message.child);
+    lua_pushinteger(L, message.cmd);
+    lua_pushinteger(L, message.ack);
+    lua_pushinteger(L, message.type);
+    lua_pushstring(L, message.payload);
     return 6;
 }
 
 /** @brief `__clu.ms_send(node, child, cmd, type, payload [, ack])` -> queued */
 static int l_send(lua_State *L)
 {
-    ms_msg_t m = {
+    ms_msg_t message = {
         .node = arg_u8(L, 1), .child = arg_u8(L, 2), .cmd = arg_u8(L, 3), .type = arg_u8(L, 4),
         .ack = lua_toboolean(L, 6) ? 1 : 0,
     };
     size_t len;
-    const char *p = luaL_optlstring(L, 5, "", &len);
-    luaL_argcheck(L, m.cmd <= MS_C_STREAM, 3, "command 0..4 expected");
+    const char *payload_text = luaL_optlstring(L, 5, "", &len);
+    luaL_argcheck(L, message.cmd <= MS_C_STREAM, 3, "command 0..4 expected");
     luaL_argcheck(L, len <= MS_MAX_PAYLOAD, 5, "payload longer than 25 bytes");
-    luaL_argcheck(L, strlen(p) == len && !strpbrk(p, "\r\n"), 5, "payload with a line break / NUL");
-    memcpy(m.payload, p, len + 1);
-    lua_pushboolean(L, clu_mysensors_send(&m));
+    luaL_argcheck(L, strlen(payload_text) == len && !strpbrk(payload_text, "\r\n"), 5, "payload with a line break / NUL");
+    memcpy(message.payload, payload_text, len + 1);
+    lua_pushboolean(L, clu_mysensors_send(&message));
     return 1;
 }
 
@@ -795,19 +795,19 @@ static int l_send(lua_State *L)
 static int l_get(lua_State *L)
 {
     uint8_t node = arg_u8(L, 1), child = arg_u8(L, 2), type = arg_u8(L, 3);
-    char p[MS_MAX_PAYLOAD + 1];
+    char value_text[MS_MAX_PAYLOAD + 1];
     int64_t ms = 0;
     xSemaphoreTake(s_mx, portMAX_DELAY);
-    const ms_value_t *v = value_find(node, child, type);
-    if (v) {
-        strlcpy(p, v->payload, sizeof p);
-        ms = v->ms;
+    const ms_value_t *cached_value = value_find(node, child, type);
+    if (cached_value) {
+        strlcpy(value_text, cached_value->payload, sizeof value_text);
+        ms = cached_value->ms;
     }
     xSemaphoreGive(s_mx);
-    if (!v) {
+    if (!cached_value) {
         return 0;
     }
-    lua_pushstring(L, p);
+    lua_pushstring(L, value_text);
     lua_pushinteger(L, (lua_Integer)(now_ms() - ms));
     return 2;
 }
@@ -828,42 +828,42 @@ static int l_nodes(lua_State *L)
 
     lua_newtable(L);
     for (int i = 0; i < MS_MAX_NODES; i++) {
-        const ms_node_t *n = &nodes[i];
-        if (!n->used) {
+        const ms_node_t *node_entry = &nodes[i];
+        if (!node_entry->used) {
             continue;
         }
         lua_newtable(L);
-        lua_pushstring(L, n->sketch);
+        lua_pushstring(L, node_entry->sketch);
         lua_setfield(L, -2, "sketch");
-        lua_pushstring(L, n->version);
+        lua_pushstring(L, node_entry->version);
         lua_setfield(L, -2, "version");
-        lua_pushstring(L, n->lib);
+        lua_pushstring(L, node_entry->lib);
         lua_setfield(L, -2, "lib");
-        lua_pushinteger(L, n->type);
+        lua_pushinteger(L, node_entry->type);
         lua_setfield(L, -2, "type");
-        if (n->battery >= 0) {
-            lua_pushinteger(L, n->battery);
+        if (node_entry->battery >= 0) {
+            lua_pushinteger(L, node_entry->battery);
             lua_setfield(L, -2, "battery");
         }
-        lua_pushinteger(L, (lua_Integer)(now - n->last_ms));
+        lua_pushinteger(L, (lua_Integer)(now - node_entry->last_ms));
         lua_setfield(L, -2, "age_ms");
         lua_newtable(L);
         lua_setfield(L, -2, "children");
-        lua_rawseti(L, -2, n->id);
+        lua_rawseti(L, -2, node_entry->id);
     }
     for (int i = 0; i < MS_MAX_CHILDREN; i++) {
-        const ms_child_t *c = &children[i];
-        if (!c->used) {
+        const ms_child_t *child_entry = &children[i];
+        if (!child_entry->used) {
             continue;
         }
-        if (lua_rawgeti(L, -1, c->node) == LUA_TTABLE) { // node may have been dropped (registry full)
+        if (lua_rawgeti(L, -1, child_entry->node) == LUA_TTABLE) { // node may have been dropped (registry full)
             lua_getfield(L, -1, "children");
             lua_newtable(L);
-            lua_pushinteger(L, c->type);
+            lua_pushinteger(L, child_entry->type);
             lua_setfield(L, -2, "type");
-            lua_pushstring(L, c->desc);
+            lua_pushstring(L, child_entry->desc);
             lua_setfield(L, -2, "desc");
-            lua_rawseti(L, -2, c->child);
+            lua_rawseti(L, -2, child_entry->child);
             lua_pop(L, 1);
         }
         lua_pop(L, 1);
@@ -915,24 +915,24 @@ static int l_status(lua_State *L)
 static int l_slots(lua_State *L)
 {
     // Lua userdata, not malloc: an error while building the table must not leak it.
-    ms_vmod_slot_t *v = lua_newuserdata(L, sizeof *v * MS_VMOD_MAX * MS_VMOD_SLOTS);
-    int n = ms_vmod_list(v, MS_VMOD_MAX * MS_VMOD_SLOTS);
-    lua_createtable(L, n, 0);
-    for (int i = 0; i < n; i++) {
+    ms_vmod_slot_t *slots = lua_newuserdata(L, sizeof *slots * MS_VMOD_MAX * MS_VMOD_SLOTS);
+    int slot_count = ms_vmod_list(slots, MS_VMOD_MAX * MS_VMOD_SLOTS);
+    lua_createtable(L, slot_count, 0);
+    for (int i = 0; i < slot_count; i++) {
         lua_createtable(L, 0, 7);
-        lua_pushinteger(L, v[i].module + 1);
+        lua_pushinteger(L, slots[i].module + 1);
         lua_setfield(L, -2, "module");
-        lua_pushinteger(L, v[i].sn);
+        lua_pushinteger(L, slots[i].sn);
         lua_setfield(L, -2, "sn");
-        lua_pushstring(L, v[i].kind == MS_SLOT_DIN ? "din" : "dout");
+        lua_pushstring(L, slots[i].kind == MS_SLOT_DIN ? "din" : "dout");
         lua_setfield(L, -2, "kind");
-        lua_pushinteger(L, v[i].channel + 1);
+        lua_pushinteger(L, slots[i].channel + 1);
         lua_setfield(L, -2, "channel");
-        lua_pushinteger(L, v[i].node);
+        lua_pushinteger(L, slots[i].node);
         lua_setfield(L, -2, "node");
-        lua_pushinteger(L, v[i].child);
+        lua_pushinteger(L, slots[i].child);
         lua_setfield(L, -2, "child");
-        lua_pushinteger(L, v[i].vtype);
+        lua_pushinteger(L, slots[i].vtype);
         lua_setfield(L, -2, "vtype");
         lua_rawseti(L, -2, i + 1);
     }
@@ -976,11 +976,11 @@ esp_err_t clu_mysensors_init(const clu_mysensors_cfg_t *cfg)
     }
     ids_load();
     probe_start(now_ms(), PROBE_DELAY_MS);
-    const ms_vmod_cfg_t vc = {.max = cfg->max_modules, .send = vmod_send};
-    ms_vmod_init(&vc); // before the bus master starts: its endpoint must see the first DISCOVER
+    const ms_vmod_cfg_t vmod_config = {.max = cfg->max_modules, .send = vmod_send};
+    ms_vmod_init(&vmod_config); // before the bus master starts: its endpoint must see the first DISCOVER
     clu_lua_register_ext(s_fns, mysensors_lua_start, mysensors_lua_end - mysensors_lua_start - 1, "=mysensors");
 
-    const uart_config_t uc = {
+    const uart_config_t uart_settings = {
         .baud_rate = cfg->baud,
         .data_bits = UART_DATA_8_BITS,
         .parity = UART_PARITY_DISABLE,
@@ -990,7 +990,7 @@ esp_err_t clu_mysensors_init(const clu_mysensors_cfg_t *cfg)
     };
     esp_err_t err = uart_driver_install(cfg->uart_num, 1024, 0, 0, NULL, 0);
     if (err == ESP_OK) {
-        err = uart_param_config(cfg->uart_num, &uc);
+        err = uart_param_config(cfg->uart_num, &uart_settings);
     }
     if (err == ESP_OK) {
         err = uart_set_pin(cfg->uart_num, cfg->tx_pin, cfg->rx_pin, cfg->de_pin, UART_PIN_NO_CHANGE);

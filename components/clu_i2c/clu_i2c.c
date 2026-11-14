@@ -38,7 +38,7 @@ i2c_master_bus_handle_t clu_i2c_bus(int sda_gpio, int scl_gpio)
         ESP_LOGE(TAG, "SDA %d / SCL %d: no free I2C controller", sda_gpio, scl_gpio);
         return NULL;
     }
-    const i2c_master_bus_config_t bc = {
+    const i2c_master_bus_config_t bus_config = {
         .i2c_port = -1, // any free controller
         .sda_io_num = sda_gpio,
         .scl_io_num = scl_gpio,
@@ -47,7 +47,7 @@ i2c_master_bus_handle_t clu_i2c_bus(int sda_gpio, int scl_gpio)
         .flags.enable_internal_pullup = true, // boards usually have external pull-ups too
     };
     i2c_master_bus_handle_t bus;
-    esp_err_t err = i2c_new_master_bus(&bc, &bus);
+    esp_err_t err = i2c_new_master_bus(&bus_config, &bus);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "bus on SDA %d / SCL %d: %s", sda_gpio, scl_gpio, esp_err_to_name(err));
         return NULL;

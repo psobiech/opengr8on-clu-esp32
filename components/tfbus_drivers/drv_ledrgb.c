@@ -96,130 +96,130 @@ typedef struct {
 } rgbw_t;
 
 /** @brief Driver state of @p m, allocated on first use. */
-static rgbw_t *ctx(tfbus_module_t *m)
+static rgbw_t *ctx(tfbus_module_t *module)
 {
-    if (!m->drv_ctx) {
-        rgbw_t *c = calloc(1, sizeof *c);
-        if (!c) {
+    if (!module->drv_ctx) {
+        rgbw_t *rgbw_state = calloc(1, sizeof *rgbw_state);
+        if (!rgbw_state) {
             abort(); // out of memory while loading OM.LUA
         }
-        c->max = 1;
-        c->corr[0] = c->corr[1] = c->corr[2] = 100;
-        c->u_sens = 0.5;
-        c->u_min = 21;
-        c->u_max = 24;
-        c->lch = ledch_new();
-        m->drv_ctx = c;
+        rgbw_state->max = 1;
+        rgbw_state->corr[0] = rgbw_state->corr[1] = rgbw_state->corr[2] = 100;
+        rgbw_state->u_sens = 0.5;
+        rgbw_state->u_min = 21;
+        rgbw_state->u_max = 24;
+        rgbw_state->lch = ledch_new();
+        module->drv_ctx = rgbw_state;
     }
-    return m->drv_ctx;
+    return module->drv_ctx;
 }
 
 // ---------------------------------------------------------------- colour model
 /** @brief Truncate to two decimals (as the real CLU keeps Value / Saturation). */
-static double trunc2(double x)
+static double trunc2(double value)
 {
-    return floor(x * 100 + 1e-6) / 100;
+    return floor(value * 100 + 1e-6) / 100;
 }
 
 /** @brief 0..1 -> 0..255, truncated. */
-static uint8_t to255(double x)
+static uint8_t to255(double normalized_value)
 {
-    return (uint8_t)light_clamp(floor(x * 255 + 1e-6), 0, 255);
+    return (uint8_t)light_clamp(floor(normalized_value * 255 + 1e-6), 0, 255);
 }
 
 /** @brief R/G/B from H/S/V (W untouched). */
-static void hsv_to_rgb(color_t *k)
+static void hsv_to_rgb(color_t *color)
 {
-    double h = fmod(k->h, 360) / 60, s = k->s, v = k->v;
-    int i = (int)h;
-    double f = h - i, p = v * (1 - s), q = v * (1 - s * f), t = v * (1 - s * (1 - f));
-    double rgb[6][3] = {{v, t, p}, {q, v, p}, {p, v, t}, {p, q, v}, {t, p, v}, {v, p, q}};
+    double hue_sector = fmod(color->h, 360) / 60, saturation = color->s, value = color->v;
+    int sector_index = (int)hue_sector;
+    double sector_fraction = hue_sector - sector_index, low_component = value * (1 - saturation), falling_component = value * (1 - saturation * sector_fraction), rising_component = value * (1 - saturation * (1 - sector_fraction));
+    double rgb[6][3] = {{value, rising_component, low_component}, {falling_component, value, low_component}, {low_component, value, rising_component}, {low_component, falling_component, value}, {rising_component, low_component, value}, {value, low_component, falling_component}};
     for (int j = 0; j < 3; j++) {
-        k->c[j] = to255(rgb[i % 6][j]);
+        color->c[j] = to255(rgb[sector_index % 6][j]);
     }
 }
 
 /** @brief H/S/V from R/G/B (Hue whole degrees, S/V two decimals); hue kept where undefined. */
-static void rgb_to_hsv(color_t *k)
+static void rgb_to_hsv(color_t *color)
 {
-    double r = k->c[0] / 255.0, g = k->c[1] / 255.0, b = k->c[2] / 255.0;
-    double mx = fmax(r, fmax(g, b)), mn = fmin(r, fmin(g, b)), d = mx - mn;
-    k->v = trunc2(mx);
-    k->s = mx == 0 ? 0 : trunc2(d / mx);
-    if (d == 0) {
+    double red_component = color->c[0] / 255.0, green_component = color->c[1] / 255.0, blue_component = color->c[2] / 255.0;
+    double maximum = fmax(red_component, fmax(green_component, blue_component)), minimum = fmin(red_component, fmin(green_component, blue_component)), chroma = maximum - minimum;
+    color->v = trunc2(maximum);
+    color->s = maximum == 0 ? 0 : trunc2(chroma / maximum);
+    if (chroma == 0) {
         return; // black / grey: keep hue
     }
     // in float like the real CLU: (255, 127, 63) gives 19.99999 -> 19, not 20
-    float rf = k->c[0] / 255.0f, gf = k->c[1] / 255.0f, bf = k->c[2] / 255.0f;
-    float df = fmaxf(rf, fmaxf(gf, bf)) - fminf(rf, fminf(gf, bf));
-    float h = mx == r ? fmodf((gf - bf) / df, 6) : mx == g ? (bf - rf) / df + 2 : (rf - gf) / df + 4;
-    h *= 60;
-    k->h = floorf(h < 0 ? h + 360 : h);
+    float red_float = color->c[0] / 255.0f, green_float = color->c[1] / 255.0f, blue_float = color->c[2] / 255.0f;
+    float float_chroma = fmaxf(red_float, fmaxf(green_float, blue_float)) - fminf(red_float, fminf(green_float, blue_float));
+    float hue_degrees = maximum == red_component ? fmodf((green_float - blue_float) / float_chroma, 6) : maximum == green_component ? (blue_float - red_float) / float_chroma + 2 : (red_float - green_float) / float_chroma + 4;
+    hue_degrees *= 60;
+    color->h = floorf(hue_degrees < 0 ? hue_degrees + 360 : hue_degrees);
 }
 
 /** @brief Set Value / Hue / Saturation (already in range) and recompute R/G/B. */
-static void set_hsv(color_t *k, double h, double s, double v)
+static void set_hsv(color_t *color, double hue_degrees, double saturation, double value)
 {
-    k->h = h;
-    k->s = s;
-    k->v = v;
-    hsv_to_rgb(k);
+    color->h = hue_degrees;
+    color->s = saturation;
+    color->v = value;
+    hsv_to_rgb(color);
 }
 
-static bool lit(const color_t *k)
+static bool lit(const color_t *color)
 {
-    return k->c[0] || k->c[1] || k->c[2] || k->c[3];
+    return color->c[0] || color->c[1] || color->c[2] || color->c[3];
 }
 
 /** @brief "#RRGGBB" of the R/G/B components. */
-static void rgb_str(const color_t *k, char out[8])
+static void rgb_str(const color_t *color, char out[8])
 {
-    snprintf(out, 8, "#%02X%02X%02X", k->c[0], k->c[1], k->c[2]);
+    snprintf(out, 8, "#%02X%02X%02X", color->c[0], color->c[1], color->c[2]);
 }
 
 // ---------------------------------------------------------------- output
 /** @brief Queue SET_RAMP_TIME for all four channels (two frames: 3, 2 then 1, 0; 10 ms units). */
-static void send_ramp(tfbus_module_t *m, uint32_t ms)
+static void send_ramp(tfbus_module_t *module, uint32_t ms)
 {
-    unsigned t = (ms > LIGHT_RAMP_MAX ? LIGHT_RAMP_MAX : ms) / 10;
-    uint8_t d[4][5];
-    tfbus_tlv_t r[4];
+    unsigned ramp_units = (ms > LIGHT_RAMP_MAX ? LIGHT_RAMP_MAX : ms) / 10;
+    uint8_t ramp_records[4][5];
+    tfbus_tlv_t tlv_records[4];
     for (int i = 0; i < 4; i++) {
-        uint8_t ch = (uint8_t)(3 - i);
-        memcpy(d[i], (uint8_t[]){ch, (uint8_t)t, (uint8_t)(t >> 8), 0, 0}, 5);
-        r[i] = (tfbus_tlv_t){.type = 0x06, .meta = 0x00, .len = 5, .data = d[i]};
+        uint8_t channel = (uint8_t)(3 - i);
+        memcpy(ramp_records[i], (uint8_t[]){channel, (uint8_t)ramp_units, (uint8_t)(ramp_units >> 8), 0, 0}, 5);
+        tlv_records[i] = (tfbus_tlv_t){.type = 0x06, .meta = 0x00, .len = 5, .data = ramp_records[i]};
     }
-    drv_queue_records(m, r, 2);
-    drv_queue_records(m, r + 2, 2);
+    drv_queue_records(module, tlv_records, 2);
+    drv_queue_records(module, tlv_records + 2, 2);
 }
 
 /** @brief Queue SET_CHANNEL_VALUE x4. */
-static void send_values(tfbus_module_t *m, const rgbw_t *c)
+static void send_values(tfbus_module_t *module, const rgbw_t *rgbw_state)
 {
-    uint8_t d[4][2];
-    tfbus_tlv_t r[4];
+    uint8_t value_records[4][2];
+    tfbus_tlv_t tlv_records[4];
     for (int i = 0; i < 4; i++) {
-        d[i][0] = (uint8_t)i;
-        d[i][1] = c->col.c[i];
-        r[i] = (tfbus_tlv_t){.type = 0x05, .meta = 0x10, .len = 2, .data = d[i]};
+        value_records[i][0] = (uint8_t)i;
+        value_records[i][1] = rgbw_state->col.c[i];
+        tlv_records[i] = (tfbus_tlv_t){.type = 0x05, .meta = 0x10, .len = 2, .data = value_records[i]};
     }
-    drv_queue_records(m, r, 4);
+    drv_queue_records(module, tlv_records, 4);
 }
 
 /** @brief Queue a channel correction (07 03 10 [ch, % LE u16]). */
-static void send_corr(tfbus_module_t *m, int ch, uint8_t pct)
+static void send_corr(tfbus_module_t *module, int channel, uint8_t pct)
 {
-    drv_queue_record(m, 0x07, 0x10, (uint8_t[]){(uint8_t)ch, pct, 0}, 3);
+    drv_queue_record(module, 0x07, 0x10, (uint8_t[]){(uint8_t)channel, pct, 0}, 3);
 }
 
 /** @brief Report the colour features: stored on the object (Lua hook, L != NULL) or posted (bus task). */
-static void publish(const rgbw_t *c, lua_State *L, int obj)
+static void publish(const rgbw_t *rgbw_state, lua_State *L, int obj)
 {
     static const int idx[] = {F_VALUE, F_HUE, F_SAT, F_RED, F_GREEN, F_BLUE, F_WHITE};
-    const color_t *k = &c->col;
-    double val[] = {k->v, k->h, k->s, k->c[0], k->c[1], k->c[2], k->c[3]};
+    const color_t *color = &rgbw_state->col;
+    double val[] = {color->v, color->h, color->s, color->c[0], color->c[1], color->c[2], color->c[3]};
     char hex[8];
-    rgb_str(k, hex);
+    rgb_str(color, hex);
     if (L) {
         for (int i = 0; i < 7; i++) {
             tfbus_obj_store(L, obj, idx[i], val[i]);
@@ -228,29 +228,29 @@ static void publish(const rgbw_t *c, lua_State *L, int obj)
         lua_pushstring(L, hex);
         lua_rawseti(L, -2, F_RGB);
         lua_pop(L, 1);
-    } else if (c->name[0]) {
+    } else if (rgbw_state->name[0]) {
         for (int i = 0; i < 7; i++) {
-            clu_lua_post_number(c->name, idx[i], val[i]);
+            clu_lua_post_number(rgbw_state->name, idx[i], val[i]);
         }
-        clu_lua_post_string(c->name, F_RGB, hex);
+        clu_lua_post_string(rgbw_state->name, F_RGB, hex);
     }
 }
 
 /** @brief Fire the events for a colour change @p old -> current. */
-static void events(const rgbw_t *c, const color_t *old)
+static void events(const rgbw_t *rgbw_state, const color_t *old)
 {
-    const color_t *k = &c->col;
-    if (!c->name[0] || !memcmp(old->c, k->c, sizeof k->c)) {
+    const color_t *current_color = &rgbw_state->col;
+    if (!rgbw_state->name[0] || !memcmp(old->c, current_color->c, sizeof current_color->c)) {
         return;
     }
-    clu_lua_post_event(c->name, EV_CHANGE);
-    if (k->v != old->v) {
-        clu_lua_post_event(c->name, k->v > old->v ? EV_RISE : EV_LOWER);
+    clu_lua_post_event(rgbw_state->name, EV_CHANGE);
+    if (current_color->v != old->v) {
+        clu_lua_post_event(rgbw_state->name, current_color->v > old->v ? EV_RISE : EV_LOWER);
     }
-    if (!lit(old) && lit(k)) {
-        clu_lua_post_event(c->name, EV_ON);
-    } else if (lit(old) && !lit(k)) {
-        clu_lua_post_event(c->name, EV_OFF);
+    if (!lit(old) && lit(current_color)) {
+        clu_lua_post_event(rgbw_state->name, EV_ON);
+    } else if (lit(old) && !lit(current_color)) {
+        clu_lua_post_event(rgbw_state->name, EV_OFF);
     }
 }
 
@@ -258,98 +258,98 @@ static void events(const rgbw_t *c, const color_t *old)
 #define NO_RAMP UINT32_MAX
 
 /** @brief Drive the module to @p k and report it (see publish() for @p L / @p obj). */
-static void apply(tfbus_module_t *m, rgbw_t *c, lua_State *L, int obj, const color_t *k, uint32_t ramp)
+static void apply(tfbus_module_t *module, rgbw_t *rgbw_state, lua_State *L, int obj, const color_t *target_color, uint32_t ramp)
 {
-    color_t old = c->col;
-    c->col = *k;
-    c->have_target = true;
+    color_t old = rgbw_state->col;
+    rgbw_state->col = *target_color;
+    rgbw_state->have_target = true;
     if (ramp != NO_RAMP) {
-        send_ramp(m, ramp);
+        send_ramp(module, ramp);
     }
-    send_values(m, c);
-    publish(c, L, obj);
-    events(c, &old);
+    send_values(module, rgbw_state);
+    publish(rgbw_state, L, obj);
+    events(rgbw_state, &old);
 }
 
 /** @brief Timed switch expired (bus task): restore the previous colour. */
-static void revert(tfbus_module_t *m, void *owner)
+static void revert(tfbus_module_t *module, void *owner)
 {
-    rgbw_t *c = owner;
-    apply(m, c, NULL, 0, &c->revert_to, NO_RAMP);
+    rgbw_t *rgbw_state = owner;
+    apply(module, rgbw_state, NULL, 0, &rgbw_state->revert_to, NO_RAMP);
 }
 
 // ---------------------------------------------------------------- driver hooks
 /** @brief tfbus_driver_t::deinit: stop the timers, free the channel objects (the master frees drv_ctx). */
-static void deinit(tfbus_module_t *m)
+static void deinit(tfbus_module_t *module)
 {
-    rgbw_t *c = m->drv_ctx;
-    light_timer_delete(&c->timed);
-    ledch_deinit(c->lch);
-    free(c->lch);
-    c->lch = NULL;
+    rgbw_t *rgbw_state = module->drv_ctx;
+    light_timer_delete(&rgbw_state->timed);
+    ledch_deinit(rgbw_state->lch);
+    free(rgbw_state->lch);
+    rgbw_state->lch = NULL;
 }
 
 /** @brief tfbus_driver_t::overdue: run expired timers whose deferred call was dropped. */
-static void overdue(tfbus_module_t *m)
+static void overdue(tfbus_module_t *module)
 {
-    rgbw_t *c = m->drv_ctx;
-    light_timer_overdue(&c->timed);
-    if (c->lch) {
-        ledch_overdue(c->lch);
+    rgbw_t *rgbw_state = module->drv_ctx;
+    light_timer_overdue(&rgbw_state->timed);
+    if (rgbw_state->lch) {
+        ledch_overdue(rgbw_state->lch);
     }
 }
 
 /** @brief tfbus_driver_t::io_new: remember the LEDRGB / PowerSupplyVoltage names. */
-static void io_new(tfbus_module_t *m, int cls, int ch, const char *name)
+static void io_new(tfbus_module_t *module, int cls, int channel, const char *name)
 {
-    rgbw_t *c = ctx(m);
-    if (cls == CLS_LEDRGB && ch == 0) {
-        strlcpy(c->name, name, sizeof c->name);
-    } else if (cls == CLS_PSU && ch == 0) {
-        strlcpy(c->psu, name, sizeof c->psu);
+    rgbw_t *rgbw_state = ctx(module);
+    if (cls == CLS_LEDRGB && channel == 0) {
+        strlcpy(rgbw_state->name, name, sizeof rgbw_state->name);
+    } else if (cls == CLS_PSU && channel == 0) {
+        strlcpy(rgbw_state->psu, name, sizeof rgbw_state->psu);
     } else {
-        ledch_io_new(c->lch, cls, ch, name);
+        ledch_io_new(rgbw_state->lch, cls, channel, name);
     }
 }
 
 /** @brief tfbus_driver_t::init: re-apply corrections and the colour Lua set (module re-addressed / back online). */
-static void init(tfbus_module_t *m)
+static void init(tfbus_module_t *module)
 {
-    rgbw_t *c = ctx(m);
+    rgbw_t *rgbw_state = ctx(module);
     for (int i = 0; i < 3; i++) {
-        if (c->corr[i] != 100) {
-            send_corr(m, i, c->corr[i]);
+        if (rgbw_state->corr[i] != 100) {
+            send_corr(module, i, rgbw_state->corr[i]);
         }
     }
-    if (c->have_target) {
-        send_ramp(m, 0);
-        send_values(m, c);
+    if (rgbw_state->have_target) {
+        send_ramp(module, 0);
+        send_values(module, rgbw_state);
     }
-    ledch_init(m, c->lch);
+    ledch_init(module, rgbw_state->lch);
 }
 
 /**
  * @brief tfbus_driver_t::io_set: RampTime and corrections go to the module at once; Min / MaxValue
  *        and PSU limits are cached.
  */
-static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int val)
+static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel, int idx, int val)
 {
     (void)obj;
-    rgbw_t *c = ctx(m);
+    rgbw_t *rgbw_state = ctx(module);
     if (cls == LEDCH_CLS_CHANNEL || cls == LEDCH_CLS_CCT) {
-        return ledch_io_set(m, c->lch, L, cls, ch, idx, val);
+        return ledch_io_set(module, rgbw_state->lch, L, cls, channel, idx, val);
     }
-    if (ch != 0) {
+    if (channel != 0) {
         return false;
     }
     if (cls == CLS_PSU) {
-        double v = luaL_checknumber(L, val);
+        double supply_voltage = luaL_checknumber(L, val);
         if (idx == P_SENS) {
-            c->u_sens = v;
+            rgbw_state->u_sens = supply_voltage;
         } else if (idx == P_MIN) {
-            c->u_min = v;
+            rgbw_state->u_min = supply_voltage;
         } else if (idx == P_MAX) {
-            c->u_max = v;
+            rgbw_state->u_max = supply_voltage;
         }
         return false;
     }
@@ -358,20 +358,20 @@ static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, in
     }
     switch (idx) {
     case F_RAMP:
-        c->ramp = (uint32_t)light_clamp(luaL_checknumber(L, val), 0, LIGHT_RAMP_MAX);
-        send_ramp(m, c->ramp);
+        rgbw_state->ramp = (uint32_t)light_clamp(luaL_checknumber(L, val), 0, LIGHT_RAMP_MAX);
+        send_ramp(module, rgbw_state->ramp);
         break;
     case F_MIN:
-        c->min = light_clamp(luaL_checknumber(L, val), 0, 1);
+        rgbw_state->min = light_clamp(luaL_checknumber(L, val), 0, 1);
         break;
     case F_MAX:
-        c->max = light_clamp(luaL_checknumber(L, val), 0, 1);
+        rgbw_state->max = light_clamp(luaL_checknumber(L, val), 0, 1);
         break;
     case F_RCORR:
     case F_GCORR:
     case F_BCORR: {
-        c->corr[idx - F_RCORR] = (uint8_t)light_clamp(luaL_checknumber(L, val), 0, 100);
-        send_corr(m, idx - F_RCORR, c->corr[idx - F_RCORR]);
+        rgbw_state->corr[idx - F_RCORR] = (uint8_t)light_clamp(luaL_checknumber(L, val), 0, 100);
+        send_corr(module, idx - F_RCORR, rgbw_state->corr[idx - F_RCORR]);
         break;
     }
     default:
@@ -381,90 +381,90 @@ static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, in
 }
 
 /** @brief Parse "#RRGGBB" / "RRGGBB" into k->c[0..2]; false if malformed. */
-static bool parse_rgb(const char *s, color_t *k)
+static bool parse_rgb(const char *rgb_text, color_t *color)
 {
-    if (*s == '#') {
-        s++;
+    if (*rgb_text == '#') {
+        rgb_text++;
     }
-    if (strlen(s) != 6 || strspn(s, "0123456789abcdefABCDEF") != 6) {
+    if (strlen(rgb_text) != 6 || strspn(rgb_text, "0123456789abcdefABCDEF") != 6) {
         return false;
     }
-    unsigned long x = strtoul(s, NULL, 16);
-    k->c[0] = (uint8_t)(x >> 16);
-    k->c[1] = (uint8_t)(x >> 8);
-    k->c[2] = (uint8_t)x;
+    unsigned long rgb_value = strtoul(rgb_text, NULL, 16);
+    color->c[0] = (uint8_t)(rgb_value >> 16);
+    color->c[1] = (uint8_t)(rgb_value >> 8);
+    color->c[2] = (uint8_t)rgb_value;
     return true;
 }
 
 /** @brief Hold* methods: one step of Value / Hue / a channel; @p sweep = full-range time [ms]. */
-static void hold(tfbus_module_t *m, rgbw_t *c, lua_State *L, int obj, int idx, uint32_t sweep)
+static void hold(tfbus_module_t *module, rgbw_t *rgbw_state, lua_State *L, int obj, int idx, uint32_t sweep)
 {
-    color_t k = c->col;
+    color_t target_color = rgbw_state->col;
     int64_t now = esp_timer_get_time();
     uint32_t ramp = sweep;
     if (idx == X_HOLD) {
-        int dir = light_hold_dir(&c->hold, now, k.v, c->min, c->max);
-        double d = sweep ? trunc2((double)LIGHT_HOLD_STEP_MS / sweep) : 1;
-        set_hsv(&k, k.h, k.s, trunc2(light_clamp(k.v + dir * d, c->min, c->max)));
+        int dir = light_hold_dir(&rgbw_state->hold, now, target_color.v, rgbw_state->min, rgbw_state->max);
+        double value_step = sweep ? trunc2((double)LIGHT_HOLD_STEP_MS / sweep) : 1;
+        set_hsv(&target_color, target_color.h, target_color.s, trunc2(light_clamp(target_color.v + dir * value_step, rgbw_state->min, rgbw_state->max)));
     } else if (idx == X_HOLD_HUE) {
-        int dir = light_hold_dir(&c->hold, now, k.h, -1, 361); // no ends: wraps
-        double h = k.h + dir * (sweep ? floor(360.0 * LIGHT_HOLD_STEP_MS / sweep) : 60);
-        set_hsv(&k, h < 0 ? 359 : h > 359 ? 0 : h, k.s, k.v);
+        int dir = light_hold_dir(&rgbw_state->hold, now, target_color.h, -1, 361); // no ends: wraps
+        double hue_value = target_color.h + dir * (sweep ? floor(360.0 * LIGHT_HOLD_STEP_MS / sweep) : 60);
+        set_hsv(&target_color, hue_value < 0 ? 359 : hue_value > 359 ? 0 : hue_value, target_color.s, target_color.v);
         ramp = 0; // captured: HoldHue sends ramp 0
     } else {
-        int ch = idx == X_HOLD_WHITE ? 3 : idx - X_HOLD_RED; // 0 R, 1 G, 2 B, 3 W
-        int dir = light_hold_dir(&c->hold, now, k.c[ch], 0, 255);
-        double d = sweep ? lround(255.0 * LIGHT_HOLD_STEP_MS / sweep) : 255;
-        k.c[ch] = (uint8_t)light_clamp(k.c[ch] + dir * d, 0, 255);
-        if (ch < 3) {
-            rgb_to_hsv(&k);
+        int channel_index = idx == X_HOLD_WHITE ? 3 : idx - X_HOLD_RED; // 0 R, 1 G, 2 B, 3 W
+        int dir = light_hold_dir(&rgbw_state->hold, now, target_color.c[channel_index], 0, 255);
+        double value_step = sweep ? lround(255.0 * LIGHT_HOLD_STEP_MS / sweep) : 255;
+        target_color.c[channel_index] = (uint8_t)light_clamp(target_color.c[channel_index] + dir * value_step, 0, 255);
+        if (channel_index < 3) {
+            rgb_to_hsv(&target_color);
         }
     }
-    apply(m, c, L, obj, &k, ramp);
+    apply(module, rgbw_state, L, obj, &target_color, ramp);
 }
 
 /** @brief tfbus_driver_t::io_execute: LEDRGB methods (interface method indices). */
-static int io_execute(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int first,
+static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel, int idx, int first,
                       int nargs)
 {
     if (cls == LEDCH_CLS_CHANNEL || cls == LEDCH_CLS_CCT) {
-        return ledch_io_execute(m, ctx(m)->lch, L, obj, cls, ch, idx, first, nargs);
+        return ledch_io_execute(module, ctx(module)->lch, L, obj, cls, channel, idx, first, nargs);
     }
-    if (cls != CLS_LEDRGB || ch != 0) {
+    if (cls != CLS_LEDRGB || channel != 0) {
         return -1;
     }
-    rgbw_t *c = ctx(m);
-    color_t k = c->col;
+    rgbw_t *rgbw_state = ctx(module);
+    color_t target_color = rgbw_state->col;
     uint32_t ramp;
     switch (idx) {
     case X_VALUE: {
-        double v = luaL_checknumber(L, first);
-        if ((v < c->min || v > c->max) && c->name[0]) {
-            clu_lua_post_event(c->name, EV_RANGE);
+        double requested_value = luaL_checknumber(L, first);
+        if ((requested_value < rgbw_state->min || requested_value > rgbw_state->max) && rgbw_state->name[0]) {
+            clu_lua_post_event(rgbw_state->name, EV_RANGE);
         }
-        set_hsv(&k, k.h, k.s, light_clamp(v, c->min, c->max));
+        set_hsv(&target_color, target_color.h, target_color.s, light_clamp(requested_value, rgbw_state->min, rgbw_state->max));
         break;
     }
     case X_HUE:
-        set_hsv(&k, floor(light_clamp(luaL_checknumber(L, first), 0, 360)), k.s, k.v);
+        set_hsv(&target_color, floor(light_clamp(luaL_checknumber(L, first), 0, 360)), target_color.s, target_color.v);
         break;
     case X_SAT:
-        set_hsv(&k, k.h, light_clamp(luaL_checknumber(L, first), 0, 1), k.v);
+        set_hsv(&target_color, target_color.h, light_clamp(luaL_checknumber(L, first), 0, 1), target_color.v);
         break;
     case X_RED:
     case X_GREEN:
     case X_BLUE:
-        k.c[idx - X_RED] = (uint8_t)light_clamp(luaL_checknumber(L, first), 0, 255);
-        rgb_to_hsv(&k);
+        target_color.c[idx - X_RED] = (uint8_t)light_clamp(luaL_checknumber(L, first), 0, 255);
+        rgb_to_hsv(&target_color);
         break;
     case X_WHITE:
-        k.c[3] = (uint8_t)light_clamp(luaL_checknumber(L, first), 0, 255);
+        target_color.c[3] = (uint8_t)light_clamp(luaL_checknumber(L, first), 0, 255);
         break;
     case X_RGB:
-        if (!parse_rgb(luaL_checkstring(L, first), &k)) {
+        if (!parse_rgb(luaL_checkstring(L, first), &target_color)) {
             return luaL_error(L, "SetRGBvalue: expected \"#RRGGBB\"");
         }
-        rgb_to_hsv(&k);
+        rgb_to_hsv(&target_color);
         break;
     case X_HOLD:
     case X_HOLD_HUE:
@@ -472,77 +472,77 @@ static int io_execute(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch,
     case X_HOLD_RED + 1:
     case X_HOLD_RED + 2:
     case X_HOLD_WHITE:
-        light_timer_cancel(&c->timed);
-        hold(m, c, L, obj, idx, light_ramp_arg(L, first, nargs, 0, c->ramp));
+        light_timer_cancel(&rgbw_state->timed);
+        hold(module, rgbw_state, L, obj, idx, light_ramp_arg(L, first, nargs, 0, rgbw_state->ramp));
         return 0;
     case X_ON:
     case X_OFF:
     case X_SWITCH: {
         double ms = light_arg(L, first, nargs, 0, 0);
-        ramp = light_ramp_arg(L, first, nargs, 1, c->ramp);
-        bool on = idx == X_ON || (idx == X_SWITCH && !lit(&c->col));
-        set_hsv(&k, k.h, k.s, on ? c->max : 0);
+        ramp = light_ramp_arg(L, first, nargs, 1, rgbw_state->ramp);
+        bool on = idx == X_ON || (idx == X_SWITCH && !lit(&rgbw_state->col));
+        set_hsv(&target_color, target_color.h, target_color.s, on ? rgbw_state->max : 0);
         if (!on) {
-            k.c[3] = 0; // SwitchOff: W too; SwitchOn leaves W as it is
+            target_color.c[3] = 0; // SwitchOff: W too; SwitchOn leaves W as it is
         }
-        light_timer_cancel(&c->timed);
-        if (ms > 0 && memcmp(k.c, c->col.c, sizeof k.c)) {
-            c->revert_to = c->col;
-            light_timer_start(&c->timed, m, c, revert, (uint32_t)ms);
+        light_timer_cancel(&rgbw_state->timed);
+        if (ms > 0 && memcmp(target_color.c, rgbw_state->col.c, sizeof target_color.c)) {
+            rgbw_state->revert_to = rgbw_state->col;
+            light_timer_start(&rgbw_state->timed, module, rgbw_state, revert, (uint32_t)ms);
         }
-        apply(m, c, L, obj, &k, ramp);
+        apply(module, rgbw_state, L, obj, &target_color, ramp);
         return 0;
     }
     default:
         return -1;
     }
     // Set* methods: Value, Ramp
-    ramp = light_ramp_arg(L, first, nargs, 1, c->ramp);
-    light_timer_cancel(&c->timed);
-    apply(m, c, L, obj, &k, ramp);
+    ramp = light_ramp_arg(L, first, nargs, 1, rgbw_state->ramp);
+    light_timer_cancel(&rgbw_state->timed);
+    apply(module, rgbw_state, L, obj, &target_color, ramp);
     return 0;
 }
 
 /** @brief PowerSupplyVoltage update: Value / Value% and events. */
-static void psu_update(rgbw_t *c, double u)
+static void psu_update(rgbw_t *rgbw_state, double supply_voltage)
 {
-    const char *n = c->psu;
-    bool first = !c->u_have;
-    c->u_have = true;
-    c->u = u;
-    bool out = u < c->u_min || u > c->u_max;
-    bool change = first || fabs(u - c->u_event) >= c->u_sens;
-    if (n[0] && (change || out != c->u_out)) {
-        clu_lua_post_number(n, P_VALUE, u);
-        clu_lua_post_number(n, P_PERCENT, c->u_max > 0 ? round(u / c->u_max * 10000) / 100 : 0);
+    const char *object_name = rgbw_state->psu;
+    bool first = !rgbw_state->u_have;
+    rgbw_state->u_have = true;
+    rgbw_state->u = supply_voltage;
+    bool out = supply_voltage < rgbw_state->u_min || supply_voltage > rgbw_state->u_max;
+    bool change = first || fabs(supply_voltage - rgbw_state->u_event) >= rgbw_state->u_sens;
+    if (object_name[0] && (change || out != rgbw_state->u_out)) {
+        clu_lua_post_number(object_name, P_VALUE, supply_voltage);
+        clu_lua_post_number(object_name, P_PERCENT, rgbw_state->u_max > 0 ? round(supply_voltage / rgbw_state->u_max * 10000) / 100 : 0);
     }
-    if (n[0] && change && !first) {
-        clu_lua_post_event(n, PE_CHANGE);
-        clu_lua_post_event(n, u < c->u_event ? PE_LOWER : PE_RISE);
+    if (object_name[0] && change && !first) {
+        clu_lua_post_event(object_name, PE_CHANGE);
+        clu_lua_post_event(object_name, supply_voltage < rgbw_state->u_event ? PE_LOWER : PE_RISE);
     }
     if (change) {
-        c->u_event = u;
+        rgbw_state->u_event = supply_voltage;
     }
-    if (n[0] && out != c->u_out && !(first && !out)) {
-        clu_lua_post_event(n, out ? PE_OUT : PE_IN);
+    if (object_name[0] && out != rgbw_state->u_out && !(first && !out)) {
+        clu_lua_post_event(object_name, out ? PE_OUT : PE_IN);
     }
-    c->u_out = out;
+    rgbw_state->u_out = out;
 }
 
 /** @brief tfbus_driver_t::on_status: supply voltage, channel values (LED_CHANNEL / LED_CCT). */
-static void on_status(tfbus_module_t *m, const uint8_t *pl, size_t len)
+static void on_status(tfbus_module_t *module, const uint8_t *status_payload, size_t len)
 {
-    rgbw_t *c = ctx(m);
-    tfbus_tlv_t r[8];
-    int n = tfbus_parse_tlv(pl, len, r, 8);
-    for (int i = 0; i < n; i++) {
-        if (r[i].type == 0x02 && r[i].len >= 2) {
-            psu_update(c, (r[i].data[0] | r[i].data[1] << 8) / 100.0);
-        } else if (r[i].type == 0x04 && r[i].len >= 2) {
-            ledch_reported(c->lch, r[i].data[0], r[i].data[1]);
+    rgbw_t *rgbw_state = ctx(module);
+    tfbus_tlv_t status_records[8];
+    int status_record_count = tfbus_parse_tlv(status_payload, len, status_records, 8);
+    for (int i = 0; i < status_record_count; i++) {
+        if (status_records[i].type == 0x02 && status_records[i].len >= 2) {
+            psu_update(rgbw_state, (status_records[i].data[0] | status_records[i].data[1] << 8) / 100.0);
+        } else if (status_records[i].type == 0x04 && status_records[i].len >= 2) {
+            ledch_reported(rgbw_state->lch, status_records[i].data[0], status_records[i].data[1]);
         }
     }
-    ledch_reported_end(c->lch);
+    ledch_reported_end(rgbw_state->lch);
 }
 
 const tfbus_driver_t tfbus_drv_led_rgbw_din = {

@@ -50,11 +50,11 @@ static bool hw_write(uint16_t on, void *ctx)
 {
     uint8_t out = (uint8_t)(CONFIG_CLU_LOCAL_IO_OUT_ACTIVE_LOW ? ~on : on);
 #if CONFIG_CLU_LOCAL_IO_OUT_P0
-    const uint8_t b[2] = {out, 0xff}; // P00-P07 relays, P10-P17 inputs
+    const uint8_t output_bytes[2] = {out, 0xff}; // P00-P07 relays, P10-P17 inputs
 #else
-    const uint8_t b[2] = {0xff, out}; // P00-P07 inputs, P10-P17 relays
+    const uint8_t output_bytes[2] = {0xff, out}; // P00-P07 inputs, P10-P17 relays
 #endif
-    esp_err_t err = i2c_master_transmit(s_dev, b, sizeof b, I2C_TIMEOUT);
+    esp_err_t err = i2c_master_transmit(s_dev, output_bytes, sizeof output_bytes, I2C_TIMEOUT);
     track(&s_write_ok, err == ESP_OK, "write", err);
     return err == ESP_OK;
 }
@@ -62,16 +62,16 @@ static bool hw_write(uint16_t on, void *ctx)
 /** @brief localio_hw_t::read: the 8 inputs (bits 0-7). */
 static bool hw_read(uint16_t *active, void *ctx)
 {
-    uint8_t b[2];
-    esp_err_t err = i2c_master_receive(s_dev, b, sizeof b, I2C_TIMEOUT);
+    uint8_t input_bytes[2];
+    esp_err_t err = i2c_master_receive(s_dev, input_bytes, sizeof input_bytes, I2C_TIMEOUT);
     track(&s_read_ok, err == ESP_OK, "read", err);
     if (err != ESP_OK) {
         return false;
     }
 #if CONFIG_CLU_LOCAL_IO_OUT_P0
-    uint8_t in = b[1];
+    uint8_t in = input_bytes[1];
 #else
-    uint8_t in = b[0];
+    uint8_t in = input_bytes[0];
 #endif
     *active = (uint8_t)(CONFIG_CLU_LOCAL_IO_IN_ACTIVE_LOW ? ~in : in);
     return true;
@@ -83,41 +83,41 @@ static const localio_hw_t s_hw = {.write = hw_write, .read = hw_read};
  * @brief Module serial: menuconfig value if set (stored), else the one in NVS, else a new random
  * one (stored). Never 0.
  */
-static uint32_t serial(nvs_handle_t h, const char *key, const char *cfg)
+static uint32_t serial(nvs_handle_t nvs_handle, const char *key, const char *cfg)
 {
-    uint32_t sn = 0;
-    bool have = nvs_get_u32(h, key, &sn) == ESP_OK && sn != 0;
+    uint32_t serial_number = 0;
+    bool have = nvs_get_u32(nvs_handle, key, &serial_number) == ESP_OK && serial_number != 0;
     if (cfg[0]) {
-        uint32_t c = (uint32_t)strtoul(cfg, NULL, 10);
-        if (c != 0) {
-            if (!have || sn != c) {
-                nvs_set_u32(h, key, c);
+        uint32_t configured_serial = (uint32_t)strtoul(cfg, NULL, 10);
+        if (configured_serial != 0) {
+            if (!have || serial_number != configured_serial) {
+                nvs_set_u32(nvs_handle, key, configured_serial);
             }
-            return c;
+            return configured_serial;
         }
         ESP_LOGE(TAG, "serial \"%s\" is not a number, ignored", cfg);
     }
     if (have) {
-        return sn;
+        return serial_number;
     }
     do {
-        clu_random((uint8_t *)&sn, sizeof sn);
-        sn &= 0x7FFFFFFF;
-    } while (sn == 0);
-    nvs_set_u32(h, key, sn);
-    return sn;
+        clu_random((uint8_t *)&serial_number, sizeof serial_number);
+        serial_number &= 0x7FFFFFFF;
+    } while (serial_number == 0);
+    nvs_set_u32(nvs_handle, key, serial_number);
+    return serial_number;
 }
 
 void clu_localio_start(void)
 {
-    nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &nvs_handle) != ESP_OK) {
         ESP_LOGE(TAG, "NVS open failed: on-board IO disabled");
         return;
     }
-    const uint32_t sn = serial(h, "sn1", CONFIG_CLU_LOCAL_IO_SN);
-    nvs_commit(h);
-    nvs_close(h);
+    const uint32_t serial_number = serial(nvs_handle, "sn1", CONFIG_CLU_LOCAL_IO_SN);
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
 
     i2c_master_bus_handle_t bus = clu_i2c_bus(CONFIG_CLU_LOCAL_IO_SDA_GPIO, CONFIG_CLU_LOCAL_IO_SCL_GPIO);
     if (!bus) {
@@ -125,12 +125,12 @@ void clu_localio_start(void)
                  CONFIG_CLU_LOCAL_IO_SCL_GPIO);
         return;
     }
-    const i2c_device_config_t dc = {
+    const i2c_device_config_t device_config = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = CONFIG_CLU_LOCAL_IO_ADDR,
         .scl_speed_hz = I2C_HZ,
     };
-    esp_err_t err = i2c_master_bus_add_device(bus, &dc, &s_dev);
+    esp_err_t err = i2c_master_bus_add_device(bus, &device_config, &s_dev);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "PCF8575 0x%02x: %s: on-board IO disabled", CONFIG_CLU_LOCAL_IO_ADDR, esp_err_to_name(err));
         return;
@@ -140,9 +140,9 @@ void clu_localio_start(void)
         ESP_LOGW(TAG, "no PCF8575 at 0x%02x", CONFIG_CLU_LOCAL_IO_ADDR);
     }
 
-    localio_setup(&sn, 1, &s_hw); // relays off, input pins high
+    localio_setup(&serial_number, 1, &s_hw); // relays off, input pins high
     tfbus_uart_add_local(localio_frame);
-    ESP_LOGI(TAG, "on-board IO: IO_MODULE_DIN_8 sn=%lu (PCF8575 0x%02x)", (unsigned long)sn,
+    ESP_LOGI(TAG, "on-board IO: IO_MODULE_DIN_8 sn=%lu (PCF8575 0x%02x)", (unsigned long)serial_number,
              CONFIG_CLU_LOCAL_IO_ADDR);
 }
 

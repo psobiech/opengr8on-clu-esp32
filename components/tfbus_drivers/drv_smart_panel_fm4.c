@@ -90,210 +90,210 @@ typedef struct {
     bool page_warned;
 } sp4_t;
 
-static void led(tfbus_module_t *m, int b, uint8_t cmd);
+static void led(tfbus_module_t *module, int button_index, uint8_t cmd);
 
 /** @brief Driver state of @p m, allocated (with sensor / register defaults) on first use. */
-static sp4_t *ctx(tfbus_module_t *m)
+static sp4_t *ctx(tfbus_module_t *module)
 {
-    if (!m->drv_ctx) {
-        sp4_t *c = calloc(1, sizeof *c);
-        if (!c) {
+    if (!module->drv_ctx) {
+        sp4_t *panel_state = calloc(1, sizeof *panel_state);
+        if (!panel_state) {
             abort(); // out of memory while loading OM.LUA: reboot instead of a NULL dereference
         }
-        c->temp = (panel_sensor_t){.threshold = 0.1, .min = 0, .max = 45};
-        c->light = (panel_sensor_t){.threshold = 0.5, .min = 0, .max = 100};
+        panel_state->temp = (panel_sensor_t){.threshold = 0.1, .min = 0, .max = 45};
+        panel_state->light = (panel_sensor_t){.threshold = 0.5, .min = 0, .max = 100};
         for (size_t i = 0; i < NREGS; i++) {
-            c->reg[i] = k_regs[i].def;
+            panel_state->reg[i] = k_regs[i].def;
         }
-        m->drv_ctx = c;
+        module->drv_ctx = panel_state;
     }
-    return m->drv_ctx;
+    return module->drv_ctx;
 }
 
 /** @brief Queue a TFBUS_CMD (0x31) frame with sub-command @p cmd. */
-static void tfbus_cmd_queue(tfbus_module_t *m, uint8_t cmd, const uint8_t *data, size_t len)
+static void tfbus_cmd_queue(tfbus_module_t *module, uint8_t cmd, const uint8_t *data, size_t len)
 {
-    uint8_t f[TFBUS_MAX_FRAME];
-    size_t n = tfbus_cmd(f, sizeof f, m->addr, cmd, data, len);
-    if (n) {
-        tfbus_master_queue(f, n);
+    uint8_t frame[TFBUS_MAX_FRAME];
+    size_t frame_length = tfbus_cmd(frame, sizeof frame, module->addr, cmd, data, len);
+    if (frame_length) {
+        tfbus_master_queue(frame, frame_length);
     }
 }
 
 /** @brief Send PANEL register k_regs[@p i] = @p v. */
-static void send_reg(tfbus_module_t *m, size_t i, uint16_t v)
+static void send_reg(tfbus_module_t *module, size_t register_index, uint16_t register_value)
 {
-    tfbus_cmd_queue(m, k_regs[i].reg, (uint8_t[]){(uint8_t)v, (uint8_t)(v >> 8)}, 2);
+    tfbus_cmd_queue(module, k_regs[register_index].reg, (uint8_t[]){(uint8_t)register_value, (uint8_t)(register_value >> 8)}, 2);
 }
 
 /** @brief Send gesture icon @p i as a DISPLAY_BLOCK (0x30). */
-static void send_icon(tfbus_module_t *m, int i)
+static void send_icon(tfbus_module_t *module, int icon_index)
 {
-    uint8_t blk[22] = {0, k_icon_sub[i]};
-    memcpy(blk + 2, ctx(m)->icon[i], strlen(ctx(m)->icon[i]));
-    drv_queue_frame(m, 0x30, blk, sizeof blk);
+    uint8_t blk[22] = {0, k_icon_sub[icon_index]};
+    memcpy(blk + 2, ctx(module)->icon[icon_index], strlen(ctx(module)->icon[icon_index]));
+    drv_queue_frame(module, 0x30, blk, sizeof blk);
 }
 
 /**
  * @brief Send one button's class frame (0x17) and DISPLAY_BLOCKs; optionally the LED commit (pass 2).
  */
-static void send_button(tfbus_module_t *m, int b, bool led_commit)
+static void send_button(tfbus_module_t *module, int button_index, bool led_commit)
 {
-    uint16_t mask = (uint16_t)(1u << b);
-    drv_queue_frame(m, 0x17, (uint8_t[]){(uint8_t)mask, (uint8_t)(mask >> 8), 0}, 3);
+    uint16_t mask = (uint16_t)(1u << button_index);
+    drv_queue_frame(module, 0x17, (uint8_t[]){(uint8_t)mask, (uint8_t)(mask >> 8), 0}, 3);
     if (led_commit) {
-        drv_queue_frame(m, 0x18, (uint8_t[]){0x00, 0x00, 0x02}, 3);
+        drv_queue_frame(module, 0x18, (uint8_t[]){0x00, 0x00, 0x02}, 3);
     }
     static const uint8_t subs[3] = {0x0a, 0x00, 0x01};
     for (int i = 0; i < 3; i++) {
-        uint8_t blk[22] = {(uint8_t)b, subs[i]};
-        drv_queue_frame(m, 0x30, blk, sizeof blk);
+        uint8_t blk[22] = {(uint8_t)button_index, subs[i]};
+        drv_queue_frame(module, 0x30, blk, sizeof blk);
     }
 }
 
 /** @brief Send a PANEL_PAGE field header (TFBUS_CMD 0x12 [p, field, slot]). */
-static void send_page(tfbus_module_t *m, uint8_t p, uint8_t field, uint8_t slot)
+static void send_page(tfbus_module_t *module, uint8_t page_number, uint8_t field, uint8_t slot)
 {
-    tfbus_cmd_queue(m, 0x12, (uint8_t[]){p, field, slot}, 3);
+    tfbus_cmd_queue(module, 0x12, (uint8_t[]){page_number, field, slot}, 3);
 }
 
 /** @brief tfbus_driver_t::init: replay the captured two-pass init (see file description). */
-static void init(tfbus_module_t *m)
+static void init(tfbus_module_t *module)
 {
-    sp4_t *c = ctx(m);
+    sp4_t *panel_state = ctx(module);
 
     // ---- pass 1: OM.LUA order
     for (int b = 0; b < BTN; b++) {
-        send_button(m, b, false);
+        send_button(module, b, false);
     }
     for (int i = 0; i < 4; i++) {
-        send_icon(m, i);
+        send_icon(module, i);
     }
     for (size_t i = 0; i < NREGS; i++) {
-        send_reg(m, i, c->reg[i]);
+        send_reg(module, i, panel_state->reg[i]);
     }
-    drv_queue_frame(m, 0x16, (uint8_t[]){0x00, 0x01, 0x02, 0}, 4);
-    drv_queue_frame(m, 0x16, (uint8_t[]){0x00, 0x0a, 0x02, 0}, 4);
-    drv_queue_frame(m, 0x16, (uint8_t[]){0x01, 0x01, 0x0a, 0}, 4);
-    drv_queue_frame(m, 0x16, (uint8_t[]){0x01, 0x0a, 0x0a, 0}, 4);
+    drv_queue_frame(module, 0x16, (uint8_t[]){0x00, 0x01, 0x02, 0}, 4);
+    drv_queue_frame(module, 0x16, (uint8_t[]){0x00, 0x0a, 0x02, 0}, 4);
+    drv_queue_frame(module, 0x16, (uint8_t[]){0x01, 0x01, 0x0a, 0}, 4);
+    drv_queue_frame(module, 0x16, (uint8_t[]){0x01, 0x0a, 0x0a, 0}, 4);
     for (uint8_t p = 1; p <= PAGES; p++) {
-        send_page(m, p, 0x00, 0); // PageType
-        send_page(m, p, 0x01, 0); // PageName
+        send_page(module, p, 0x00, 0); // PageType
+        send_page(module, p, 0x01, 0); // PageName
         for (uint8_t s = 1; s <= SLOTS; s++) {
-            send_page(m, p, 0x03, s); // Object_s_Id
-            send_page(m, p, 0x04, s); // Object_s_Name
+            send_page(module, p, 0x03, s); // Object_s_Id
+            send_page(module, p, 0x04, s); // Object_s_Name
         }
     }
 
     // ---- pass 2: CLU re-sends all features in reverse order
     for (uint8_t p = PAGES; p >= 1; p--) {
-        send_page(m, p, 0x00, 0);
-        send_page(m, p, 0x01, 0);
+        send_page(module, p, 0x00, 0);
+        send_page(module, p, 0x01, 0);
         for (uint8_t s = 1; s <= SLOTS; s++) {
-            send_page(m, p, 0x04, s);
-            send_page(m, p, 0x03, s);
+            send_page(module, p, 0x04, s);
+            send_page(module, p, 0x03, s);
             uint8_t b = (uint8_t)((p - 1) * SLOTS + s - 1);
-            tfbus_cmd_queue(m, 0x1a, (uint8_t[]){b, 0x02, 0x00}, 3); // slot -> PANEL_BUTTON b
-            send_page(m, p, 0x06, s);
+            tfbus_cmd_queue(module, 0x1a, (uint8_t[]){b, 0x02, 0x00}, 3); // slot -> PANEL_BUTTON b
+            send_page(module, p, 0x06, s);
         }
     }
-    drv_queue_frame(m, 0x16, (uint8_t[]){0x01, 0x0a, 0x0a, 0}, 4);
-    drv_queue_frame(m, 0x16, (uint8_t[]){0x00, 0x0a, 0x02, 0}, 4);
-    send_reg(m, 0, c->reg[0]);
-    send_reg(m, 1, c->reg[1]);
-    send_icon(m, 3); // right
-    send_icon(m, 1); // down
-    send_icon(m, 2); // left
-    send_icon(m, 0); // up
+    drv_queue_frame(module, 0x16, (uint8_t[]){0x01, 0x0a, 0x0a, 0}, 4);
+    drv_queue_frame(module, 0x16, (uint8_t[]){0x00, 0x0a, 0x02, 0}, 4);
+    send_reg(module, 0, panel_state->reg[0]);
+    send_reg(module, 1, panel_state->reg[1]);
+    send_icon(module, 3); // right
+    send_icon(module, 1); // down
+    send_icon(module, 2); // left
+    send_icon(module, 0); // up
     static const uint8_t pass2_regs[] = {3, 4, 2, REG_PAGENR, 6, 7, 8, 9};
     for (size_t i = 0; i < sizeof pass2_regs; i++) {
-        size_t r = pass2_regs[i];
+        size_t register_index = pass2_regs[i];
         // Captured: PageNr goes out as 0 here although OM.LUA set it to 1 (runtime current page?)
-        send_reg(m, r, r == REG_PAGENR ? 0 : c->reg[r]);
+        send_reg(module, register_index, register_index == REG_PAGENR ? 0 : panel_state->reg[register_index]);
     }
     for (int b = BTN - 1; b >= 0; b--) {
-        send_button(m, b, b == 0);
+        send_button(module, b, b == 0);
     }
-    c->initialized = true;
+    panel_state->initialized = true;
 }
 
 /**
  * @brief PANEL_PAGE set(): content encoding is not decoded yet; warn once if non-empty content is set.
  */
-static void page_set(tfbus_module_t *m, lua_State *L, int ch, int idx, int val)
+static void page_set(tfbus_module_t *module, lua_State *L, int page_index, int idx, int val)
 {
-    sp4_t *c = ctx(m);
+    sp4_t *panel_state = ctx(module);
     bool empty = lua_type(L, val) == LUA_TSTRING ? lua_rawlen(L, val) == 0
                                                  : luaL_optinteger(L, val, 0) == 0;
-    if (!empty && !c->page_warned) {
-        c->page_warned = true;
+    if (!empty && !panel_state->page_warned) {
+        panel_state->page_warned = true;
         ESP_LOGW(TAG, "%s: PANEL_PAGE %d set(%d): page content encoding not decoded yet, not sent",
-                 m->name, ch + 1, idx);
+                 module->name, page_index + 1, idx);
     }
 }
 
 /** @brief tfbus_driver_t::io_new: remember the Lua name of a button / sensor. */
-static void io_new(tfbus_module_t *m, int cls, int ch, const char *name)
+static void io_new(tfbus_module_t *module, int cls, int channel_index, const char *name)
 {
-    sp4_t *c = ctx(m);
-    if (cls == CLS_BUTTON && ch >= 0 && ch < BTN) {
-        strlcpy(c->btn[ch], name, sizeof c->btn[ch]);
+    sp4_t *panel_state = ctx(module);
+    if (cls == CLS_BUTTON && channel_index >= 0 && channel_index < BTN) {
+        strlcpy(panel_state->btn[channel_index], name, sizeof panel_state->btn[channel_index]);
     } else if (cls == CLS_TEMP) {
-        strlcpy(c->temp.name, name, sizeof c->temp.name);
+        strlcpy(panel_state->temp.name, name, sizeof panel_state->temp.name);
     } else if (cls == CLS_LIGHT) {
-        strlcpy(c->light.name, name, sizeof c->light.name);
+        strlcpy(panel_state->light.name, name, sizeof panel_state->light.name);
     }
 }
 
 /**
  * @brief tfbus_driver_t::io_set: button Mode, sensor limits, PANEL registers / icons (re-sent once initialised), pages.
  */
-static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int val)
+static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel_index, int idx, int val)
 {
-    sp4_t *c = ctx(m);
+    sp4_t *panel_state = ctx(module);
     if (cls == CLS_PANEL) {
         if (idx >= 4 && idx <= 7) {
             int i = idx - 4;
-            const char *s = lua_type(L, val) == LUA_TSTRING ? lua_tostring(L, val) : "";
-            strlcpy(c->icon[i], s, sizeof c->icon[i]);
-            if (c->initialized) {
-                send_icon(m, i);
+            const char *sensor_config = lua_type(L, val) == LUA_TSTRING ? lua_tostring(L, val) : "";
+            strlcpy(panel_state->icon[i], sensor_config, sizeof panel_state->icon[i]);
+            if (panel_state->initialized) {
+                send_icon(module, i);
             }
         }
         for (size_t i = 0; i < NREGS; i++) {
             if (k_regs[i].feature == idx) {
-                c->reg[i] = (uint16_t)luaL_optinteger(L, val, k_regs[i].def);
-                if (c->initialized) {
-                    send_reg(m, i, c->reg[i]);
+                panel_state->reg[i] = (uint16_t)luaL_optinteger(L, val, k_regs[i].def);
+                if (panel_state->initialized) {
+                    send_reg(module, i, panel_state->reg[i]);
                 }
             }
         }
         return false; // keep generic storage so get() returns it
     }
     if (cls == CLS_PAGE) {
-        page_set(m, L, ch, idx, val);
+        page_set(module, L, channel_index, idx, val);
         return false;
     }
-    if (cls == CLS_BUTTON && ch >= 0 && ch < BTN && idx == 1) { // Mode / SetMode
-        lua_Integer v = luaL_optinteger(L, val, 0);
-        c->mode[ch] = v >= 0 && v <= 2 ? (uint8_t)v : 0;
-        if (c->mode[ch] != PANEL_MODE_BISTABLE && (c->btn_value & (1u << ch))) {
-            c->btn_value &= ~(1u << ch);
-            if (c->initialized) {
-                led(m, ch, LED_OFF);
+    if (cls == CLS_BUTTON && channel_index >= 0 && channel_index < BTN && idx == 1) { // Mode / SetMode
+        lua_Integer configured_value = luaL_optinteger(L, val, 0);
+        panel_state->mode[channel_index] = configured_value >= 0 && configured_value <= 2 ? (uint8_t)configured_value : 0;
+        if (panel_state->mode[channel_index] != PANEL_MODE_BISTABLE && (panel_state->btn_value & (1u << channel_index))) {
+            panel_state->btn_value &= ~(1u << channel_index);
+            if (panel_state->initialized) {
+                led(module, channel_index, LED_OFF);
             }
         }
         return false;
     }
-    panel_sensor_t *s = cls == CLS_TEMP ? &c->temp : cls == CLS_LIGHT ? &c->light : NULL;
-    if (s) {
-        double v = luaL_optnumber(L, val, 0);
+    panel_sensor_t *sensor_config = cls == CLS_TEMP ? &panel_state->temp : cls == CLS_LIGHT ? &panel_state->light : NULL;
+    if (sensor_config) {
+        double configured_value = luaL_optnumber(L, val, 0);
         if (idx == 1) {
-            s->threshold = v;
+            sensor_config->threshold = configured_value;
         } else if (idx == 3) {
-            s->min = v;
+            sensor_config->min = configured_value;
         } else if (idx == 4) {
-            s->max = v;
+            sensor_config->max = configured_value;
         }
     }
     return false;
@@ -305,50 +305,50 @@ static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, in
  * Captures only show buttons 1-8 (mask_hi 0); mask_hi for buttons 9-16 is an assumption (the
  * RP2350 emulator reads a 16-bit mask).
  */
-static void led(tfbus_module_t *m, int b, uint8_t cmd)
+static void led(tfbus_module_t *module, int button_index, uint8_t cmd)
 {
-    uint16_t mask = (uint16_t)(1u << b);
-    drv_queue_frame(m, 0x18, (uint8_t[]){(uint8_t)mask, (uint8_t)(mask >> 8), cmd}, 3);
+    uint16_t mask = (uint16_t)(1u << button_index);
+    drv_queue_frame(module, 0x18, (uint8_t[]){(uint8_t)mask, (uint8_t)(mask >> 8), cmd}, 3);
 }
 
 /**
  * @brief PANEL methods -> TFBUS_CMD sub-commands (SwitchOnDisplay, ShowButtons, ClearScreen, ...).
  */
-static int panel_execute(tfbus_module_t *m, lua_State *L, int idx, int first, int nargs)
+static int panel_execute(tfbus_module_t *module, lua_State *L, int idx, int first, int nargs)
 {
     switch (idx) {
     case 0: // SwitchOnDisplay
-        tfbus_cmd_queue(m, 0x00, NULL, 0);
+        tfbus_cmd_queue(module, 0x00, NULL, 0);
         return 0;
     case 1: // ShowButtons
-        tfbus_cmd_queue(m, 0x03, (uint8_t[]){0, 0, 0, 0}, 4);
+        tfbus_cmd_queue(module, 0x03, (uint8_t[]){0, 0, 0, 0}, 4);
         return 0;
     case 2: // ClearScreen
-        tfbus_cmd_queue(m, 0x04, NULL, 0);
+        tfbus_cmd_queue(module, 0x04, NULL, 0);
         return 0;
     case 3: { // PrintText(x, y, txt, fontSize)
-        uint8_t d[19] = {0};
-        d[0] = (uint8_t)luaL_optinteger(L, first, 0);
-        d[1] = (uint8_t)luaL_optinteger(L, first + 1, 0);
-        d[2] = (uint8_t)luaL_optinteger(L, first + 3, 1); // before tolstring: it pushes
+        uint8_t text_data[19] = {0};
+        text_data[0] = (uint8_t)luaL_optinteger(L, first, 0);
+        text_data[1] = (uint8_t)luaL_optinteger(L, first + 1, 0);
+        text_data[2] = (uint8_t)luaL_optinteger(L, first + 3, 1); // before tolstring: it pushes
         const char *txt = nargs > 2 ? luaL_tolstring(L, first + 2, NULL) : "";
-        strncpy((char *)d + 3, txt, 16);
-        tfbus_cmd_queue(m, 0x0a, d, sizeof d);
+        strncpy((char *)text_data + 3, txt, 16);
+        tfbus_cmd_queue(module, 0x0a, text_data, sizeof text_data);
         return 0;
     }
     case 7: // DisplayContent: flush the freedraw buffer to the screen
-        tfbus_cmd_queue(m, 0x09, NULL, 0);
+        tfbus_cmd_queue(module, 0x09, NULL, 0);
         return 0;
     case 29: // Draw
-        tfbus_cmd_queue(m, 0x19, NULL, 0);
+        tfbus_cmd_queue(module, 0x19, NULL, 0);
         return 0;
     case 21: { // SetBeep(freq, duration, volume)
-        uint16_t fq = (uint16_t)luaL_optinteger(L, first, 1000);
-        uint16_t du = (uint16_t)luaL_optinteger(L, first + 1, 100);
-        uint16_t vo = (uint16_t)luaL_optinteger(L, first + 2, 8);
-        uint8_t d[7] = {(uint8_t)fq, (uint8_t)(fq >> 8), (uint8_t)du, (uint8_t)(du >> 8),
-                        (uint8_t)vo, (uint8_t)(vo >> 8), 0};
-        tfbus_cmd_queue(m, 0x0f, d, sizeof d);
+        uint16_t frequency = (uint16_t)luaL_optinteger(L, first, 1000);
+        uint16_t duration = (uint16_t)luaL_optinteger(L, first + 1, 100);
+        uint16_t volume = (uint16_t)luaL_optinteger(L, first + 2, 8);
+        uint8_t text_data[7] = {(uint8_t)frequency, (uint8_t)(frequency >> 8), (uint8_t)duration, (uint8_t)(duration >> 8),
+                        (uint8_t)volume, (uint8_t)(volume >> 8), 0};
+        tfbus_cmd_queue(module, 0x0f, text_data, sizeof text_data);
         return 0;
     }
     default:
@@ -360,21 +360,21 @@ static int panel_execute(tfbus_module_t *m, lua_State *L, int idx, int first, in
 /**
  * @brief tfbus_driver_t::io_execute: PANEL methods, PANEL_BUTTON ShowOK (0) / LedSwitchOn (1) / LedSwitchOff (2).
  */
-static int io_execute(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int first,
+static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel_index, int idx, int first,
                       int nargs)
 {
     if (cls == CLS_PANEL) {
-        return panel_execute(m, L, idx, first, nargs);
+        return panel_execute(module, L, idx, first, nargs);
     }
-    if (cls != CLS_BUTTON || ch < 0 || ch >= BTN) {
+    if (cls != CLS_BUTTON || channel_index < 0 || channel_index >= BTN) {
         return -1;
     }
     switch (idx) {
-    case 0: led(m, ch, LED_OK); return 0;     // ShowOK
-    case 1: led(m, ch, LED_ON); return 0;     // LedSwitchOn
-    case 2: led(m, ch, LED_OFF); return 0;    // LedSwitchOff
+    case 0: led(module, channel_index, LED_OK); return 0;     // ShowOK
+    case 1: led(module, channel_index, LED_ON); return 0;     // LedSwitchOn
+    case 2: led(module, channel_index, LED_OFF); return 0;    // LedSwitchOff
     default:
-        ESP_LOGW(TAG, "%s: execute(%d) not decoded yet", ctx(m)->btn[ch], idx);
+        ESP_LOGW(TAG, "%s: execute(%d) not decoded yet", ctx(module)->btn[channel_index], idx);
         return 0;
     }
 }
@@ -382,27 +382,27 @@ static int io_execute(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch,
 /**
  * @brief tfbus_driver_t::on_status: temperature, light and button event records (button Mode applied here).
  */
-static void on_status(tfbus_module_t *m, const uint8_t *pl, size_t len)
+static void on_status(tfbus_module_t *module, const uint8_t *status_payload, size_t len)
 {
-    sp4_t *c = ctx(m);
-    tfbus_tlv_t r[4];
-    int n = tfbus_parse_tlv(pl, len, r, 4);
-    for (int i = 0; i < n; i++) {
-        if (r[i].len < 2) {
+    sp4_t *panel_state = ctx(module);
+    tfbus_tlv_t status_records[4];
+    int status_record_count = tfbus_parse_tlv(status_payload, len, status_records, 4);
+    for (int i = 0; i < status_record_count; i++) {
+        if (status_records[i].len < 2) {
             continue;
         }
-        uint16_t v = (uint16_t)(r[i].data[0] | r[i].data[1] << 8);
-        switch (r[i].type) {
-        case 0x02: panel_sensor_update(&c->temp, (int16_t)v / 100.0); break;
-        case 0x07: panel_sensor_update(&c->light, v / 100.0); break; // raw ADC; % mapping unknown
+        uint16_t record_value = (uint16_t)(status_records[i].data[0] | status_records[i].data[1] << 8);
+        switch (status_records[i].type) {
+        case 0x02: panel_sensor_update(&panel_state->temp, (int16_t)record_value / 100.0); break;
+        case 0x07: panel_sensor_update(&panel_state->light, record_value / 100.0); break; // raw ADC; % mapping unknown
         case 0x08: {
-            uint32_t before = c->btn_value;
-            panel_button_event(c->btn, BTN, &c->btn_value, c->mode, r[i].data[0]);
+            uint32_t before = panel_state->btn_value;
+            panel_button_event(panel_state->btn, BTN, &panel_state->btn_value, panel_state->mode, status_records[i].data[0]);
             // Bistable: the LED shows the toggled state (green on, off).
-            uint32_t flipped = before ^ c->btn_value;
+            uint32_t flipped = before ^ panel_state->btn_value;
             for (int b = 0; b < BTN; b++) {
-                if ((flipped & (1u << b)) && c->mode[b] == PANEL_MODE_BISTABLE) {
-                    led(m, b, (c->btn_value & (1u << b)) ? LED_ON : LED_OFF);
+                if ((flipped & (1u << b)) && panel_state->mode[b] == PANEL_MODE_BISTABLE) {
+                    led(module, b, (panel_state->btn_value & (1u << b)) ? LED_ON : LED_OFF);
                 }
             }
             break;

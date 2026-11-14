@@ -20,26 +20,26 @@ typedef struct ledch ledch_t;
 ledch_t *ledch_new(void);
 
 /** @brief Remember the name of a LED_CHANNEL / LED_CCT object. */
-void ledch_io_new(ledch_t *s, int cls, int ch, const char *name);
+void ledch_io_new(ledch_t *ledch_state, int cls, int channel_index, const char *name);
 
 /** @brief tfbus_driver_t::io_set for classes 49 / 72; false = store generically. */
-bool ledch_io_set(tfbus_module_t *m, ledch_t *s, lua_State *L, int cls, int ch, int idx, int val);
+bool ledch_io_set(tfbus_module_t *module, ledch_t *ledch_state, lua_State *L, int cls, int channel_index, int idx, int val);
 
 /** @brief tfbus_driver_t::io_execute for classes 49 / 72; -1 = unknown method. */
-int ledch_io_execute(tfbus_module_t *m, ledch_t *s, lua_State *L, int obj, int cls, int ch, int idx,
+int ledch_io_execute(tfbus_module_t *module, ledch_t *ledch_state, lua_State *L, int obj, int cls, int channel_index, int idx,
                      int first, int nargs);
 
 /** @brief A channel value reported by the module (status record 04 02 08 [ch, value]). */
-void ledch_reported(ledch_t *s, int ch, uint8_t v);
+void ledch_reported(ledch_t *ledch_state, int channel_index, uint8_t reported_value);
 
 /** @brief End of a status: LED_CCT updates from the channel pairs reported in it. */
-void ledch_reported_end(ledch_t *s);
+void ledch_reported_end(ledch_t *ledch_state);
 
 /** @brief Re-apply what Lua set (module re-addressed / back online). */
-void ledch_init(tfbus_module_t *m, ledch_t *s);
+void ledch_init(tfbus_module_t *module, ledch_t *ledch_state);
 
 /** @brief Stop the timers. */
-void ledch_deinit(ledch_t *s);
+void ledch_deinit(ledch_t *ledch_state);
 
 /** @brief tfbus_driver_t::overdue helper: run the expired channel timers. */
-void ledch_overdue(ledch_t *s);
+void ledch_overdue(ledch_t *ledch_state);

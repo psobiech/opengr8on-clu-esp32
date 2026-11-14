@@ -17,30 +17,30 @@ typedef enum {
 } clu_net_if_t;
 
 /**
- * @brief Load the persisted IP config of interface @p i and apply it to @p netif.
+ * @brief Load the persisted IP config of interface @p interface_index and apply it to @p netif.
  *
  * Call before the interface is started.
  *
- * @param i     Interface.
- * @param netif Its network interface.
+ * @param interface_index Interface.
+ * @param netif           Its network interface.
  */
-void clu_net_init(clu_net_if_t i, esp_netif_t *netif);
+void clu_net_init(clu_net_if_t interface_index, esp_netif_t *netif);
 
-/** @brief Re-apply the current config (static IP or DHCP) of interface @p i. */
-void clu_net_apply(clu_net_if_t i);
+/** @brief Re-apply the current config (static IP or DHCP) of interface @p interface_index. */
+void clu_net_apply(clu_net_if_t interface_index);
 
 /**
- * @brief Persist a static IP of interface @p i from req_set_clu_ip. Applied by clu_net_apply().
+ * @brief Persist a static IP of interface @p interface_index from req_set_clu_ip. Applied by clu_net_apply().
  *
  * The request carries no netmask: /24 is assumed, or no mask (everything on-link) if the gateway
  * lies outside that /24.
  *
- * @param i  Interface.
- * @param ip Dotted IPv4 address; "0.0.0.0" switches back to DHCP.
- * @param gw Dotted IPv4 gateway.
+ * @param interface_index Interface.
+ * @param ip              Dotted IPv4 address; "0.0.0.0" switches back to DHCP.
+ * @param gateway_address Dotted IPv4 gateway.
  * @return true if the address was valid and saved.
  */
-bool clu_net_set_static(clu_net_if_t i, const char *ip, const char *gw);
+bool clu_net_set_static(clu_net_if_t interface_index, const char *ip, const char *gateway_address);
 
 /**
  * @brief Set a DNS server (CLU features 25 PrimaryDNS / 26 SecondaryDNS).
@@ -63,11 +63,11 @@ void clu_net_set_dns(int idx, const char *addr);
 clu_net_if_t clu_net_if_for(uint32_t peer_be);
 
 /**
- * @brief Current IPv4 address of interface @p i.
+ * @brief Current IPv4 address of interface @p interface_index.
  *
  * @return Address in network byte order, 0 if the interface is not started or has none.
  */
-uint32_t clu_net_ip(clu_net_if_t i);
+uint32_t clu_net_ip(clu_net_if_t interface_index);
 
 /**
  * @brief Our address towards @p peer_be: clu_net_ip(clu_net_if_for(peer_be)).

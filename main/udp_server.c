@@ -138,13 +138,13 @@ static void setup_start(void)
 {
 #if CONFIG_CLU_SETUP_WINDOW_S > 0
     if (CONFIG_CLU_SETUP_BUTTON_GPIO >= 0) {
-        gpio_config_t c = {.pin_bit_mask = 1ULL << CONFIG_CLU_SETUP_BUTTON_GPIO,
+        gpio_config_t button_config = {.pin_bit_mask = 1ULL << CONFIG_CLU_SETUP_BUTTON_GPIO,
                            .mode = GPIO_MODE_INPUT,
                            // ESP32 GPIO34..39 are input-only with no pull-up: the board must have one
                            .pull_up_en = GPIO_IS_VALID_OUTPUT_GPIO(CONFIG_CLU_SETUP_BUTTON_GPIO)
                                              ? GPIO_PULLUP_ENABLE
                                              : GPIO_PULLUP_DISABLE};
-        if (gpio_config(&c) != ESP_OK) {
+        if (gpio_config(&button_config) != ESP_OK) {
             ESP_LOGE(TAG, "setup button GPIO %d: config failed", CONFIG_CLU_SETUP_BUTTON_GPIO);
         }
     }
@@ -175,10 +175,10 @@ static void log_locked(const char *what, const struct sockaddr_in *from)
 /** @brief Grenton broadcast key + default broadcast IV (discovery requests). */
 static const clu_cipher_t *broadcast_key(void)
 {
-    static clu_cipher_t k;
-    memcpy(k.key, CLU_GRENTON_KEY, 16);
-    memcpy(k.iv, CLU_DEFAULT_BROADCAST_IV, 16);
-    return &k;
+    static clu_cipher_t broadcast_cipher;
+    memcpy(broadcast_cipher.key, CLU_GRENTON_KEY, 16);
+    memcpy(broadcast_cipher.iv, CLU_DEFAULT_BROADCAST_IV, 16);
+    return &broadcast_cipher;
 }
 
 /**
@@ -187,8 +187,8 @@ static const clu_cipher_t *broadcast_key(void)
  */
 static const char *local_ip(uint32_t peer_be, char buf[16])
 {
-    struct in_addr a = {.s_addr = clu_net_local_ip(peer_be)};
-    inet_ntoa_r(a, buf, 16);
+    struct in_addr interface_address = {.s_addr = clu_net_local_ip(peer_be)};
+    inet_ntoa_r(interface_address, buf, 16);
     return buf;
 }
 
@@ -210,26 +210,26 @@ static void send_enc(const clu_cipher_t *key, const void *plain, size_t len,
         return;
     }
     xSemaphoreTake(s_tx_lock, portMAX_DELAY);
-    int n = clu_encrypt(key, plain, len, out, sizeof out);
-    if (n <= 0) {
-        ESP_LOGW(TAG, "encrypt failed (%d)", n);
-    } else if (sendto(s_sock, out, n, 0, (const struct sockaddr *)to, sizeof *to) < 0) {
+    int encrypted_length = clu_encrypt(key, plain, len, out, sizeof out);
+    if (encrypted_length <= 0) {
+        ESP_LOGW(TAG, "encrypt failed (%d)", encrypted_length);
+    } else if (sendto(s_sock, out, encrypted_length, 0, (const struct sockaddr *)to, sizeof *to) < 0) {
         ESP_LOGW(TAG, "sendto %s failed: errno %d", inet_ntoa(to->sin_addr), errno);
     }
     xSemaphoreGive(s_tx_lock);
 }
 
 /** @brief Encrypt and send a NUL-terminated string. */
-static void send_str(const clu_cipher_t *key, const char *s, const struct sockaddr_in *to)
+static void send_str(const clu_cipher_t *key, const char *message, const struct sockaddr_in *to)
 {
-    send_enc(key, s, strlen(s), to);
+    send_enc(key, message, strlen(message), to);
 }
 
 /** @brief True if @p buf starts with "<prefix>:". */
 static bool starts(const uint8_t *buf, size_t len, const char *prefix)
 {
-    size_t pl = strlen(prefix);
-    return len > pl && memcmp(buf, prefix, pl) == 0 && buf[pl] == ':';
+    size_t prefix_length = strlen(prefix);
+    return len > prefix_length && memcmp(buf, prefix, prefix_length) == 0 && buf[prefix_length] == ':';
 }
 
 /**
@@ -246,13 +246,13 @@ static bool keyed_cmd(const uint8_t *buf, size_t len, const char *cmd, const uin
                       size_t *tail_len)
 {
     const size_t hdr = CLU_RANDOM_ENC_BYTES + 1 + CLU_IV_BYTES + 1;
-    size_t cl = strlen(cmd);
-    if (len < hdr + cl + 1 || buf[32] != ':' || buf[49] != ':' ||
-        memcmp(buf + hdr, cmd, cl) != 0 || buf[hdr + cl] != ':') {
+    size_t command_length = strlen(cmd);
+    if (len < hdr + command_length + 1 || buf[32] != ':' || buf[49] != ':' ||
+        memcmp(buf + hdr, cmd, command_length) != 0 || buf[hdr + command_length] != ':') {
         return false;
     }
-    *tail = buf + hdr + cl + 1;
-    *tail_len = len - (hdr + cl + 1);
+    *tail = buf + hdr + command_length + 1;
+    *tail_len = len - (hdr + command_length + 1);
     return true;
 }
 
@@ -278,15 +278,15 @@ static void on_discovery(const uint8_t *buf, const struct sockaddr_in *from)
     const uint8_t *req_iv = buf + 33;
 
     uint8_t rnd[32];
-    int rl = clu_decrypt(&g_clu.project, enc, 32, rnd, sizeof rnd);
-    if (rl != CLU_RANDOM_BYTES) {
+    int decrypted_random_length = clu_decrypt(&g_clu.project, enc, 32, rnd, sizeof rnd);
+    if (decrypted_random_length != CLU_RANDOM_BYTES) {
         // OM encrypts the random with ITS project key + IV: no match means OM and this CLU
         // disagree on the project key, so OM's follow-up (set_clu_ip) will not decrypt either.
         ESP_LOGW(TAG, "discovery: random not under our project key (OM has another project key)");
         clu_random(rnd, CLU_RANDOM_BYTES);
     }
-    uint8_t h[CLU_RANDOM_BYTES];
-    clu_discovery_hash(rnd, CLU_RANDOM_BYTES, h);
+    uint8_t discovery_hash[CLU_RANDOM_BYTES];
+    clu_discovery_hash(rnd, CLU_RANDOM_BYTES, discovery_hash);
 
     // Temp key = the CLU's own device key (default_key(PIN)), not the project key, like the
     // vCLU. OM checks enc(hash) against default_key(private key it stores
@@ -300,8 +300,8 @@ static void on_discovery(const uint8_t *buf, const struct sockaddr_in *from)
     clu_default_key((const uint8_t *)g_clu.pin, g_clu.temp.key);
 
     uint8_t resp[128];
-    int el = clu_encrypt(&g_clu.temp, h, sizeof h, resp, sizeof resp);
-    if (el != CLU_RANDOM_ENC_BYTES) {
+    int encrypted_length = clu_encrypt(&g_clu.temp, discovery_hash, sizeof discovery_hash, resp, sizeof resp);
+    if (encrypted_length != CLU_RANDOM_ENC_BYTES) {
         return;
     }
     size_t off = 32;
@@ -311,10 +311,10 @@ static void on_discovery(const uint8_t *buf, const struct sockaddr_in *from)
     off += snprintf((char *)resp + off, sizeof resp - off, ":resp_discovery_clu:%08lx:%s",
                     (unsigned long)g_clu.sn, g_clu.mac);
 
-    discovery_reply_t r = {.len = off, .key = *broadcast_key(), .to = *from};
-    memcpy(r.resp, resp, off);
-    memcpy(r.key.iv, req_iv, 16);
-    if (!s_discovery_q || xQueueSend(s_discovery_q, &r, 0) != pdTRUE) {
+    discovery_reply_t discovery_reply = {.len = off, .key = *broadcast_key(), .to = *from};
+    memcpy(discovery_reply.resp, resp, off);
+    memcpy(discovery_reply.key.iv, req_iv, 16);
+    if (!s_discovery_q || xQueueSend(s_discovery_q, &discovery_reply, 0) != pdTRUE) {
         ESP_LOGW(TAG, "discovery from %s dropped (queue full)", inet_ntoa(from->sin_addr));
     }
 }
@@ -330,12 +330,12 @@ static void discovery_task(void *arg)
     (void)arg;
     TickType_t last_scan = 0;
     bool scanned = false;
-    discovery_reply_t r;
+    discovery_reply_t discovery_reply;
     for (;;) {
-        xQueueReceive(s_discovery_q, &r, portMAX_DELAY);
+        xQueueReceive(s_discovery_q, &discovery_reply, portMAX_DELAY);
 #if CONFIG_CLU_TFBUS_MASTER
         if (!scanned || xTaskGetTickCount() - last_scan > pdMS_TO_TICKS(DISCOVERY_RESCAN_FRESH_MS)) {
-            ESP_LOGI(TAG, "discovery from %s: re-reading TFBUS modules", inet_ntoa(r.to.sin_addr));
+            ESP_LOGI(TAG, "discovery from %s: re-reading TFBUS modules", inet_ntoa(discovery_reply.to.sin_addr));
             if (!tfbus_master_refresh(DISCOVERY_RESCAN_TIMEOUT_MS)) {
                 ESP_LOGW(TAG, "discovery: module rescan failed or timed out, answering anyway");
             }
@@ -346,7 +346,7 @@ static void discovery_task(void *arg)
         // No bus (CLU_BUS_NONE, GATE): nothing to rescan, CONFIG.JSON lists no modules.
         (void)last_scan;
         (void)scanned;
-        ESP_LOGI(TAG, "discovery from %s", inet_ntoa(r.to.sin_addr));
+        ESP_LOGI(TAG, "discovery from %s", inet_ntoa(discovery_reply.to.sin_addr));
 #endif
         // UDP has no delivery feedback (sendto only means "queued"), and on a lossy WiFi link the
         // single reply is often lost. The reply is idempotent (same temp IV, same hash), so send
@@ -356,9 +356,9 @@ static void discovery_task(void *arg)
             if (gap_ms[i]) {
                 vTaskDelay(pdMS_TO_TICKS(gap_ms[i]));
             }
-            send_enc(&r.key, r.resp, r.len, &r.to);
+            send_enc(&discovery_reply.key, discovery_reply.resp, discovery_reply.len, &discovery_reply.to);
         }
-        ESP_LOGI(TAG, "discovery from %s (%d replies)", inet_ntoa(r.to.sin_addr),
+        ESP_LOGI(TAG, "discovery from %s (%d replies)", inet_ntoa(discovery_reply.to.sin_addr),
                  DISCOVERY_REPLY_COPIES);
     }
 }
@@ -383,14 +383,14 @@ static void on_set_key(const uint8_t *tail, size_t tail_len, const uint8_t *buf,
 }
 
 /** @brief `req_set_clu_ip:<sn_hex>:<ip>:<gw>`: persist a static IP, answer, then apply it. */
-static void on_set_ip(const char *s, const clu_cipher_t *used, bool bcast,
+static void on_set_ip(const char *request_text, const clu_cipher_t *used, bool bcast,
                       const struct sockaddr_in *from)
 {
     // req_set_clu_ip:<sn_hex>:<ip>:<gw>
-    unsigned long sn = 0;
-    char ip[16] = {0}, gw[16] = {0};
-    int n = sscanf(s, "req_set_clu_ip:%lx:%15[^:]:%15s", &sn, ip, gw);
-    if (n < 2 || sn != g_clu.sn) {
+    unsigned long serial_number = 0;
+    char ip[16] = {0}, gateway[16] = {0};
+    int parsed_field_count = sscanf(request_text, "req_set_clu_ip:%lx:%15[^:]:%15s", &serial_number, ip, gateway);
+    if (parsed_field_count < 2 || serial_number != g_clu.sn) {
         if (!bcast) {
             send_str(used, "resp:ERROR", from);
         }
@@ -398,23 +398,23 @@ static void on_set_ip(const char *s, const clu_cipher_t *used, bool bcast,
     }
     // Separate config per interface: the one OM reaches us through.
     clu_net_if_t nif = clu_net_if_for(from->sin_addr.s_addr);
-    char r[64], cur[16];
-    struct in_addr ca = {.s_addr = clu_net_ip(nif)};
-    inet_ntoa_r(ca, cur, sizeof cur);
+    char response[64], cur[16];
+    struct in_addr current_address = {.s_addr = clu_net_ip(nif)};
+    inet_ntoa_r(current_address, cur, sizeof cur);
     if (strcmp(ip, cur) == 0) {
-        snprintf(r, sizeof r, "resp_set_clu_ip:%08lx:%s", sn, cur);
-        send_str(used, r, from);
+        snprintf(response, sizeof response, "resp_set_clu_ip:%08lx:%s", serial_number, cur);
+        send_str(used, response, from);
         return;
     }
-    if (!clu_net_set_static(nif, ip, gw)) {
+    if (!clu_net_set_static(nif, ip, gateway)) {
         send_str(used, "resp:ERROR", from);
         return;
     }
     // Answer from the old address, then switch (udp socket is bound to INADDR_ANY).
-    snprintf(r, sizeof r, "resp_set_clu_ip:%08lx:%s", sn, ip);
-    send_str(used, r, from);
+    snprintf(response, sizeof response, "resp_set_clu_ip:%08lx:%s", serial_number, ip);
+    send_str(used, response, from);
     ESP_LOGW(TAG, "%s IP change %s -> %s (gw %s) requested by %s", nif == CLU_NET_ETH ? "eth" : "wifi", cur,
-             ip, gw, inet_ntoa(from->sin_addr));
+             ip, gateway, inet_ntoa(from->sin_addr));
     vTaskDelay(pdMS_TO_TICKS(100));
     clu_net_apply(nif);
 }
@@ -445,24 +445,24 @@ void udp_server_send_report(const char *addr, int port, const char *body)
  * @param privileged Request came under the project/temp key; otherwise only checkAlive() is allowed.
  * @param from       Sender.
  */
-static void on_lua(char *s, const clu_cipher_t *used, bool privileged,
+static void on_lua(char *request_text, const clu_cipher_t *used, bool privileged,
                    const struct sockaddr_in *from)
 {
     // req:<ip>:<session>:<script>[\r\n]
-    char *p1 = strchr(s + 4, ':');
-    if (!p1) {
+    char *session_separator = strchr(request_text + 4, ':');
+    if (!session_separator) {
         return;
     }
-    char *p2 = strchr(p1 + 1, ':');
-    if (!p2) {
+    char *script_separator = strchr(session_separator + 1, ':');
+    if (!script_separator) {
         return;
     }
-    *p2 = 0;
-    unsigned long session = strtoul(p1 + 1, NULL, 16);
-    char *script = p2 + 1;
-    size_t sl = strlen(script);
-    while (sl && (script[sl - 1] == '\r' || script[sl - 1] == '\n')) {
-        script[--sl] = 0;
+    *script_separator = 0;
+    unsigned long session = strtoul(session_separator + 1, NULL, 16);
+    char *script = script_separator + 1;
+    size_t script_length = strlen(script);
+    while (script_length && (script[script_length - 1] == '\r' || script[script_length - 1] == '\n')) {
+        script[--script_length] = 0;
     }
 
     if (!privileged && strcasecmp(script, "checkAlive()") != 0) {
@@ -480,10 +480,10 @@ static void on_lua(char *s, const clu_cipher_t *used, bool privileged,
             strcpy(val, "nil");
         }
     }
-    static char r[BUF_SZ];
-    char me[16];
-    snprintf(r, sizeof r, "resp:%s:%08lx:%s", local_ip(from->sin_addr.s_addr, me), session, val);
-    send_str(used, r, from);
+    static char response[BUF_SZ];
+    char local_ip_buffer[16];
+    snprintf(response, sizeof response, "resp:%s:%08lx:%s", local_ip(from->sin_addr.s_addr, local_ip_buffer), session, val);
+    send_str(used, response, from);
 }
 
 /**
@@ -522,7 +522,7 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
         return;
     }
     buf[len] = 0; // text commands
-    char *s = (char *)buf;
+    char *command_text = (char *)buf;
 
     if (starts(buf, len, "req_set_clu_ip")) {
         if (!setup) {
@@ -532,7 +532,7 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
             }
             return;
         }
-        on_set_ip(s, used, bcast, from);
+        on_set_ip(command_text, used, bcast, from);
         return;
     }
     if (bcast) {
@@ -548,9 +548,9 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
         return;
     }
     if (starts(buf, len, "req_reset")) {
-        char r[48], me[16];
-        snprintf(r, sizeof r, "resp_reset:%s", local_ip(from->sin_addr.s_addr, me));
-        send_str(&g_clu.project, r, from);
+        char response[48], local_ip_buffer[16];
+        snprintf(response, sizeof response, "resp_reset:%s", local_ip(from->sin_addr.s_addr, local_ip_buffer));
+        send_str(&g_clu.project, response, from);
         ESP_LOGW(TAG, "reset requested");
         // Ends a setup window held open by discovery; the timed window is not re-armed.
         atomic_store(&s_setup_latched, false);
@@ -567,16 +567,16 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
         esp_restart();
     }
     if (starts(buf, len, "req")) {
-        on_lua(s, used, used_project || used_temp, from);
+        on_lua(command_text, used, used_project || used_temp, from);
         return;
     }
     if (used_project && !setup &&
-        (strcmp(s, "req_start_ftp") == 0 || starts(buf, len, "req_diagnostic_refresh"))) {
+        (strcmp(command_text, "req_start_ftp") == 0 || starts(buf, len, "req_diagnostic_refresh"))) {
         log_locked("TFTP", from); // a session opened inside the window keeps running
         send_str(used, "resp:ERROR", from);
         return;
     }
-    if (used_project && strcmp(s, "req_start_ftp") == 0) {
+    if (used_project && strcmp(command_text, "req_start_ftp") == 0) {
         clu_tftp_enable(true, from->sin_addr.s_addr); // only this host may transfer files
         send_str(used, "resp:OK", from);
         return;
@@ -584,21 +584,21 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
     // req_diagnostic_refresh:<ip>:<session> -> resp_diagnostic_refresh:<session>:OK|ERROR:<n>,
     // then OM fetches m:\DIAGNOSTIC_PACK.JSON over TFTP.
     if (used_project && starts(buf, len, "req_diagnostic_refresh")) {
-        const char *sess = strrchr(s, ':') + 1; // starts() guarantees a ':'
+        const char *sess = strrchr(command_text, ':') + 1; // starts() guarantees a ':'
         if (strlen(sess) > 16) return;
-        char me[16];
-        int err = clu_diag_write(local_ip(from->sin_addr.s_addr, me));
-        char r[80], code[12] = "OK";
+        char local_ip_buffer[16];
+        int err = clu_diag_write(local_ip(from->sin_addr.s_addr, local_ip_buffer));
+        char response[80], code[12] = "OK";
         if (err) snprintf(code, sizeof code, "ERROR:%d", err);
-        snprintf(r, sizeof r, "resp_diagnostic_refresh:%.*s:%s", (int)strcspn(sess, "\r\n"), sess,
+        snprintf(response, sizeof response, "resp_diagnostic_refresh:%.*s:%s", (int)strcspn(sess, "\r\n"), sess,
                  code);
         if (!err) clu_tftp_enable(true, from->sin_addr.s_addr); // OM downloads right after
-        send_str(used, r, from);
+        send_str(used, response, from);
         return;
     }
     // OM "Clear CLU": req_refresh_modules, then it downloads a:\CONFIG.JSON and imports
     // tfbusDevices (OM waits 30 s and only checks the "resp_refresh_modules" prefix).
-    if (used_project && strncmp(s, "req_refresh_modules", 19) == 0) {
+    if (used_project && strncmp(command_text, "req_refresh_modules", 19) == 0) {
 #if CONFIG_CLU_TFBUS_MASTER
         bool done = tfbus_master_refresh(25000); // bus task rewrites CONFIG.JSON when done
         if (!done) {
@@ -607,20 +607,20 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
 #else
         clu_state_write_config_files(); // no bus: CONFIG.JSON with an empty module list
 #endif
-        char r[48], me[16];
-        snprintf(r, sizeof r, "resp_refresh_modules:%s", local_ip(from->sin_addr.s_addr, me));
-        send_str(used, r, from);
+        char response[48], local_ip_buffer[16];
+        snprintf(response, sizeof response, "resp_refresh_modules:%s", local_ip(from->sin_addr.s_addr, local_ip_buffer));
+        send_str(used, response, from);
         return;
     }
-    if (used_project && strcmp(s, "req_tftp_stop") == 0) {
+    if (used_project && strcmp(command_text, "req_tftp_stop") == 0) {
         clu_tftp_enable(false, 0);
         send_str(used, "resp:OK", from);
         return;
     }
     // Answer only plaintext that looks like a command. Replying to any packet that merely decrypts
     // with valid padding would make this a CBC padding oracle (decrypting captured traffic).
-    if (strncmp(s, "req", 3) == 0) {
-        ESP_LOGW(TAG, "unhandled from %s: %.48s", inet_ntoa(from->sin_addr), s);
+    if (strncmp(command_text, "req", 3) == 0) {
+        ESP_LOGW(TAG, "unhandled from %s: %.48s", inet_ntoa(from->sin_addr), command_text);
         send_str(used, "resp:ERROR", from);
     }
 }
@@ -644,9 +644,9 @@ static void udp_task(void *arg)
     }
     int yes = 1;
     setsockopt(s_sock, SOL_SOCKET, SO_BROADCAST, &yes, sizeof yes);
-    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(CLU_UDP_PORT),
+    struct sockaddr_in bind_address = {.sin_family = AF_INET, .sin_port = htons(CLU_UDP_PORT),
                             .sin_addr.s_addr = htonl(INADDR_ANY)};
-    if (bind(s_sock, (struct sockaddr *)&a, sizeof a) < 0) {
+    if (bind(s_sock, (struct sockaddr *)&bind_address, sizeof bind_address) < 0) {
         ESP_LOGE(TAG, "bind failed");
         close(s_sock);
         s_sock = -1;
@@ -659,9 +659,9 @@ static void udp_task(void *arg)
 
     for (;;) {
         struct sockaddr_in from;
-        socklen_t fl = sizeof from;
-        int n = recvfrom(s_sock, in, sizeof in, 0, (struct sockaddr *)&from, &fl);
-        if (n <= 0) {
+        socklen_t source_address_length = sizeof from;
+        int datagram_length = recvfrom(s_sock, in, sizeof in, 0, (struct sockaddr *)&from, &source_address_length);
+        if (datagram_length <= 0) {
             continue;
         }
         // PIN key: default_key(PIN) with the temp IV from our discovery reply. OM uses it to
@@ -683,19 +683,19 @@ static void udp_task(void *arg)
             if (!keys[i]) {
                 continue;
             }
-            int pl = clu_decrypt(keys[i], in, n, plain, BUF_SZ);
-            if (pl <= 0 || !request_frame(plain, (size_t)pl)) {
+            int plaintext_length = clu_decrypt(keys[i], in, datagram_length, plain, BUF_SZ);
+            if (plaintext_length <= 0 || !request_frame(plain, (size_t)plaintext_length)) {
                 continue;
             }
             clu_cipher_t used = *keys[i];
-            dispatch(plain, pl, &used, i == 3, i == 1 || i == 2, i == 0, &from);
+            dispatch(plain, plaintext_length, &used, i == 3, i == 1 || i == 2, i == 0, &from);
             handled = true;
             break;
         }
         if (!handled) {
-            ESP_LOGW(TAG, "%d bytes from %s: no key yields a CLU request (wrong project key / PIN?)", n,
+            ESP_LOGW(TAG, "%d bytes from %s: no key yields a CLU request (wrong project key / PIN?)", datagram_length,
                      inet_ntoa(from.sin_addr));
-            ESP_LOG_BUFFER_HEX_LEVEL(TAG, in, n > 64 ? 64 : n, ESP_LOG_WARN);
+            ESP_LOG_BUFFER_HEX_LEVEL(TAG, in, datagram_length > 64 ? 64 : datagram_length, ESP_LOG_WARN);
             if (g_clu.has_temp) {
                 ESP_LOG_BUFFER_HEX_LEVEL("udp temp iv", g_clu.temp.iv, 16, ESP_LOG_WARN);
             }
@@ -729,22 +729,22 @@ uint32_t udp_server_remote_exec(uint32_t ip, const char *script)
     if (++s_next_id == 0) {
         s_next_id = 1;
     }
-    remote_req_t r = {.ip = ip, .id = s_next_id, .script = strdup(script)};
-    if (!r.script) {
+    remote_req_t remote_request = {.ip = ip, .id = s_next_id, .script = strdup(script)};
+    if (!remote_request.script) {
         return 0;
     }
-    if (xQueueSend(s_remote_q, &r, 0) != pdTRUE) {
+    if (xQueueSend(s_remote_q, &remote_request, 0) != pdTRUE) {
         ESP_LOGW(TAG, "remote queue full, dropped: %s", script);
-        free(r.script);
+        free(remote_request.script);
         return 0;
     }
-    return r.id;
+    return remote_request.id;
 }
 
 /**
  * @brief Send one remote call (`req:<ip>:<session>:<script>`) and post the matching resp to clu_lua.
  */
-static void remote_call(int sock, const remote_req_t *r)
+static void remote_call(int sock, const remote_req_t *remote_request)
 {
     static char msg[BUF_SZ];
     static uint8_t enc[BUF_SZ + 16];
@@ -753,23 +753,23 @@ static void remote_call(int sock, const remote_req_t *r)
 
     uint32_t session;
     clu_random((uint8_t *)&session, sizeof session);
-    char me[16];
-    int ml = snprintf(msg, sizeof msg, "req:%s:%08lx:%s", local_ip(htonl(r->ip), me), (unsigned long)session,
-                      r->script);
-    if (ml <= 0 || ml >= (int)sizeof msg) {
+    char local_ip_buffer[16];
+    int message_length = snprintf(msg, sizeof msg, "req:%s:%08lx:%s", local_ip(htonl(remote_request->ip), local_ip_buffer), (unsigned long)session,
+                      remote_request->script);
+    if (message_length <= 0 || message_length >= (int)sizeof msg) {
         ESP_LOGW(TAG, "remote script too long");
-        clu_lua_post_remote(r->id, NULL);
+        clu_lua_post_remote(remote_request->id, NULL);
         return;
     }
     clu_cipher_t key = g_clu.project;
-    int el = clu_encrypt(&key, (const uint8_t *)msg, ml, enc, sizeof enc);
+    int encrypted_length = clu_encrypt(&key, (const uint8_t *)msg, message_length, enc, sizeof enc);
     struct sockaddr_in to = {.sin_family = AF_INET, .sin_port = htons(CLU_UDP_PORT),
-                             .sin_addr.s_addr = htonl(r->ip)};
+                             .sin_addr.s_addr = htonl(remote_request->ip)};
     char ip[16];
     inet_ntoa_r(to.sin_addr, ip, sizeof ip);
-    if (el <= 0 || sendto(sock, enc, el, 0, (struct sockaddr *)&to, sizeof to) < 0) {
+    if (encrypted_length <= 0 || sendto(sock, enc, encrypted_length, 0, (struct sockaddr *)&to, sizeof to) < 0) {
         ESP_LOGW(TAG, "remote %s: send failed", ip);
-        clu_lua_post_remote(r->id, NULL);
+        clu_lua_post_remote(remote_request->id, NULL);
         return;
     }
 
@@ -778,59 +778,59 @@ static void remote_call(int sock, const remote_req_t *r)
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(REMOTE_TIMEOUT_MS);
     while ((int32_t)(deadline - xTaskGetTickCount()) > 0) {
         struct sockaddr_in from;
-        socklen_t fl = sizeof from;
-        int n = recvfrom(sock, in, sizeof in, 0, (struct sockaddr *)&from, &fl);
-        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        socklen_t source_address_length = sizeof from;
+        int datagram_length = recvfrom(sock, in, sizeof in, 0, (struct sockaddr *)&from, &source_address_length);
+        if (datagram_length < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             continue; // SO_RCVTIMEO slice: wait until the deadline
         }
-        if (n <= 0) {
+        if (datagram_length <= 0) {
             break;
         }
         if (from.sin_addr.s_addr != to.sin_addr.s_addr) {
             continue;
         }
-        int pl = clu_decrypt(&key, in, n, (uint8_t *)plain, BUF_SZ);
-        if (pl <= 0) {
+        int plaintext_length = clu_decrypt(&key, in, datagram_length, (uint8_t *)plain, BUF_SZ);
+        if (plaintext_length <= 0) {
             continue;
         }
-        plain[pl] = 0;
+        plain[plaintext_length] = 0;
         // resp:<ip>:<session>:<result>
-        char *p1 = strncmp(plain, "resp:", 5) == 0 ? strchr(plain + 5, ':') : NULL;
-        if (!p1 || strncasecmp(p1 + 1, sess, 8) != 0 || p1[9] != ':') {
+        char *response_separator = strncmp(plain, "resp:", 5) == 0 ? strchr(plain + 5, ':') : NULL;
+        if (!response_separator || strncasecmp(response_separator + 1, sess, 8) != 0 || response_separator[9] != ':') {
             continue;
         }
-        ESP_LOGD(TAG, "remote %s: %s -> %s", ip, r->script, p1 + 10);
-        clu_lua_post_remote(r->id, p1 + 10);
+        ESP_LOGD(TAG, "remote %s: %s -> %s", ip, remote_request->script, response_separator + 10);
+        clu_lua_post_remote(remote_request->id, response_separator + 10);
         return;
     }
-    ESP_LOGW(TAG, "remote %s: no response to %s", ip, r->script);
-    clu_lua_post_remote(r->id, NULL);
+    ESP_LOGW(TAG, "remote %s: no response to %s", ip, remote_request->script);
+    clu_lua_post_remote(remote_request->id, NULL);
 }
 
 /** @brief Task: execute queued remote-CLU calls one at a time on an ephemeral socket. */
 static void remote_task(void *arg)
 {
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = 0, .sin_addr.s_addr = htonl(INADDR_ANY)};
-    if (sock < 0 || bind(sock, (struct sockaddr *)&a, sizeof a) < 0) {
+    struct sockaddr_in bind_address = {.sin_family = AF_INET, .sin_port = 0, .sin_addr.s_addr = htonl(INADDR_ANY)};
+    if (sock < 0 || bind(sock, (struct sockaddr *)&bind_address, sizeof bind_address) < 0) {
         ESP_LOGE(TAG, "remote: socket/bind failed, remote CLU calls disabled");
         if (sock >= 0) {
             close(sock);
         }
         for (;;) { // keep draining so queued scripts are freed (the queue stays valid for callers)
-            remote_req_t r;
-            xQueueReceive(s_remote_q, &r, portMAX_DELAY);
-            clu_lua_post_remote(r.id, NULL);
-            free(r.script);
+            remote_req_t remote_request;
+            xQueueReceive(s_remote_q, &remote_request, portMAX_DELAY);
+            clu_lua_post_remote(remote_request.id, NULL);
+            free(remote_request.script);
         }
     }
-    struct timeval tv = {.tv_sec = 0, .tv_usec = 200 * 1000};
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    struct timeval receive_timeout = {.tv_sec = 0, .tv_usec = 200 * 1000};
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout, sizeof receive_timeout);
     for (;;) {
-        remote_req_t r;
-        xQueueReceive(s_remote_q, &r, portMAX_DELAY);
-        remote_call(sock, &r);
-        free(r.script);
+        remote_req_t remote_request;
+        xQueueReceive(s_remote_q, &remote_request, portMAX_DELAY);
+        remote_call(sock, &remote_request);
+        free(remote_request.script);
     }
 }
 

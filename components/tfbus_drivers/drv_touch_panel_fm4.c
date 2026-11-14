@@ -47,107 +47,107 @@ typedef struct {
 } tp4_t;
 
 /** @brief Driver state of @p m, allocated (with sensor defaults) on first use. */
-static tp4_t *ctx(tfbus_module_t *m)
+static tp4_t *ctx(tfbus_module_t *module)
 {
-    if (!m->drv_ctx) {
-        tp4_t *c = calloc(1, sizeof *c);
-        if (!c) {
+    if (!module->drv_ctx) {
+        tp4_t *panel_state = calloc(1, sizeof *panel_state);
+        if (!panel_state) {
             abort(); // out of memory while loading OM.LUA: reboot instead of a NULL dereference
         }
-        c->temp = (panel_sensor_t){.threshold = 0.1, .min = 0, .max = 40};
-        c->light = (panel_sensor_t){.threshold = 0.1, .min = 0, .max = 100};
-        c->buzzer = true;
-        m->drv_ctx = c;
+        panel_state->temp = (panel_sensor_t){.threshold = 0.1, .min = 0, .max = 40};
+        panel_state->light = (panel_sensor_t){.threshold = 0.1, .min = 0, .max = 100};
+        panel_state->buzzer = true;
+        module->drv_ctx = panel_state;
     }
-    return m->drv_ctx;
+    return module->drv_ctx;
 }
 
 /**
  * @brief tfbus_driver_t::init: queue the captured init sequence (buttons, sensor sensitivity, buzzer).
  */
-static void init(tfbus_module_t *m)
+static void init(tfbus_module_t *module)
 {
-    tp4_t *c = ctx(m);
+    tp4_t *panel_state = ctx(module);
     for (int b = 0; b < BTN; b++) {
-        drv_queue_record(m, 0x01, 0x00, (uint8_t[]){(uint8_t)(1 << b), 0, 0}, 3);
-        drv_queue_record(m, 0x0f, 0x00, (uint8_t[]){(uint8_t)b, 0, 0, 0}, 4);
+        drv_queue_record(module, 0x01, 0x00, (uint8_t[]){(uint8_t)(1 << b), 0, 0}, 3);
+        drv_queue_record(module, 0x0f, 0x00, (uint8_t[]){(uint8_t)b, 0, 0, 0}, 4);
     }
-    drv_queue_record(m, 0x00, 0x00, (uint8_t[]){0x07, 0x01, 0x02, 0}, 4);
-    drv_queue_record(m, 0x00, 0x00, (uint8_t[]){0x07, 0x0a, 0x02, 0}, 4);
-    drv_queue_record(m, 0x00, 0x00, (uint8_t[]){0x08, 0x01, 0x0a, 0}, 4);
-    drv_queue_record(m, 0x00, 0x00, (uint8_t[]){0x08, 0x0a, 0x0a, 0}, 4);
-    drv_queue_record(m, 0x03, 0x01, (uint8_t[]){c->buzzer}, 1);
+    drv_queue_record(module, 0x00, 0x00, (uint8_t[]){0x07, 0x01, 0x02, 0}, 4);
+    drv_queue_record(module, 0x00, 0x00, (uint8_t[]){0x07, 0x0a, 0x02, 0}, 4);
+    drv_queue_record(module, 0x00, 0x00, (uint8_t[]){0x08, 0x01, 0x0a, 0}, 4);
+    drv_queue_record(module, 0x00, 0x00, (uint8_t[]){0x08, 0x0a, 0x0a, 0}, 4);
+    drv_queue_record(module, 0x03, 0x01, (uint8_t[]){panel_state->buzzer}, 1);
 }
 
 /** @brief tfbus_driver_t::io_new: remember the Lua name of a button / sensor. */
-static void io_new(tfbus_module_t *m, int cls, int ch, const char *name)
+static void io_new(tfbus_module_t *module, int cls, int channel_index, const char *name)
 {
-    tp4_t *c = ctx(m);
-    if (cls == CLS_BUTTON && ch >= 0 && ch < BTN) {
-        strlcpy(c->btn[ch], name, sizeof c->btn[ch]);
+    tp4_t *panel_state = ctx(module);
+    if (cls == CLS_BUTTON && channel_index >= 0 && channel_index < BTN) {
+        strlcpy(panel_state->btn[channel_index], name, sizeof panel_state->btn[channel_index]);
     } else if (cls == CLS_TEMP) {
-        strlcpy(c->temp.name, name, sizeof c->temp.name);
+        strlcpy(panel_state->temp.name, name, sizeof panel_state->temp.name);
     } else if (cls == CLS_LIGHT) {
-        strlcpy(c->light.name, name, sizeof c->light.name);
+        strlcpy(panel_state->light.name, name, sizeof panel_state->light.name);
     }
 }
 
 /**
  * @brief tfbus_driver_t::io_set: cache sensor Threshold (1) / Min (3) / Max (4); PANEL BuzzerValue (13) is sent.
  */
-static bool io_set(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int val)
+static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel_index, int idx, int val)
 {
-    tp4_t *c = ctx(m);
-    panel_sensor_t *s = cls == CLS_TEMP ? &c->temp : cls == CLS_LIGHT ? &c->light : NULL;
-    if (s) {
-        double v = luaL_optnumber(L, val, 0);
+    tp4_t *panel_state = ctx(module);
+    panel_sensor_t *sensor_config = cls == CLS_TEMP ? &panel_state->temp : cls == CLS_LIGHT ? &panel_state->light : NULL;
+    if (sensor_config) {
+        double sensor_value = luaL_optnumber(L, val, 0);
         if (idx == 1) {
-            s->threshold = v;
+            sensor_config->threshold = sensor_value;
         } else if (idx == 3) {
-            s->min = v;
+            sensor_config->min = sensor_value;
         } else if (idx == 4) {
-            s->max = v;
+            sensor_config->max = sensor_value;
         }
     } else if (cls == CLS_PANEL && idx == 13) {
-        c->buzzer = luaL_optinteger(L, val, 1) != 0;
-        drv_queue_record(m, 0x03, 0x01, (uint8_t[]){c->buzzer}, 1);
+        panel_state->buzzer = luaL_optinteger(L, val, 1) != 0;
+        drv_queue_record(module, 0x03, 0x01, (uint8_t[]){panel_state->buzzer}, 1);
     }
     return false;
 }
 
 /** @brief tfbus_driver_t::io_execute: BUTTON LedSwitchOn (1) / LedSwitchOff (2). */
-static int io_execute(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, int idx, int first,
+static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel_index, int idx, int first,
                       int nargs)
 {
-    if (cls != CLS_BUTTON || ch < 0 || ch >= BTN) {
+    if (cls != CLS_BUTTON || channel_index < 0 || channel_index >= BTN) {
         return -1;
     }
     switch (idx) {
     case 1: // LedSwitchOn
     case 2: // LedSwitchOff
-        drv_queue_record(m, 0x01, 0x00, (uint8_t[]){(uint8_t)(1 << ch), idx == 1, 0}, 3);
+        drv_queue_record(module, 0x01, 0x00, (uint8_t[]){(uint8_t)(1 << channel_index), idx == 1, 0}, 3);
         return 0;
     default:
-        ESP_LOGW(TAG, "%s: execute(%d) not implemented", ctx(m)->btn[ch], idx);
+        ESP_LOGW(TAG, "%s: execute(%d) not implemented", ctx(module)->btn[channel_index], idx);
         return 0;
     }
 }
 
 /** @brief tfbus_driver_t::on_status: temperature, light and button event records. */
-static void on_status(tfbus_module_t *m, const uint8_t *pl, size_t len)
+static void on_status(tfbus_module_t *module, const uint8_t *status_payload, size_t len)
 {
-    tp4_t *c = ctx(m);
-    tfbus_tlv_t r[4];
-    int n = tfbus_parse_tlv(pl, len, r, 4);
-    for (int i = 0; i < n; i++) {
-        if (r[i].len < 2) {
+    tp4_t *panel_state = ctx(module);
+    tfbus_tlv_t status_records[4];
+    int status_record_count = tfbus_parse_tlv(status_payload, len, status_records, 4);
+    for (int i = 0; i < status_record_count; i++) {
+        if (status_records[i].len < 2) {
             continue;
         }
-        uint16_t v = (uint16_t)(r[i].data[0] | r[i].data[1] << 8);
-        switch (r[i].type) {
-        case 0x02: panel_sensor_update(&c->temp, v / 100.0); break;
-        case 0x07: panel_sensor_update(&c->light, v / 100.0); break;
-        case 0x08: panel_button_event(c->btn, BTN, &c->btn_value, NULL, r[i].data[0]); break;
+        uint16_t record_value = (uint16_t)(status_records[i].data[0] | status_records[i].data[1] << 8);
+        switch (status_records[i].type) {
+        case 0x02: panel_sensor_update(&panel_state->temp, record_value / 100.0); break;
+        case 0x07: panel_sensor_update(&panel_state->light, record_value / 100.0); break;
+        case 0x08: panel_button_event(panel_state->btn, BTN, &panel_state->btn_value, NULL, status_records[i].data[0]); break;
         default: break;
         }
     }

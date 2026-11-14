@@ -10,29 +10,29 @@
 
 #include "pcf85063.h"
 
-bool ds3231_decode(const uint8_t r[DS3231_TIME_LEN], time_t *out)
+bool ds3231_decode(const uint8_t register_values[DS3231_TIME_LEN], time_t *out)
 {
-    if ((r[2] & DS3231_HOURS_12H) || (r[5] & DS3231_MONTH_CENTURY)) {
+    if ((register_values[2] & DS3231_HOURS_12H) || (register_values[5] & DS3231_MONTH_CENTURY)) {
         return false;
     }
-    const uint8_t p[PCF85063_TIME_LEN] = {
-        (uint8_t)(r[0] & 0x7f), r[1], r[2], r[4], 0, r[5], r[6],
+    const uint8_t pcf_registers[PCF85063_TIME_LEN] = {
+        (uint8_t)(register_values[0] & 0x7f), register_values[1], register_values[2], register_values[4], 0, register_values[5], register_values[6],
     };
-    return pcf85063_decode(p, out);
+    return pcf85063_decode(pcf_registers, out);
 }
 
-bool ds3231_encode(time_t t, uint8_t r[DS3231_TIME_LEN])
+bool ds3231_encode(time_t timestamp, uint8_t register_values[DS3231_TIME_LEN])
 {
-    uint8_t p[PCF85063_TIME_LEN];
-    if (!pcf85063_encode(t, p)) {
+    uint8_t pcf_registers[PCF85063_TIME_LEN];
+    if (!pcf85063_encode(timestamp, pcf_registers)) {
         return false;
     }
-    r[0] = p[0];
-    r[1] = p[1];
-    r[2] = p[2];          // 24-hour mode: bit 6 clear
-    r[3] = (uint8_t)(p[4] + 1); // weekday 1-7, 1 = Sunday
-    r[4] = p[3];
-    r[5] = p[5];          // Century clear
-    r[6] = p[6];
+    register_values[0] = pcf_registers[0];
+    register_values[1] = pcf_registers[1];
+    register_values[2] = pcf_registers[2];          // 24-hour mode: bit 6 clear
+    register_values[3] = (uint8_t)(pcf_registers[4] + 1); // weekday 1-7, 1 = Sunday
+    register_values[4] = pcf_registers[3];
+    register_values[5] = pcf_registers[5];          // Century clear
+    register_values[6] = pcf_registers[6];
     return true;
 }

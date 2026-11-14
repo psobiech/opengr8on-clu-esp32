@@ -99,12 +99,12 @@ typedef struct {
 } remote_res_t;
 
 /** @brief Free a request and its buffers. */
-static void req_free(req_t *r)
+static void req_free(req_t *request)
 {
-    vSemaphoreDelete(r->done);
-    free(r->expr);
-    free(r->out);
-    free(r);
+    vSemaphoreDelete(request->done);
+    free(request->expr);
+    free(request->out);
+    free(request);
 }
 
 void clu_lua_register_ext(const luaL_Reg *fns, const char *src, size_t len, const char *name)
@@ -131,40 +131,40 @@ esp_err_t clu_lua_call(const char *expr, const char *from_ip, char *out, size_t 
     if (!s_reqs) {
         return ESP_ERR_INVALID_STATE;
     }
-    req_t *r = calloc(1, sizeof *r);
-    if (!r) {
+    req_t *request = calloc(1, sizeof *request);
+    if (!request) {
         return ESP_ERR_NO_MEM;
     }
-    r->expr = strdup(expr);
-    r->out = malloc(cap);
-    r->cap = cap;
-    r->done = xSemaphoreCreateBinary();
-    strlcpy(r->from, from_ip ? from_ip : "", sizeof r->from);
-    if (!r->expr || !r->out || !r->done) {
-        if (r->done) {
-            vSemaphoreDelete(r->done);
+    request->expr = strdup(expr);
+    request->out = malloc(cap);
+    request->cap = cap;
+    request->done = xSemaphoreCreateBinary();
+    strlcpy(request->from, from_ip ? from_ip : "", sizeof request->from);
+    if (!request->expr || !request->out || !request->done) {
+        if (request->done) {
+            vSemaphoreDelete(request->done);
         }
-        free(r->expr);
-        free(r->out);
-        free(r);
+        free(request->expr);
+        free(request->out);
+        free(request);
         return ESP_ERR_NO_MEM;
     }
-    r->out[0] = 0;
-    if (xQueueSend(s_reqs, &r, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
-        req_free(r);
+    request->out[0] = 0;
+    if (xQueueSend(s_reqs, &request, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        req_free(request);
         return ESP_ERR_TIMEOUT;
     }
-    if (xSemaphoreTake(r->done, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
-        strlcpy(out, r->out, cap);
-        req_free(r);
+    if (xSemaphoreTake(request->done, pdMS_TO_TICKS(timeout_ms)) == pdTRUE) {
+        strlcpy(out, request->out, cap);
+        req_free(request);
         return ESP_OK;
     }
-    int prev = __atomic_exchange_n(&r->state, REQ_ABANDONED, __ATOMIC_ACQ_REL);
+    int prev = __atomic_exchange_n(&request->state, REQ_ABANDONED, __ATOMIC_ACQ_REL);
     if (prev == REQ_DONE) {
         // Finished just after our timeout: result is valid.
-        xSemaphoreTake(r->done, portMAX_DELAY);
-        strlcpy(out, r->out, cap);
-        req_free(r);
+        xSemaphoreTake(request->done, portMAX_DELAY);
+        strlcpy(out, request->out, cap);
+        req_free(request);
         return ESP_OK;
     }
     return ESP_ERR_TIMEOUT; // Lua task frees it
@@ -175,9 +175,9 @@ void clu_lua_post_event(const char *obj_name, int event_idx)
     if (!s_events) {
         return;
     }
-    event_t e = {.idx = event_idx};
-    strlcpy(e.name, obj_name, sizeof e.name);
-    xQueueSend(s_events, &e, 0);
+    event_t event_data = {.idx = event_idx};
+    strlcpy(event_data.name, obj_name, sizeof event_data.name);
+    xQueueSend(s_events, &event_data, 0);
 }
 
 void clu_lua_post_number(const char *obj_name, int feature_idx, double value)
@@ -185,9 +185,9 @@ void clu_lua_post_number(const char *obj_name, int feature_idx, double value)
     if (!s_events) {
         return;
     }
-    event_t e = {.idx = feature_idx, .is_value = true, .value = value};
-    strlcpy(e.name, obj_name, sizeof e.name);
-    xQueueSend(s_events, &e, 0);
+    event_t event_data = {.idx = feature_idx, .is_value = true, .value = value};
+    strlcpy(event_data.name, obj_name, sizeof event_data.name);
+    xQueueSend(s_events, &event_data, 0);
 }
 
 void clu_lua_post_string(const char *obj_name, int feature_idx, const char *value)
@@ -195,10 +195,10 @@ void clu_lua_post_string(const char *obj_name, int feature_idx, const char *valu
     if (!s_events) {
         return;
     }
-    event_t e = {.idx = feature_idx, .is_value = true};
-    strlcpy(e.name, obj_name, sizeof e.name);
-    strlcpy(e.str, value, sizeof e.str);
-    xQueueSend(s_events, &e, 0);
+    event_t event_data = {.idx = feature_idx, .is_value = true};
+    strlcpy(event_data.name, obj_name, sizeof event_data.name);
+    strlcpy(event_data.str, value, sizeof event_data.str);
+    xQueueSend(s_events, &event_data, 0);
 }
 
 void clu_lua_post_remote(uint32_t id, const char *result)
@@ -206,19 +206,19 @@ void clu_lua_post_remote(uint32_t id, const char *result)
     if (!s_remote_res) {
         return;
     }
-    remote_res_t r = {.id = id, .result = result ? strdup(result) : NULL};
-    if (xQueueSend(s_remote_res, &r, pdMS_TO_TICKS(50)) != pdTRUE) {
+    remote_res_t remote_response = {.id = id, .result = result ? strdup(result) : NULL};
+    if (xQueueSend(s_remote_res, &remote_response, pdMS_TO_TICKS(50)) != pdTRUE) {
         ESP_LOGW(TAG, "remote result %lu dropped (queue full)", (unsigned long)id);
-        free(r.result);
+        free(remote_response.result);
     }
 }
 
 /** @brief Discard queued remote-call results (their Lua threads died with the old VM). */
 static void drop_remote_results(void)
 {
-    remote_res_t r;
-    while (xQueueReceive(s_remote_res, &r, 0) == pdTRUE) {
-        free(r.result);
+    remote_res_t remote_response;
+    while (xQueueReceive(s_remote_res, &remote_response, 0) == pdTRUE) {
+        free(remote_response.result);
     }
 }
 
@@ -228,24 +228,24 @@ static void drop_remote_results(void)
 const char *clu_obj_name(lua_State *L, int obj)
 {
     lua_getfield(L, obj, "_name");
-    const char *n = lua_tostring(L, -1); // string stays referenced by the object table
+    const char *object_name = lua_tostring(L, -1); // string stays referenced by the object table
     lua_pop(L, 1);
-    return n ? n : "";
+    return object_name ? object_name : "";
 }
 
 int clu_obj_class(lua_State *L, int obj)
 {
     lua_getfield(L, obj, "_class");
-    int c = (int)lua_tointeger(L, -1);
+    int object_class = (int)lua_tointeger(L, -1);
     lua_pop(L, 1);
-    return c;
+    return object_class;
 }
 
 /** @brief Class hooks of the object at @p obj, NULL if none registered. */
 static const clu_class_ops_t *ops_for(lua_State *L, int obj)
 {
-    int c = clu_obj_class(L, obj);
-    return (c >= 0 && c < MAX_CLASSES) ? s_classes[c] : NULL;
+    int object_class = clu_obj_class(L, obj);
+    return (object_class >= 0 && object_class < MAX_CLASSES) ? s_classes[object_class] : NULL;
 }
 
 /** @brief Lua: `__clu.new(obj)` — run the class on_new hook. */
@@ -297,31 +297,31 @@ static int l_execute(lua_State *L)
     int nargs = lua_gettop(L) - 2;
     const clu_class_ops_t *ops = ops_for(L, 1);
     int top = lua_gettop(L);
-    int n = ops && ops->execute ? ops->execute(L, 1, idx, 3, nargs) : -1;
-    if (n < 0) {
+    int result_count = ops && ops->execute ? ops->execute(L, 1, idx, 3, nargs) : -1;
+    if (result_count < 0) {
         lua_settop(L, top);
         ESP_LOGD(TAG, "%s:execute(%d) not implemented (class %d)", clu_obj_name(L, 1), idx,
                  clu_obj_class(L, 1));
         return 0;
     }
-    return n;
+    return result_count;
 }
 
 /** @brief Lua: `__clu.log(level, ...)` — ESP_LOG the arguments. */
 static int l_log(lua_State *L)
 {
     int level = (int)luaL_checkinteger(L, 1);
-    luaL_Buffer b;
-    luaL_buffinit(L, &b);
-    int n = lua_gettop(L);
-    for (int i = 2; i <= n; i++) {
+    luaL_Buffer log_buffer;
+    luaL_buffinit(L, &log_buffer);
+    int stack_top = lua_gettop(L);
+    for (int i = 2; i <= stack_top; i++) {
         if (i > 2) {
-            luaL_addchar(&b, '\t');
+            luaL_addchar(&log_buffer, '\t');
         }
         luaL_tolstring(L, i, NULL);
-        luaL_addvalue(&b);
+        luaL_addvalue(&log_buffer);
     }
-    luaL_pushresult(&b);
+    luaL_pushresult(&log_buffer);
     const char *msg = lua_tostring(L, -1);
     switch (level) {
     case 1: ESP_LOGE("lua_script", "%s", msg); break;
@@ -343,9 +343,9 @@ static bool s_req_active;
  * A runaway script (while true do end) is aborted with a Lua error instead of hanging the
  * runtime. MAIN.LUA's own loop is not limited.
  */
-static void req_hook(lua_State *L, lua_Debug *ar)
+static void req_hook(lua_State *L, lua_Debug *debug_info)
 {
-    (void)ar;
+    (void)debug_info;
     if (!s_req_active) {
         // A coroutine started inside a req: (event handler) inherited this hook and was resumed
         // later, e.g. after a remote CLU reply: no req: limit applies to it any more.
@@ -366,31 +366,31 @@ static void req_hook(lua_State *L, lua_Debug *ar)
  */
 static int req_protected(lua_State *L)
 {
-    req_t *r = lua_touserdata(L, 1);
-    size_t el = strlen(r->expr);
+    req_t *request = lua_touserdata(L, 1);
+    size_t expression_length = strlen(request->expr);
 
-    lua_pushstring(L, r->from);
+    lua_pushstring(L, request->from);
     lua_setglobal(L, "__req_from");
 
     lua_pushliteral(L, "return ");
-    lua_pushstring(L, r->expr);
+    lua_pushstring(L, request->expr);
     lua_concat(L, 2);
-    size_t cl;
-    const char *code = lua_tolstring(L, -1, &cl);
-    int st = luaL_loadbufferx(L, code, cl, "=req", "t");
+    size_t code_length;
+    const char *code = lua_tolstring(L, -1, &code_length);
+    int load_status = luaL_loadbufferx(L, code, code_length, "=req", "t");
     lua_remove(L, -2);
-    if (st != LUA_OK) {
+    if (load_status != LUA_OK) {
         lua_pop(L, 1);
-        if (luaL_loadbufferx(L, r->expr, el, "=req", "t") != LUA_OK) { // statement, not expression
+        if (luaL_loadbufferx(L, request->expr, expression_length, "=req", "t") != LUA_OK) { // statement, not expression
             return lua_error(L);
         }
     }
     int base = lua_gettop(L) - 1;
     lua_call(L, 0, LUA_MULTRET);
     if (lua_gettop(L) > base) {
-        strlcpy(r->out, luaL_tolstring(L, base + 1, NULL), r->cap);
+        strlcpy(request->out, luaL_tolstring(L, base + 1, NULL), request->cap);
     } else {
-        strlcpy(r->out, "nil", r->cap);
+        strlcpy(request->out, "nil", request->cap);
     }
     return 0;
 }
@@ -398,20 +398,20 @@ static int req_protected(lua_State *L)
 /**
  * @brief Execute one req: call with the time-limit hook, store the result and hand the request back.
  */
-static void exec_request(lua_State *L, req_t *r)
+static void exec_request(lua_State *L, req_t *request)
 {
-    size_t el = strlen(r->expr);
-    while (el && (r->expr[el - 1] == '\r' || r->expr[el - 1] == '\n')) {
-        r->expr[--el] = 0;
+    size_t expression_length = strlen(request->expr);
+    while (expression_length && (request->expr[expression_length - 1] == '\r' || request->expr[expression_length - 1] == '\n')) {
+        request->expr[--expression_length] = 0;
     }
 
     // A GATE answers checkAlive() itself with its serial in hex (observed on GATE ALARM / MODBUS):
     // its MAIN.LUA defines checkAlive() as print("true"), which returns nothing.
-    if (s_cfg.gate && strcmp(r->expr, "checkAlive()") == 0) {
+    if (s_cfg.gate && strcmp(request->expr, "checkAlive()") == 0) {
         if (s_emergency) {
-            strlcpy(r->out, "emergency", r->cap);
+            strlcpy(request->out, "emergency", request->cap);
         } else {
-            snprintf(r->out, r->cap, "%08x", s_cfg.sn);
+            snprintf(request->out, request->cap, "%08x", s_cfg.sn);
         }
         goto done;
     }
@@ -422,35 +422,35 @@ static void exec_request(lua_State *L, req_t *r)
     s_req_deadline_us = esp_timer_get_time() + (int64_t)REQ_BUDGET_MS * 1000;
     lua_sethook(L, req_hook, LUA_MASKCOUNT, REQ_HOOK_INSNS);
     lua_pushcfunction(L, req_protected);
-    lua_pushlightuserdata(L, r);
+    lua_pushlightuserdata(L, request);
     s_req_active = true;
-    int st = lua_pcall(L, 1, 0, 0);
+    int call_status = lua_pcall(L, 1, 0, 0);
     s_req_active = false;
     lua_sethook(L, prev_hook, prev_mask, prev_count);
-    if (st != LUA_OK) {
+    if (call_status != LUA_OK) {
         const char *err = lua_tostring(L, -1);
-        ESP_LOGW(TAG, "req '%s' failed: %s", r->expr, err ? err : "(non-string error)");
+        ESP_LOGW(TAG, "req '%s' failed: %s", request->expr, err ? err : "(non-string error)");
         lua_pop(L, 1);
-        strlcpy(r->out, "nil", r->cap);
+        strlcpy(request->out, "nil", request->cap);
     }
 
 done:;
-    int prev = __atomic_exchange_n(&r->state, REQ_DONE, __ATOMIC_ACQ_REL);
+    int prev = __atomic_exchange_n(&request->state, REQ_DONE, __ATOMIC_ACQ_REL);
     if (prev == REQ_ABANDONED) {
-        req_free(r);
+        req_free(request);
     } else {
-        xSemaphoreGive(r->done);
+        xSemaphoreGive(request->done);
     }
 }
 
 /** @brief lua_pcall body: `__remote_done(id, result)` for the ::remote_res_t (light userdata at 1). */
 static int remote_done_p(lua_State *L)
 {
-    const remote_res_t *r = lua_touserdata(L, 1);
+    const remote_res_t *remote_response = lua_touserdata(L, 1);
     lua_getglobal(L, "__remote_done"); // resumes the Lua thread waiting for this call
-    lua_pushinteger(L, r->id);
-    if (r->result) {
-        lua_pushstring(L, r->result);
+    lua_pushinteger(L, remote_response->id);
+    if (remote_response->result) {
+        lua_pushstring(L, remote_response->result);
     } else {
         lua_pushnil(L);
     }
@@ -461,37 +461,37 @@ static int remote_done_p(lua_State *L)
 /** @brief Deliver queued driver events / values to Lua (__fire / __update). */
 static void drain_events(lua_State *L)
 {
-    event_t e;
-    while (xQueueReceive(s_events, &e, 0) == pdTRUE) {
-        lua_getglobal(L, e.is_value ? "__update" : "__fire");
-        lua_pushstring(L, e.name);
-        lua_pushinteger(L, e.idx);
-        int n = 2;
-        if (e.is_value) {
-            if (e.str[0]) {
-                lua_pushstring(L, e.str);
-            } else if (e.value == (double)(lua_Integer)e.value) {
-                lua_pushinteger(L, (lua_Integer)e.value);
+    event_t event_data;
+    while (xQueueReceive(s_events, &event_data, 0) == pdTRUE) {
+        lua_getglobal(L, event_data.is_value ? "__update" : "__fire");
+        lua_pushstring(L, event_data.name);
+        lua_pushinteger(L, event_data.idx);
+        int lua_argument_count = 2;
+        if (event_data.is_value) {
+            if (event_data.str[0]) {
+                lua_pushstring(L, event_data.str);
+            } else if (event_data.value == (double)(lua_Integer)event_data.value) {
+                lua_pushinteger(L, (lua_Integer)event_data.value);
             } else {
-                lua_pushnumber(L, e.value);
+                lua_pushnumber(L, event_data.value);
             }
-            n = 3;
+            lua_argument_count = 3;
         }
-        if (lua_pcall(L, n, 0, 0) != LUA_OK) {
-            ESP_LOGW(TAG, "event %s/%d: %s", e.name, e.idx, lua_tostring(L, -1));
+        if (lua_pcall(L, lua_argument_count, 0, 0) != LUA_OK) {
+            ESP_LOGW(TAG, "event %s/%d: %s", event_data.name, event_data.idx, lua_tostring(L, -1));
             lua_pop(L, 1);
         }
     }
-    remote_res_t r;
-    while (xQueueReceive(s_remote_res, &r, 0) == pdTRUE) {
+    remote_res_t remote_response;
+    while (xQueueReceive(s_remote_res, &remote_response, 0) == pdTRUE) {
         // Everything that can raise (pushing the result string too) runs under the pcall, so
         // r.result is freed even on out of memory.
         lua_pushcfunction(L, remote_done_p);
-        lua_pushlightuserdata(L, &r);
-        int st = lua_pcall(L, 1, 0, 0);
-        free(r.result);
-        if (st != LUA_OK) {
-            ESP_LOGW(TAG, "remote result %lu: %s", (unsigned long)r.id, lua_tostring(L, -1));
+        lua_pushlightuserdata(L, &remote_response);
+        int call_status = lua_pcall(L, 1, 0, 0);
+        free(remote_response.result);
+        if (call_status != LUA_OK) {
+            ESP_LOGW(TAG, "remote result %lu: %s", (unsigned long)remote_response.id, lua_tostring(L, -1));
             lua_pop(L, 1);
         }
     }
@@ -503,9 +503,9 @@ static void drain_events(lua_State *L)
  * The error escapes any pcall in the script (SYSTEM.Loop's own included) and unwinds MAIN.LUA
  * back to run_script().
  */
-static void reload_hook(lua_State *L, lua_Debug *ar)
+static void reload_hook(lua_State *L, lua_Debug *debug_info)
 {
-    (void)ar;
+    (void)debug_info;
     luaL_error(L, "reload");
 }
 
@@ -518,11 +518,11 @@ static int l_loop(lua_State *L)
         lua_sethook(L, reload_hook, LUA_MASKCOUNT, 1);
         return luaL_error(L, "reload");
     }
-    req_t *r;
-    if (xQueueReceive(s_reqs, &r, pdMS_TO_TICKS(LOOP_WAIT_MS)) == pdTRUE) {
-        exec_request(L, r);
-        for (int i = 1; i < REQS_PER_LOOP && xQueueReceive(s_reqs, &r, 0) == pdTRUE; i++) {
-            exec_request(L, r);
+    req_t *request;
+    if (xQueueReceive(s_reqs, &request, pdMS_TO_TICKS(LOOP_WAIT_MS)) == pdTRUE) {
+        exec_request(L, request);
+        for (int i = 1; i < REQS_PER_LOOP && xQueueReceive(s_reqs, &request, 0) == pdTRUE; i++) {
+            exec_request(L, request);
         }
     }
     drain_events(L);
@@ -580,12 +580,12 @@ static int l_remote(lua_State *L)
     if (lua_type(L, 1) == LUA_TNUMBER) {
         ip = (uint32_t)lua_tointeger(L, 1);
     } else {
-        unsigned a, b, c, d;
-        if (sscanf(luaL_checkstring(L, 1), "%u.%u.%u.%u", &a, &b, &c, &d) != 4 || a > 255 || b > 255 ||
-            c > 255 || d > 255) {
+        unsigned first_octet, second_octet, third_octet, fourth_octet;
+        if (sscanf(luaL_checkstring(L, 1), "%u.%u.%u.%u", &first_octet, &second_octet, &third_octet, &fourth_octet) != 4 || first_octet > 255 || second_octet > 255 ||
+            third_octet > 255 || fourth_octet > 255) {
             return luaL_error(L, "bad remote CLU address");
         }
-        ip = a << 24 | b << 16 | c << 8 | d;
+        ip = first_octet << 24 | second_octet << 16 | third_octet << 8 | fourth_octet;
     }
     const char *script = luaL_checkstring(L, 2);
     uint32_t id = 0;
@@ -633,17 +633,17 @@ static void push_stored(lua_State *L, int obj, int idx, lua_Integer def)
  *        UseCloud 18, CloudConnection 19, ResetReason 26. The settable rest (ClientReportInterval 1,
  *        DNS 2/3, TimeZone 14, NTPTimeout 20, UseNTP 21, TelnetLogLevel 23, ...) is stored.
  */
-static bool gate0_get(lua_State *L, int obj, int idx, time_t now, const struct tm *tm)
+static bool gate0_get(lua_State *L, int obj, int idx, time_t now, const struct tm *local_time)
 {
     char buf[48];
     switch (idx) {
     case 0: lua_pushinteger(L, (esp_timer_get_time() - s_boot_us) / 1000000); return true; // Uptime
     case 5:
-        snprintf(buf, sizeof buf, "%04d-%02d-%02d", tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday);
+        snprintf(buf, sizeof buf, "%04d-%02d-%02d", local_time->tm_year + 1900, local_time->tm_mon + 1, local_time->tm_mday);
         lua_pushstring(L, buf);
         return true;
     case 6:
-        snprintf(buf, sizeof buf, "%02d:%02d:%02d", tm->tm_hour, tm->tm_min, tm->tm_sec);
+        snprintf(buf, sizeof buf, "%02d:%02d:%02d", local_time->tm_hour, local_time->tm_min, local_time->tm_sec);
         lua_pushstring(L, buf);
         return true;
     case 13: lua_pushinteger(L, (lua_Integer)now); return true; // LocalTime (as CLU feature 13)
@@ -663,10 +663,10 @@ static bool gate0_get(lua_State *L, int obj, int idx, time_t now, const struct t
 static bool clu0_get(lua_State *L, int obj, int idx)
 {
     time_t now = time(NULL);
-    struct tm tm;
-    localtime_r(&now, &tm);
+    struct tm local_time;
+    localtime_r(&now, &local_time);
     if (s_cfg.gate) {
-        return gate0_get(L, obj, idx, now, &tm);
+        return gate0_get(L, obj, idx, now, &local_time);
     }
     char buf[48];
     switch (idx) {
@@ -674,19 +674,19 @@ static bool clu0_get(lua_State *L, int obj, int idx)
     case 2: lua_pushinteger(L, s_state); return true;                                       // State
     case 3: lua_pushinteger(L, 1); return true;                                             // IsLocalPower
     case 5:
-        snprintf(buf, sizeof buf, "%04d-%02d-%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+        snprintf(buf, sizeof buf, "%04d-%02d-%02d", local_time.tm_year + 1900, local_time.tm_mon + 1, local_time.tm_mday);
         lua_pushstring(L, buf);
         return true;
     case 6:
-        snprintf(buf, sizeof buf, "%02d:%02d:%02d", tm.tm_hour, tm.tm_min, tm.tm_sec);
+        snprintf(buf, sizeof buf, "%02d:%02d:%02d", local_time.tm_hour, local_time.tm_min, local_time.tm_sec);
         lua_pushstring(L, buf);
         return true;
-    case 7: lua_pushinteger(L, tm.tm_mday); return true;
-    case 8: lua_pushinteger(L, tm.tm_mon + 1); return true;
-    case 9: lua_pushinteger(L, tm.tm_year + 1900); return true;
-    case 10: lua_pushinteger(L, tm.tm_wday == 0 ? 7 : tm.tm_wday); return true; // ISO weekday
-    case 11: lua_pushinteger(L, tm.tm_hour); return true;
-    case 12: lua_pushinteger(L, tm.tm_min); return true;
+    case 7: lua_pushinteger(L, local_time.tm_mday); return true;
+    case 8: lua_pushinteger(L, local_time.tm_mon + 1); return true;
+    case 9: lua_pushinteger(L, local_time.tm_year + 1900); return true;
+    case 10: lua_pushinteger(L, local_time.tm_wday == 0 ? 7 : local_time.tm_wday); return true; // ISO weekday
+    case 11: lua_pushinteger(L, local_time.tm_hour); return true;
+    case 12: lua_pushinteger(L, local_time.tm_min); return true;
     case 13: lua_pushinteger(L, (lua_Integer)now); return true;
     case 17: lua_pushstring(L, s_cfg.fw_version ? s_cfg.fw_version : ""); return true;
     case 18: push_stored(L, obj, 18, 1); return true; // UseCloud (interface default 1): MQTT on/off
@@ -709,8 +709,8 @@ static int clu0_execute(lua_State *L, int obj, int idx, int first, int nargs)
         return 0;
     case 2: { // SetDateTime(epoch)
         if (nargs > 0) {
-            struct timeval tv = {.tv_sec = (time_t)luaL_checkinteger(L, first)};
-            settimeofday(&tv, NULL);
+            struct timeval time_value = {.tv_sec = (time_t)luaL_checkinteger(L, first)};
+            settimeofday(&time_value, NULL);
             if (s_cfg.on_time_set) {
                 s_cfg.on_time_set();
             }
@@ -754,7 +754,7 @@ static const clu_class_ops_t s_clu0_ops = {.get = clu0_get, .set = clu0_set, .ex
 // VM lifecycle
 // ---------------------------------------------------------------------------
 /**
- * @brief Bytes held by the current Lua state (ud). Lua passes exact old sizes, so the sum is exact.
+ * @brief Bytes held by the current Lua state (user_data). Lua passes exact old sizes, so the sum is exact.
  */
 typedef struct {
     size_t used, peak;
@@ -766,9 +766,9 @@ static lua_mem_t s_mem;
  *
  * Growth past CONFIG_CLU_LUA_MEM_LIMIT_KB fails, so Lua runs an emergency GC and retries.
  */
-static void *psram_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
+static void *psram_alloc(void *user_data, void *ptr, size_t osize, size_t nsize)
 {
-    lua_mem_t *mem = ud;
+    lua_mem_t *mem = user_data;
     size_t old = ptr ? osize : 0; // ptr == NULL: osize is a type tag, not a size
     if (nsize == 0) {
         heap_caps_free(ptr);
@@ -780,18 +780,18 @@ static void *psram_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
     if (nsize > old && mem->used - old + nsize > (size_t)CONFIG_CLU_LUA_MEM_LIMIT_KB * 1024) {
         return NULL;
     }
-    void *p = heap_caps_realloc(ptr, nsize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!p && (nsize <= old || heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) >
+    void *allocation = heap_caps_realloc(ptr, nsize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!allocation && (nsize <= old || heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) >
                                    nsize + (size_t)CONFIG_CLU_LUA_INTERNAL_RESERVE_KB * 1024)) {
-        p = heap_caps_realloc(ptr, nsize, MALLOC_CAP_8BIT); // PSRAM full: internal, with reserve
+        allocation = heap_caps_realloc(ptr, nsize, MALLOC_CAP_8BIT); // PSRAM full: internal, with reserve
     }
-    if (p) {
+    if (allocation) {
         mem->used = mem->used - old + nsize;
         if (mem->used > mem->peak) {
             mem->peak = mem->used;
         }
     }
-    return p;
+    return allocation;
 }
 
 /** @brief Lua panic handler (log only). */
@@ -885,10 +885,10 @@ static lua_State *vm_new(void)
 }
 
 /** @brief True if @p p exists. */
-static bool file_exists(const char *p)
+static bool file_exists(const char *file_path)
 {
-    struct stat st;
-    return stat(p, &st) == 0;
+    struct stat file_status;
+    return stat(file_path, &file_status) == 0 && S_ISREG(file_status.st_mode);
 }
 
 /**

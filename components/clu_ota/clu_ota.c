@@ -31,13 +31,13 @@ static char s_pass[OTA_PASS_MAX + 1];
 static char s_origin[128]; // CORS: the one origin allowed to call POST /ota from a browser, "" = none
 
 /** @brief Value of one base64 character, -1 when not in the alphabet. */
-static int b64_val(char c)
+static int b64_val(char character)
 {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '+') return 62;
-    if (c == '/') return 63;
+    if (character >= 'A' && character <= 'Z') return character - 'A';
+    if (character >= 'a' && character <= 'z') return character - 'a' + 26;
+    if (character >= '0' && character <= '9') return character - '0' + 52;
+    if (character == '+') return 62;
+    if (character == '/') return 63;
     return -1;
 }
 
@@ -47,7 +47,7 @@ static int b64_val(char c)
  */
 static int b64_decode(const char *in, char *out, size_t cap)
 {
-    size_t n = 0;
+    size_t decoded_length = 0;
     uint32_t acc = 0;
     int bits = 0, pad = 0;
     for (; *in; in++) {
@@ -55,21 +55,21 @@ static int b64_decode(const char *in, char *out, size_t cap)
             pad++;
             continue;
         }
-        int v = b64_val(*in);
-        if (v < 0 || pad) {
+        int digit_value = b64_val(*in);
+        if (digit_value < 0 || pad) {
             return -1;
         }
-        acc = acc << 6 | (uint32_t)v;
+        acc = acc << 6 | (uint32_t)digit_value;
         bits += 6;
         if (bits >= 8) {
             bits -= 8;
-            if (n >= cap) {
+            if (decoded_length >= cap) {
                 return -1;
             }
-            out[n++] = (char)(acc >> bits);
+            out[decoded_length++] = (char)(acc >> bits);
         }
     }
-    return pad > 2 ? -1 : (int)n;
+    return pad > 2 ? -1 : (int)decoded_length;
 }
 
 /** @brief Compare with the configured password; time depends only on its length. */
@@ -92,13 +92,13 @@ static bool authorized(httpd_req_t *req)
         return false;
     }
     char cred[136];
-    int n = b64_decode(hdr + 6, cred, sizeof cred);
-    const char *colon = n > 0 ? memchr(cred, ':', (size_t)n) : NULL;
+    int credential_length = b64_decode(hdr + 6, cred, sizeof cred);
+    const char *colon = credential_length > 0 ? memchr(cred, ':', (size_t)credential_length) : NULL;
     if (!colon) {
         return false;
     }
     colon++;
-    return pass_ok(colon, (size_t)(cred + n - colon));
+    return pass_ok(colon, (size_t)(cred + credential_length - colon));
 }
 
 /** @brief CORS: let the configured origin read the response. */
@@ -120,7 +120,7 @@ static esp_err_t reply(httpd_req_t *req, const char *status, const char *msg)
 }
 
 /** @brief Receive the body into the OTA handle. */
-static esp_err_t receive(httpd_req_t *req, esp_ota_handle_t h)
+static esp_err_t receive(httpd_req_t *req, esp_ota_handle_t ota_handle)
 {
     char *buf = malloc(OTA_BUF);
     if (!buf) {
@@ -130,18 +130,18 @@ static esp_err_t receive(httpd_req_t *req, esp_ota_handle_t h)
     size_t left = req->content_len, next_log = OTA_LOG_STEP;
     int timeouts = 0;
     while (left > 0 && err == ESP_OK) {
-        int r = httpd_req_recv(req, buf, left < OTA_BUF ? left : OTA_BUF);
-        if (r == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < OTA_RECV_RETRIES) {
+        int received_count = httpd_req_recv(req, buf, left < OTA_BUF ? left : OTA_BUF);
+        if (received_count == HTTPD_SOCK_ERR_TIMEOUT && ++timeouts < OTA_RECV_RETRIES) {
             continue;
         }
-        if (r <= 0) {
+        if (received_count <= 0) {
             ESP_LOGE(TAG, "upload interrupted, %u bytes missing", (unsigned)left);
             err = ESP_ERR_TIMEOUT;
             break;
         }
         timeouts = 0;
-        err = esp_ota_write(h, buf, (size_t)r);
-        left -= (size_t)r;
+        err = esp_ota_write(ota_handle, buf, (size_t)received_count);
+        left -= (size_t)received_count;
         if (req->content_len - left >= next_log) {
             ESP_LOGI(TAG, "%u / %u bytes", (unsigned)(req->content_len - left), (unsigned)req->content_len);
             next_log += OTA_LOG_STEP;
@@ -172,19 +172,19 @@ static esp_err_t ota_post(httpd_req_t *req)
     }
     ESP_LOGW(TAG, "update: %u bytes -> %s", (unsigned)req->content_len, part->label);
 
-    esp_ota_handle_t h;
-    esp_err_t err = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &h);
+    esp_ota_handle_t ota_handle;
+    esp_err_t err = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_ota_begin: %s", esp_err_to_name(err));
         return reply(req, "500 Internal Server Error", "cannot start the update\n");
     }
-    err = receive(req, h);
+    err = receive(req, ota_handle);
     if (err != ESP_OK) {
-        esp_ota_abort(h);
+        esp_ota_abort(ota_handle);
         ESP_LOGE(TAG, "update failed: %s", esp_err_to_name(err));
         return reply(req, "500 Internal Server Error", "upload / flash write failed\n");
     }
-    err = esp_ota_end(h); // verifies header, chip and SHA-256
+    err = esp_ota_end(ota_handle); // verifies header, chip and SHA-256
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "image rejected: %s", esp_err_to_name(err));
         return reply(req, "400 Bad Request", "not a valid application image for this chip "
@@ -233,14 +233,14 @@ static esp_err_t ota_page(httpd_req_t *req)
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_send_chunk(req, OTA_PAGE_HEAD, HTTPD_RESP_USE_STRLEN);
-    const esp_app_desc_t *d = esp_app_get_description();
-    char ver[sizeof d->version + 1];
-    size_t n = 0;
-    for (size_t i = 0; i < sizeof d->version && d->version[i]; i++) {
-        char c = d->version[i];
-        ver[n++] = c == '<' || c == '>' || c == '&' || c == '"' ? '?' : c; // git describe never has these
+    const esp_app_desc_t *app_description = esp_app_get_description();
+    char ver[sizeof app_description->version + 1];
+    size_t version_length = 0;
+    for (size_t i = 0; i < sizeof app_description->version && app_description->version[i]; i++) {
+        char version_character = app_description->version[i];
+        ver[version_length++] = version_character == '<' || version_character == '>' || version_character == '&' || version_character == '"' ? '?' : version_character; // git describe never has these
     }
-    ver[n] = 0;
+    ver[version_length] = 0;
     httpd_resp_send_chunk(req, ver, HTTPD_RESP_USE_STRLEN);
     httpd_resp_send_chunk(req, OTA_PAGE_TAIL, HTTPD_RESP_USE_STRLEN);
     return httpd_resp_send_chunk(req, NULL, 0);
@@ -248,33 +248,33 @@ static esp_err_t ota_page(httpd_req_t *req)
 
 bool clu_ota_start(const clu_ota_cfg_t *cfg)
 {
-    const char *p = cfg->password ? cfg->password : "";
-    size_t n = strlen(p);
-    if (!n) {
+    const char *ota_password = cfg->password ? cfg->password : "";
+    size_t password_length = strlen(ota_password);
+    if (!password_length) {
         ESP_LOGI(TAG, "no OTA password: network updates off");
         return false;
     }
-    if (n < OTA_PASS_MIN || n > OTA_PASS_MAX) {
+    if (password_length < OTA_PASS_MIN || password_length > OTA_PASS_MAX) {
         ESP_LOGE(TAG, "OTA password must be %d..%d characters: network updates off", OTA_PASS_MIN, OTA_PASS_MAX);
         return false;
     }
-    memcpy(s_pass, p, n + 1);
-    const char *o = cfg->cors_origin ? cfg->cors_origin : "";
-    if (strlen(o) >= sizeof s_origin) {
+    memcpy(s_pass, ota_password, password_length + 1);
+    const char *configured_origin = cfg->cors_origin ? cfg->cors_origin : "";
+    if (strlen(configured_origin) >= sizeof s_origin) {
         ESP_LOGE(TAG, "CORS origin too long, ignored");
-        o = "";
+        configured_origin = "";
     }
-    strcpy(s_origin, o);
+    strcpy(s_origin, configured_origin);
 
-    httpd_config_t hc = HTTPD_DEFAULT_CONFIG();
-    hc.server_port = cfg->port;
-    hc.max_open_sockets = 2;
-    hc.max_uri_handlers = 3;
-    hc.lru_purge_enable = true;
-    hc.recv_wait_timeout = 10;
-    hc.stack_size = 6144;
+    httpd_config_t server_config = HTTPD_DEFAULT_CONFIG();
+    server_config.server_port = cfg->port;
+    server_config.max_open_sockets = 2;
+    server_config.max_uri_handlers = 3;
+    server_config.lru_purge_enable = true;
+    server_config.recv_wait_timeout = 10;
+    server_config.stack_size = 6144;
     httpd_handle_t srv;
-    esp_err_t err = httpd_start(&srv, &hc);
+    esp_err_t err = httpd_start(&srv, &server_config);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "HTTP server on port %u: %s", (unsigned)cfg->port, esp_err_to_name(err));
         return false;
@@ -293,9 +293,9 @@ bool clu_ota_start(const clu_ota_cfg_t *cfg)
 
 void clu_ota_confirm(void)
 {
-    esp_ota_img_states_t st;
-    if (esp_ota_get_state_partition(esp_ota_get_running_partition(), &st) == ESP_OK &&
-        st == ESP_OTA_IMG_PENDING_VERIFY && esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+    esp_ota_img_states_t image_state;
+    if (esp_ota_get_state_partition(esp_ota_get_running_partition(), &image_state) == ESP_OK &&
+        image_state == ESP_OTA_IMG_PENDING_VERIFY && esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
         ESP_LOGW(TAG, "new firmware confirmed (network up): no rollback");
     }
 }

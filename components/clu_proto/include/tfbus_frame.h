@@ -151,11 +151,11 @@ void tfbus_rx_init(tfbus_rx_t *rx);
  * @param rx   Parser state.
  * @param data Received bytes.
  * @param len  Number of bytes.
- * @param cb   Called as cb(frame, len, ctx) for each complete frame.
- * @param ctx  User context for @p cb.
+ * @param frame_callback Called as frame_callback(frame, len, ctx) for each complete frame.
+ * @param ctx            User context for @p frame_callback.
  */
 void tfbus_rx_push(tfbus_rx_t *rx, const uint8_t *data, size_t len,
-                   void (*cb)(const uint8_t *frame, size_t len, void *ctx), void *ctx);
+                   void (*frame_callback)(const uint8_t *frame, size_t len, void *ctx), void *ctx);
 
 #ifdef __cplusplus
 }

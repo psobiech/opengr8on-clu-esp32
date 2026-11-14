@@ -27,17 +27,17 @@
 /**
  * @brief Decode the time registers to a UTC epoch (OSF is in the Status register, not checked here).
  *
- * @param r   Registers 0x00..0x06 as read from the chip.
+ * @param register_values Registers 0x00..0x06 as read from the chip.
  * @param out Seconds since 1970-01-01 UTC.
  * @return false if the chip is in 12-hour mode, past 2099 or a field is out of range.
  */
-bool ds3231_decode(const uint8_t r[DS3231_TIME_LEN], time_t *out);
+bool ds3231_decode(const uint8_t register_values[DS3231_TIME_LEN], time_t *out);
 
 /**
  * @brief Encode a UTC epoch into the time registers (24-hour mode, Century clear).
  *
- * @param t Seconds since 1970-01-01 UTC, within 2000-01-01 .. 2099-12-31.
- * @param r Registers 0x00..0x06 to write to the chip.
- * @return false if @p t is outside the chip's range (nothing encoded).
+ * @param timestamp Seconds since 1970-01-01 UTC, within 2000-01-01 .. 2099-12-31.
+ * @param register_values Registers 0x00..0x06 to write to the chip.
+ * @return false if @p timestamp is outside the chip's range (nothing encoded).
  */
-bool ds3231_encode(time_t t, uint8_t r[DS3231_TIME_LEN]);
+bool ds3231_encode(time_t timestamp, uint8_t register_values[DS3231_TIME_LEN]);

@@ -17,7 +17,7 @@
 #define LIGHT_RAMP_MAX 15000
 
 /** @brief Timer callback, run in the bus task under the driver lock. */
-typedef void (*light_timer_fn_t)(tfbus_module_t *m, void *owner);
+typedef void (*light_timer_fn_t)(tfbus_module_t *module, void *owner);
 
 /**
  * @brief One-shot timer whose expiry runs in the bus task (via tfbus_master_defer).
@@ -35,23 +35,23 @@ typedef struct {
 
 /**
  * @brief Start (or restart) the timer.
- * @param t     Timer (zero-initialised before first use).
- * @param m     Module.
+ * @param timer_state Zero-initialised timer before first use.
+ * @param module The module that owns the timer.
  * @param owner Passed to @p fn.
- * @param fn    Expiry callback.
+ * @param expiry_callback Callback run when the timer expires.
  * @param ms    Delay [ms].
  */
-void light_timer_start(light_timer_t *t, tfbus_module_t *m, void *owner, light_timer_fn_t fn,
+void light_timer_start(light_timer_t *timer_state, tfbus_module_t *module, void *owner, light_timer_fn_t expiry_callback,
                        uint32_t ms);
 
 /** @brief Cancel the timer (a fire already queued becomes stale). */
-void light_timer_cancel(light_timer_t *t);
+void light_timer_cancel(light_timer_t *timer_state);
 
 /** @brief Stop and delete the timer (driver deinit). */
-void light_timer_delete(light_timer_t *t);
+void light_timer_delete(light_timer_t *timer_state);
 
 /** @brief tfbus_driver_t::overdue helper: run the callback now if the deadline has passed. */
-void light_timer_overdue(light_timer_t *t);
+void light_timer_overdue(light_timer_t *timer_state);
 
 /**
  * @brief Hold* state: repeated calls (from a button's OnHold) step the value.
@@ -75,32 +75,32 @@ typedef struct {
 
 /**
  * @brief Advance a hold: direction of this call.
- * @param h      Hold state.
+ * @param hold_state Hold state.
  * @param now_us Current time [us].
  * @param cur    Current value.
- * @param lo     Lower end.
- * @param hi     Upper end.
+ * @param lower_bound Lower end.
+ * @param upper_bound Upper end.
  * @return +1 up, -1 down (also left in h->dir).
  */
-int light_hold_dir(light_hold_t *h, int64_t now_us, double cur, double lo, double hi);
+int light_hold_dir(light_hold_t *hold_state, int64_t now_us, double cur, double lower_bound, double upper_bound);
 
 /**
- * @brief Optional method argument @p i (0-based) as a number.
+ * @brief Optional method argument @p argument_index (0-based) as a number.
  * @return The argument, or @p dflt if absent / nil.
  */
-double light_arg(lua_State *L, int first, int nargs, int i, double dflt);
+double light_arg(lua_State *L, int first, int nargs, int argument_index, double dflt);
 
-/** @brief Ramp argument @p i [ms] clamped to 0..LIGHT_RAMP_MAX; absent -> @p dflt. */
-uint32_t light_ramp_arg(lua_State *L, int first, int nargs, int i, uint32_t dflt);
+/** @brief Ramp argument @p argument_index [ms] clamped to 0..LIGHT_RAMP_MAX; absent -> @p dflt. */
+uint32_t light_ramp_arg(lua_State *L, int first, int nargs, int argument_index, uint32_t dflt);
 
 /** @brief Queue SET_RAMP_TIME for channel 0 (record 0x06, data [0, ms LE u16, 0, 0]; DIMMER: ms). */
-void light_queue_ramp(tfbus_module_t *m, uint32_t ms);
+void light_queue_ramp(tfbus_module_t *module, uint32_t ms);
 
-/** @brief Queue DistributedLogicGroup of channel @p ch (record 0x0f, data [ch, 1, group LE u16]). */
-void light_queue_dlg(tfbus_module_t *m, uint8_t ch, uint32_t group);
+/** @brief Queue DistributedLogicGroup of channel @p channel (record 0x0f, data [channel, 1, group LE u16]). */
+void light_queue_dlg(tfbus_module_t *module, uint8_t channel, uint32_t group);
 
-/** @brief Clamp @p v to [lo, hi]. */
-static inline double light_clamp(double v, double lo, double hi)
+/** @brief Clamp @p input_value to [@p lower_bound, @p upper_bound]. */
+static inline double light_clamp(double input_value, double lower_bound, double upper_bound)
 {
-    return v < lo ? lo : v > hi ? hi : v;
+    return input_value < lower_bound ? lower_bound : input_value > upper_bound ? upper_bound : input_value;
 }

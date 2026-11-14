@@ -24,17 +24,17 @@
 /**
  * @brief Decode the time registers to a UTC epoch.
  *
- * @param r   Registers 0x04..0x0A as read from the chip.
+ * @param register_values Registers 0x04..0x0A as read from the chip.
  * @param out Seconds since 1970-01-01 UTC.
  * @return false if the OS flag is set or a field is out of range (time not usable).
  */
-bool pcf85063_decode(const uint8_t r[PCF85063_TIME_LEN], time_t *out);
+bool pcf85063_decode(const uint8_t register_values[PCF85063_TIME_LEN], time_t *out);
 
 /**
  * @brief Encode a UTC epoch into the time registers (OS flag clear).
  *
- * @param t Seconds since 1970-01-01 UTC, within 2000-01-01 .. 2099-12-31.
- * @param r Registers 0x04..0x0A to write to the chip.
- * @return false if @p t is outside the chip's range (nothing encoded).
+ * @param timestamp Seconds since 1970-01-01 UTC, within 2000-01-01 .. 2099-12-31.
+ * @param register_values Registers 0x04..0x0A to write to the chip.
+ * @return false if @p timestamp is outside the chip's range (nothing encoded).
  */
-bool pcf85063_encode(time_t t, uint8_t r[PCF85063_TIME_LEN]);
+bool pcf85063_encode(time_t timestamp, uint8_t register_values[PCF85063_TIME_LEN]);

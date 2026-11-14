@@ -42,11 +42,11 @@ static const char *reset_reason(void)
     }
 }
 
-/** @brief Set integer field @p k of the table on top of the stack. */
-static void set_int(lua_State *L, const char *k, lua_Integer v)
+/** @brief Set integer field @p field_name of the table on top of the stack. */
+static void set_int(lua_State *L, const char *field_name, lua_Integer value)
 {
-    lua_pushinteger(L, v);
-    lua_setfield(L, -2, k);
+    lua_pushinteger(L, value);
+    lua_setfield(L, -2, field_name);
 }
 
 /** @brief Lua: `__clu.sys_info()` — heap, network, reset reason and TFBUS totals as a table. */
@@ -79,17 +79,17 @@ static int l_sys_info(lua_State *L)
     }
 
     // online/fails are single words written by the bus task; freed slots (refresh) are NULL.
-    int n = 0, online = 0;
+    int module_count = 0, online = 0;
     lua_Integer fails = 0;
     for (int i = 0; i < tfbus_master_count(); i++) {
-        const tfbus_module_t *m = tfbus_master_get(i);
-        if (m) {
-            n++;
-            online += m->online;
-            fails += m->fails_total;
+        const tfbus_module_t *module = tfbus_master_get(i);
+        if (module) {
+            module_count++;
+            online += module->online;
+            fails += module->fails_total;
         }
     }
-    set_int(L, "tfbus_total", n);
+    set_int(L, "tfbus_total", module_count);
     set_int(L, "tfbus_online", online);
     set_int(L, "tfbus_fails", fails);
     return 1;
@@ -98,17 +98,17 @@ static int l_sys_info(lua_State *L)
 /** @brief Lua: `__clu.tfbus_module(sn)` — stats of one module, nil if not declared. */
 static int l_tfbus_module(lua_State *L)
 {
-    const tfbus_module_t *m = tfbus_master_find_sn((uint32_t)luaL_checkinteger(L, 1));
-    if (!m) {
+    const tfbus_module_t *module = tfbus_master_find_sn((uint32_t)luaL_checkinteger(L, 1));
+    if (!module) {
         return 0;
     }
     lua_newtable(L);
-    lua_pushboolean(L, m->online);
+    lua_pushboolean(L, module->online);
     lua_setfield(L, -2, "online");
-    set_int(L, "fails", m->fails_total);
-    set_int(L, "polls", m->polls);
-    set_int(L, "addr", m->addr);
-    set_int(L, "hw_type", m->hw_type);
+    set_int(L, "fails", module->fails_total);
+    set_int(L, "polls", module->polls);
+    set_int(L, "addr", module->addr);
+    set_int(L, "hw_type", module->hw_type);
     return 1;
 }
 
@@ -121,16 +121,16 @@ static void do_restart(void *arg)
 /** @brief Lua: `__clu.sys_restart()` — run the close hooks and reboot after 1 s. */
 static int l_sys_restart(lua_State *L)
 {
-    static esp_timer_handle_t t;
-    if (!t) {
-        const esp_timer_create_args_t a = {.callback = do_restart, .name = "restart"};
-        if (esp_timer_create(&a, &t) != ESP_OK) {
+    static esp_timer_handle_t restart_timer;
+    if (!restart_timer) {
+        const esp_timer_create_args_t timer_args = {.callback = do_restart, .name = "restart"};
+        if (esp_timer_create(&timer_args, &restart_timer) != ESP_OK) {
             return 0;
         }
     }
     ESP_LOGW(TAG, "restart requested from Lua/MQTT");
     clu_lua_shutdown_hooks(L); // pending storage writes
-    esp_timer_start_once(t, 1000 * 1000); // fails harmlessly if already pending
+    esp_timer_start_once(restart_timer, 1000 * 1000); // fails harmlessly if already pending
     return 0;
 }
 

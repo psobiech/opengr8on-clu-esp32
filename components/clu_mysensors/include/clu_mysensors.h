@@ -54,10 +54,10 @@ esp_err_t clu_mysensors_init(const clu_mysensors_cfg_t *cfg);
 
 /**
  * @brief Queue a message to the gateway. Thread-safe, never blocks.
- * @param m Message (payload at most MS_MAX_PAYLOAD chars).
+ * @param message Message (payload at most MS_MAX_PAYLOAD chars).
  * @return false if the payload is too long or the queue is full.
  */
-bool clu_mysensors_send(const ms_msg_t *m);
+bool clu_mysensors_send(const ms_msg_t *message);
 
 /**
  * @brief Discovery hook (tfbus_master_on_refresh(), bus task, before the RESET): the emulated

@@ -38,11 +38,11 @@ typedef struct {
 
 /**
  * @brief Set the module serials and the hardware; all modules unaddressed, outputs off.
- * @param sn Serial numbers (non-zero, distinct), @p n of them.
- * @param n  Number of modules (1..LOCALIO_MAX_MODULES).
- * @param hw Hardware access; must stay valid.
+ * @param serial_numbers Serial numbers (non-zero, distinct), @p module_count of them.
+ * @param module_count   Number of modules (1..LOCALIO_MAX_MODULES).
+ * @param hardware       Hardware access; must stay valid.
  */
-void localio_setup(const uint32_t *sn, int n, const localio_hw_t *hw);
+void localio_setup(const uint32_t *serial_numbers, int module_count, const localio_hw_t *hardware);
 
 /**
  * @brief Handle one CLU -> module frame (::tfbus_uart_local_fn_t). Bus task only.

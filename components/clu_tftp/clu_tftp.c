@@ -60,17 +60,17 @@ bool clu_tftp_enabled(void)
     return s_enabled;
 }
 
-void clu_tftp_set_upload_cb(clu_tftp_upload_cb_t cb)
+void clu_tftp_set_upload_cb(clu_tftp_upload_cb_t upload_callback)
 {
-    s_upload_cb = cb;
+    s_upload_cb = upload_callback;
 }
 
 /** @brief Send a TFTP ERROR packet. */
 static void send_err(int sock, const struct sockaddr_in *to, uint16_t code, const char *msg)
 {
-    uint8_t b[64];
-    size_t n = tftp_error(b, sizeof b, code, msg);
-    sendto(sock, b, n, 0, (const struct sockaddr *)to, sizeof *to);
+    uint8_t error_packet[64];
+    size_t packet_length = tftp_error(error_packet, sizeof error_packet, code, msg);
+    sendto(sock, error_packet, packet_length, 0, (const struct sockaddr *)to, sizeof *to);
 }
 
 /** @brief esp_timer time @p ms from now, in microseconds. */
@@ -101,12 +101,12 @@ static int recv_from_peer(int sock, uint8_t *buf, size_t cap, const struct socka
         if (left < 1000) {
             left = 1000; // lwip: tv 0 = block forever
         }
-        struct timeval tv = {.tv_sec = left / 1000000, .tv_usec = left % 1000000};
-        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        struct timeval receive_timeout = {.tv_sec = left / 1000000, .tv_usec = left % 1000000};
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout, sizeof receive_timeout);
         struct sockaddr_in from;
-        socklen_t fl = sizeof from;
-        int n = recvfrom(sock, buf, cap, 0, (struct sockaddr *)&from, &fl);
-        if (n < 0) {
+        socklen_t sender_address_length = sizeof from;
+        int received_length = recvfrom(sock, buf, cap, 0, (struct sockaddr *)&from, &sender_address_length);
+        if (received_length < 0) {
             return -1; // timeout
         }
         if (from.sin_addr.s_addr != peer->sin_addr.s_addr || from.sin_port != peer->sin_port) {
@@ -115,7 +115,7 @@ static int recv_from_peer(int sock, uint8_t *buf, size_t cap, const struct socka
             }
             continue;
         }
-        return n;
+        return received_length;
     }
 }
 
@@ -124,18 +124,18 @@ static int recv_from_peer(int sock, uint8_t *buf, size_t cap, const struct socka
  */
 static int open_transfer_socket(void)
 {
-    int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (s < 0) {
+    int transfer_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (transfer_socket < 0) {
         return -1;
     }
-    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = 0, .sin_addr.s_addr = htonl(INADDR_ANY)};
-    struct timeval tv = {.tv_sec = TIMEOUT_MS / 1000, .tv_usec = (TIMEOUT_MS % 1000) * 1000};
-    if (bind(s, (struct sockaddr *)&a, sizeof a) < 0 ||
-        setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) < 0) {
-        close(s);
+    struct sockaddr_in local_address = {.sin_family = AF_INET, .sin_port = 0, .sin_addr.s_addr = htonl(INADDR_ANY)};
+    struct timeval receive_timeout = {.tv_sec = TIMEOUT_MS / 1000, .tv_usec = (TIMEOUT_MS % 1000) * 1000};
+    if (bind(transfer_socket, (struct sockaddr *)&local_address, sizeof local_address) < 0 ||
+        setsockopt(transfer_socket, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout, sizeof receive_timeout) < 0) {
+        close(transfer_socket);
         return -1;
     }
-    return s;
+    return transfer_socket;
 }
 
 /**
@@ -144,19 +144,19 @@ static int open_transfer_socket(void)
  */
 static size_t netascii_encode(const uint8_t *in, size_t len, uint8_t *out)
 {
-    size_t o = 0;
+    size_t output_length = 0;
     for (size_t i = 0; i < len; i++) {
         if (in[i] == '\n') {
-            out[o++] = '\r';
-            out[o++] = '\n';
+            out[output_length++] = '\r';
+            out[output_length++] = '\n';
         } else if (in[i] == '\r') {
-            out[o++] = '\r';
-            out[o++] = 0;
+            out[output_length++] = '\r';
+            out[output_length++] = 0;
         } else {
-            out[o++] = in[i];
+            out[output_length++] = in[i];
         }
     }
-    return o;
+    return output_length;
 }
 
 /**
@@ -174,30 +174,30 @@ static void serve_rrq(const struct sockaddr_in *peer, const char *path, bool net
     uint8_t *file = NULL;
     size_t flen = 0;
 
-    FILE *f = fopen(path, "rb");
-    if (!f) {
+    FILE *open_file = fopen(path, "rb");
+    if (!open_file) {
         send_err(sock, peer, TFTP_E_NOT_FOUND, "file not found");
         goto out;
     }
-    struct stat st;
-    if (fstat(fileno(f), &st) != 0) {
-        fclose(f);
+    struct stat file_info;
+    if (fstat(fileno(open_file), &file_info) != 0) {
+        fclose(open_file);
         send_err(sock, peer, TFTP_E_UNDEFINED, "stat failed");
         goto out;
     }
     // Whole file in PSRAM (internal RAM without it): CLU files are small and netascii needs lookahead-free conversion.
-    size_t raw_len = (size_t)st.st_size;
+    size_t raw_len = (size_t)file_info.st_size;
     uint8_t *raw = heap_caps_malloc(raw_len ? raw_len : 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!raw) {
         raw = malloc(raw_len ? raw_len : 1);
     }
-    if (!raw || fread(raw, 1, raw_len, f) != raw_len) {
-        fclose(f);
+    if (!raw || fread(raw, 1, raw_len, open_file) != raw_len) {
+        fclose(open_file);
         free(raw);
         send_err(sock, peer, TFTP_E_UNDEFINED, "read failed");
         goto out;
     }
-    fclose(f);
+    fclose(open_file);
     if (netascii) {
         file = heap_caps_malloc(raw_len * 2 + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!file) {
@@ -220,23 +220,23 @@ static void serve_rrq(const struct sockaddr_in *peer, const char *path, bool net
     size_t off = 0;
     for (;;) {
         size_t chunk = flen - off < TFTP_BLOCK_SIZE ? flen - off : TFTP_BLOCK_SIZE;
-        size_t pl = tftp_data_hdr(pkt, block);
-        memcpy(pkt + pl, file + off, chunk);
-        pl += chunk;
+        size_t packet_length = tftp_data_hdr(pkt, block);
+        memcpy(pkt + packet_length, file + off, chunk);
+        packet_length += chunk;
 
         bool acked = false;
         for (int tries = 0; tries <= MAX_RETRIES && !acked; tries++) {
-            sendto(sock, pkt, pl, 0, (const struct sockaddr *)peer, sizeof *peer);
-            int n;
+            sendto(sock, pkt, packet_length, 0, (const struct sockaddr *)peer, sizeof *peer);
+            int received_length;
             int64_t until = deadline_in(TIMEOUT_MS); // duplicate ACKs do not extend it either
-            while ((n = recv_from_peer(sock, rx, sizeof rx, peer, until)) >= 4) {
-                uint16_t op = (uint16_t)(rx[0] << 8 | rx[1]);
-                uint16_t b = (uint16_t)(rx[2] << 8 | rx[3]);
-                if (op == TFTP_ERROR) {
+            while ((received_length = recv_from_peer(sock, rx, sizeof rx, peer, until)) >= 4) {
+                uint16_t opcode = (uint16_t)(rx[0] << 8 | rx[1]);
+                uint16_t acknowledged_block = (uint16_t)(rx[2] << 8 | rx[3]);
+                if (opcode == TFTP_ERROR) {
                     ESP_LOGW(TAG, "RRQ %s aborted by peer", path);
                     goto out;
                 }
-                if (op == TFTP_ACK && b == block) {
+                if (opcode == TFTP_ACK && acknowledged_block == block) {
                     acked = true;
                     break;
                 }
@@ -279,8 +279,8 @@ static void serve_wrq(const struct sockaddr_in *peer, const char *path, bool net
     char tmp[64];
     const char *slash = strrchr(path, '/');
     snprintf(tmp, sizeof tmp, "%.*s/TFTP.TMP", (int)(slash - path), path);
-    FILE *f = fopen(tmp, "wb");
-    if (!f) {
+    FILE *upload_file = fopen(tmp, "wb");
+    if (!upload_file) {
         send_err(sock, peer, TFTP_E_ACCESS, "cannot create file");
         close(sock);
         return;
@@ -292,68 +292,68 @@ static void serve_wrq(const struct sockaddr_in *peer, const char *path, bool net
     bool ok = false;
     uint16_t expect = 1;
 
-    size_t al = tftp_ack(pkt, 0);
-    sendto(sock, pkt, al, 0, (const struct sockaddr *)peer, sizeof *peer);
+    size_t ack_length = tftp_ack(pkt, 0);
+    sendto(sock, pkt, ack_length, 0, (const struct sockaddr *)peer, sizeof *peer);
 
     int retries = 0;
     int64_t until = deadline_in(TIMEOUT_MS); // renewed only on progress or a retry
     for (;;) {
-        int n = recv_from_peer(sock, pkt, sizeof pkt, peer, until);
-        if (n < 0) {
+        int received_length = recv_from_peer(sock, pkt, sizeof pkt, peer, until);
+        if (received_length < 0) {
             if (++retries > MAX_RETRIES) {
                 ESP_LOGW(TAG, "WRQ %s timed out at block %u", path, expect);
                 break;
             }
             until = deadline_in(TIMEOUT_MS);
-            uint8_t a[4];
-            tftp_ack(a, expect - 1);
-            sendto(sock, a, 4, 0, (const struct sockaddr *)peer, sizeof *peer);
+            uint8_t ack_packet[4];
+            tftp_ack(ack_packet, expect - 1);
+            sendto(sock, ack_packet, 4, 0, (const struct sockaddr *)peer, sizeof *peer);
             continue;
         }
-        if (n < 4) {
+        if (received_length < 4) {
             continue;
         }
-        uint16_t op = (uint16_t)(pkt[0] << 8 | pkt[1]);
-        uint16_t b = (uint16_t)(pkt[2] << 8 | pkt[3]);
-        if (op == TFTP_ERROR) {
+        uint16_t opcode = (uint16_t)(pkt[0] << 8 | pkt[1]);
+        uint16_t packet_block = (uint16_t)(pkt[2] << 8 | pkt[3]);
+        if (opcode == TFTP_ERROR) {
             ESP_LOGW(TAG, "WRQ %s aborted by peer", path);
             break;
         }
-        if (op != TFTP_DATA) {
+        if (opcode != TFTP_DATA) {
             send_err(sock, peer, TFTP_E_ILLEGAL, "expected DATA");
             break;
         }
-        uint8_t a[4];
-        if (b != expect) {
+        uint8_t ack_packet[4];
+        if (packet_block != expect) {
             // retransmission of previous block: re-ACK it
-            tftp_ack(a, b);
-            sendto(sock, a, 4, 0, (const struct sockaddr *)peer, sizeof *peer);
+            tftp_ack(ack_packet, packet_block);
+            sendto(sock, ack_packet, 4, 0, (const struct sockaddr *)peer, sizeof *peer);
             continue;
         }
         retries = 0;
         until = deadline_in(TIMEOUT_MS);
-        size_t dl = (size_t)n - 4;
+        size_t decoded_length = (size_t)received_length - 4;
         const uint8_t *data = pkt + 4;
-        size_t wl = dl;
+        size_t written_length = decoded_length;
         if (netascii) {
-            wl = tftp_netascii_decode(data, dl, dec, &pending_cr);
+            written_length = tftp_netascii_decode(data, decoded_length, dec, &pending_cr);
             data = dec;
         }
-        if (total + wl > CLU_TFTP_MAX_UPLOAD) {
+        if (total + written_length > CLU_TFTP_MAX_UPLOAD) {
             send_err(sock, peer, TFTP_E_DISK_FULL, "file too large");
             break;
         }
-        if (fwrite(data, 1, wl, f) != wl) {
+        if (fwrite(data, 1, written_length, upload_file) != written_length) {
             send_err(sock, peer, TFTP_E_DISK_FULL, "write failed");
             break;
         }
-        total += wl;
-        tftp_ack(a, b);
-        sendto(sock, a, 4, 0, (const struct sockaddr *)peer, sizeof *peer);
+        total += written_length;
+        tftp_ack(ack_packet, packet_block);
+        sendto(sock, ack_packet, 4, 0, (const struct sockaddr *)peer, sizeof *peer);
         expect++;
-        if (dl < TFTP_BLOCK_SIZE) {
+        if (decoded_length < TFTP_BLOCK_SIZE) {
             if (pending_cr) {
-                fputc('\r', f);
+                fputc('\r', upload_file);
                 total++;
             }
             ok = true;
@@ -361,7 +361,7 @@ static void serve_wrq(const struct sockaddr_in *peer, const char *path, bool net
         }
     }
 
-    ok = (fclose(f) == 0) && ok;
+    ok = (fclose(upload_file) == 0) && ok;
     if (ok) {
         unlink(path); // FAT rename() fails when the target exists
         ok = rename(tmp, path) == 0;
@@ -382,9 +382,9 @@ static void serve_wrq(const struct sockaddr_in *peer, const char *path, bool net
 static void tftp_task(void *arg)
 {
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(TFTP_PORT),
+    struct sockaddr_in listen_address = {.sin_family = AF_INET, .sin_port = htons(TFTP_PORT),
                             .sin_addr.s_addr = htonl(INADDR_ANY)};
-    if (sock < 0 || bind(sock, (struct sockaddr *)&a, sizeof a) < 0) {
+    if (sock < 0 || bind(sock, (struct sockaddr *)&listen_address, sizeof listen_address) < 0) {
         ESP_LOGE(TAG, "bind udp/%d failed", TFTP_PORT);
         vTaskDelete(NULL);
         return;
@@ -394,16 +394,16 @@ static void tftp_task(void *arg)
     uint8_t req[PKT_MAX];
     for (;;) {
         struct sockaddr_in from;
-        socklen_t fl = sizeof from;
-        int n = recvfrom(sock, req, sizeof req - 1, 0, (struct sockaddr *)&from, &fl);
-        if (n <= 0) {
+        socklen_t sender_address_length = sizeof from;
+        int received_length = recvfrom(sock, req, sizeof req - 1, 0, (struct sockaddr *)&from, &sender_address_length);
+        if (received_length <= 0) {
             continue;
         }
-        req[n] = 0;
-        uint16_t op;
-        const char *fn, *mode;
-        if (!tftp_parse_request(req, (size_t)n, &op, &fn, &mode) ||
-            (op != TFTP_RRQ && op != TFTP_WRQ)) {
+        req[received_length] = 0;
+        uint16_t opcode;
+        const char *requested_filename, *mode;
+        if (!tftp_parse_request(req, (size_t)received_length, &opcode, &requested_filename, &mode) ||
+            (opcode != TFTP_RRQ && opcode != TFTP_WRQ)) {
             send_err(sock, &from, TFTP_E_ILLEGAL, "illegal operation");
             continue;
         }
@@ -416,13 +416,13 @@ static void tftp_task(void *arg)
             continue;
         }
         char path[64];
-        if (!tftp_resolve_path(s_root, fn, path, sizeof path)) {
+        if (!tftp_resolve_path(s_root, requested_filename, path, sizeof path)) {
             send_err(sock, &from, TFTP_E_ACCESS, "access denied");
             continue;
         }
         bool netascii = strcasecmp(mode, "netascii") == 0;
-        ESP_LOGI(TAG, "%s %s -> %s (%s)", op == TFTP_RRQ ? "RRQ" : "WRQ", fn, path, mode);
-        if (op == TFTP_RRQ) {
+        ESP_LOGI(TAG, "%s %s -> %s (%s)", opcode == TFTP_RRQ ? "RRQ" : "WRQ", requested_filename, path, mode);
+        if (opcode == TFTP_RRQ) {
             serve_rrq(&from, path, netascii);
         } else {
             serve_wrq(&from, path, netascii);

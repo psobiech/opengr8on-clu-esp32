@@ -34,7 +34,7 @@ void clu_random(uint8_t *out, size_t len)
  * @param cap Capacity of @p out.
  * @return Output length, or -1 on PSA error.
  */
-static int aes_cbc(const clu_cipher_t *c, bool enc, const uint8_t *in, size_t len,
+static int aes_cbc(const clu_cipher_t *cipher, bool enc, const uint8_t *in, size_t len,
                    uint8_t *out, size_t cap)
 {
     psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
@@ -44,31 +44,31 @@ static int aes_cbc(const clu_cipher_t *c, bool enc, const uint8_t *in, size_t le
     psa_set_key_algorithm(&attr, PSA_ALG_CBC_NO_PADDING);
 
     psa_key_id_t id = 0;
-    if (psa_import_key(&attr, c->key, sizeof c->key, &id) != PSA_SUCCESS) {
+    if (psa_import_key(&attr, cipher->key, sizeof cipher->key, &id) != PSA_SUCCESS) {
         return -1;
     }
 
-    psa_cipher_operation_t op = PSA_CIPHER_OPERATION_INIT;
-    size_t n1 = 0, n2 = 0;
-    psa_status_t st = enc ? psa_cipher_encrypt_setup(&op, id, PSA_ALG_CBC_NO_PADDING)
-                          : psa_cipher_decrypt_setup(&op, id, PSA_ALG_CBC_NO_PADDING);
-    if (st == PSA_SUCCESS) {
-        st = psa_cipher_set_iv(&op, c->iv, sizeof c->iv);
+    psa_cipher_operation_t operation = PSA_CIPHER_OPERATION_INIT;
+    size_t update_bytes = 0, finish_bytes = 0;
+    psa_status_t status = enc ? psa_cipher_encrypt_setup(&operation, id, PSA_ALG_CBC_NO_PADDING)
+                          : psa_cipher_decrypt_setup(&operation, id, PSA_ALG_CBC_NO_PADDING);
+    if (status == PSA_SUCCESS) {
+        status = psa_cipher_set_iv(&operation, cipher->iv, sizeof cipher->iv);
     }
-    if (st == PSA_SUCCESS) {
-        st = psa_cipher_update(&op, in, len, out, cap, &n1);
+    if (status == PSA_SUCCESS) {
+        status = psa_cipher_update(&operation, in, len, out, cap, &update_bytes);
     }
-    if (st == PSA_SUCCESS) {
-        st = psa_cipher_finish(&op, out + n1, cap - n1, &n2);
+    if (status == PSA_SUCCESS) {
+        status = psa_cipher_finish(&operation, out + update_bytes, cap - update_bytes, &finish_bytes);
     }
-    if (st != PSA_SUCCESS) {
-        psa_cipher_abort(&op);
+    if (status != PSA_SUCCESS) {
+        psa_cipher_abort(&operation);
     }
     psa_destroy_key(id);
-    return st == PSA_SUCCESS ? (int)(n1 + n2) : -1;
+    return status == PSA_SUCCESS ? (int)(update_bytes + finish_bytes) : -1;
 }
 
-int clu_encrypt(const clu_cipher_t *c, const uint8_t *in, size_t len, uint8_t *out, size_t cap)
+int clu_encrypt(const clu_cipher_t *cipher, const uint8_t *in, size_t len, uint8_t *out, size_t cap)
 {
     if (cap < len + 16) {
         return -1;
@@ -80,17 +80,17 @@ int clu_encrypt(const clu_cipher_t *c, const uint8_t *in, size_t len, uint8_t *o
     }
     memcpy(tmp, in, len);
     size_t plen = clu_pkcs7_pad(tmp, len);
-    return aes_cbc(c, true, tmp, plen, out, cap);
+    return aes_cbc(cipher, true, tmp, plen, out, cap);
 }
 
-int clu_decrypt(const clu_cipher_t *c, const uint8_t *in, size_t len, uint8_t *out, size_t cap)
+int clu_decrypt(const clu_cipher_t *cipher, const uint8_t *in, size_t len, uint8_t *out, size_t cap)
 {
     if (len == 0 || len % 16 || cap < len) {
         return -1;
     }
-    int n = aes_cbc(c, false, in, len, out, cap);
-    if (n < 0) {
+    int decrypted_len = aes_cbc(cipher, false, in, len, out, cap);
+    if (decrypted_len < 0) {
         return -1;
     }
-    return clu_pkcs7_unpad(out, (size_t)n);
+    return clu_pkcs7_unpad(out, (size_t)decrypted_len);
 }

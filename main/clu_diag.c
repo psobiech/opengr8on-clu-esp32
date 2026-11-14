@@ -39,12 +39,12 @@ int clu_diag_write(const char *ip)
         ESP_LOGE(TAG, "mkdir " DIAG_DIR ": errno %d", errno);
         return 1;
     }
-    FILE *f = fopen(DIAG_FILE, "w");
-    if (!f) {
+    FILE *diagnostic_file = fopen(DIAG_FILE, "w");
+    if (!diagnostic_file) {
         ESP_LOGE(TAG, "open " DIAG_FILE ": errno %d", errno);
         return 2;
     }
-    fprintf(f,
+    fprintf(diagnostic_file,
             "{\n\t\"sn\":\t%lu,\n\t\"status\":\t\"OK\",\n\t\"ipAddress\":\t\"%s\",\n"
             "\t\"cloudConn\":\t%s,\n\t\"voltage\":\t0,\n\t\"hwType\":\t%d,\n\t\"hwVer\":\t%d,\n\t\"fwType\":\t%d,\n"
             "\t\"fwApiVer\":\t%d,\n\t\"fwVer\":\t\"%s\",\n\t\"tfbusDiagnostic\":\t[",
@@ -52,35 +52,35 @@ int clu_diag_write(const char *ip)
             CLU_HW_VERSION, CLU_FW_TYPE, CLU_FW_API_VER, CLU_FW_VERSION);
     tfbus_device_t *dev = calloc(TFBUS_MAX_MODULES, sizeof *dev);
     int ndev = dev ? tfbus_master_devices(dev, TFBUS_MAX_MODULES) : 0;
-    int n = tfbus_master_count(), out = 0;
-    for (int i = 0; i < n; i++) {
-        const tfbus_module_t *m = tfbus_master_get(i);
-        if (!m) {
+    int module_count = tfbus_master_count(), out = 0;
+    for (int i = 0; i < module_count; i++) {
+        const tfbus_module_t *module = tfbus_master_get(i);
+        if (!module) {
             continue; // slot freed by req_refresh_modules
         }
-        const tfbus_device_t *d = NULL;
-        for (int j = 0; j < ndev && !d; j++) {
-            d = dev[j].sn == m->sn ? &dev[j] : NULL;
+        const tfbus_device_t *device = NULL;
+        for (int j = 0; j < ndev && !device; j++) {
+            device = dev[j].sn == module->sn ? &dev[j] : NULL;
         }
-        unsigned hw_ver = d && d->hw_ver ? d->hw_ver : 1;
-        unsigned fw_type = d && d->fw_type ? d->fw_type : (m->hw_type == 0x03 ? 3 : 2);
-        unsigned fw_api = d ? d->fw_api_ver : 0;
-        bool v = d && d->have_ver;
-        fprintf(f,
+        unsigned hw_ver = device && device->hw_ver ? device->hw_ver : 1;
+        unsigned fw_type = device && device->fw_type ? device->fw_type : (module->hw_type == 0x03 ? 3 : 2);
+        unsigned fw_api = device ? device->fw_api_ver : 0;
+        bool has_version = device && device->have_ver;
+        fprintf(diagnostic_file,
                 "%s{\n\t\t\t\"sn\":\t%lu,\n\t\t\t\"status\":\t\"%s\",\n\t\t\t\"voltage\":\t0,\n\t\t\t\"fails\":\t%lu,\n"
                 "\t\t\t\"banned\":\tfalse,\n\t\t\t\"hwType\":\t%d,\n\t\t\t\"hwVer\":\t%u,\n"
                 "\t\t\t\"fwType\":\t%u,\n\t\t\t\"fwApiVer\":\t%u,\n\t\t\t\"fwVer\":\t\"%u.%u.%u\"\n\t\t}",
-                out++ ? ", " : "", (unsigned long)m->sn, m->online ? "OK" : "DISCONNECTED",
-                (unsigned long)m->fails_total, m->hw_type, hw_ver, fw_type, fw_api,
-                v ? d->ver[0] : 0, v ? d->ver[1] : 0, v ? d->ver[2] : 0);
+                out++ ? ", " : "", (unsigned long)module->sn, module->online ? "OK" : "DISCONNECTED",
+                (unsigned long)module->fails_total, module->hw_type, hw_ver, fw_type, fw_api,
+                has_version ? device->ver[0] : 0, has_version ? device->ver[1] : 0, has_version ? device->ver[2] : 0);
     }
     free(dev);
-    fprintf(f, "]\n}");
-    bool ok = !ferror(f);
-    if (fclose(f) != 0 || !ok) {
+    fprintf(diagnostic_file, "]\n}");
+    bool ok = !ferror(diagnostic_file);
+    if (fclose(diagnostic_file) != 0 || !ok) {
         ESP_LOGE(TAG, "write " DIAG_FILE " failed");
         return 2;
     }
-    ESP_LOGI(TAG, "diagnostic pack written (%d modules)", n);
+    ESP_LOGI(TAG, "diagnostic pack written (%d modules)", module_count);
     return 0;
 }

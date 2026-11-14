@@ -1,9 +1,10 @@
 -- Virtual CLU objects (declared in OM.LUA as OBJECT:new(class, "NAME")) and the remote CLU proxy
 -- (OBJECT:new(1, ip, "NAME")). Loaded after prelude.lua. Interfaces: docs/device-interfaces/object_*.xml.
 --
--- Each class: cls.init(o), cls.G[idx](o), cls.S[idx](o, v), cls.X[idx](o, ...), cls.tick(o, now_ms).
--- Features without a getter/setter fall back to the generic store o._f.
-local C = __clu
+-- Each class: cls.init(object), cls.G[idx](object), cls.S[idx](object, value),
+-- cls.X[idx](object, ...), cls.tick(object, now_ms).
+-- Features without a getter/setter fall back to the generic store object._f.
+local clu = __clu
 local VCLASS = __vclass
 local lit = __lit
 local HOOKS = __hooks
@@ -17,22 +18,22 @@ local function vclass(id, def)
   setmetatable(def, { __index = OBJECT })
 
   function def:get(idx)
-    local g = def.G[idx]
-    if g then return g(self) end
+    local getter = def.G[idx]
+    if getter then return getter(self) end
     return self._f[idx]
   end
 
-  function def:set(idx, v)
-    local s = def.S[idx]
-    if s then s(self, v) else self._f[idx] = v end
+  function def:set(idx, value)
+    local setter = def.S[idx]
+    if setter then setter(self, value) else self._f[idx] = value end
   end
 
   function def:execute(idx, ...)
-    local e = def.X[idx]
-    if e then return e(self, ...) end
-    -- execute(i, v) on a settable feature behaves like set (OM uses both forms)
+    local executor = def.X[idx]
+    if executor then return executor(self, ...) end
+    -- execute(idx, value) on a settable feature behaves like set (OM uses both forms)
     if def.S[idx] then return def.S[idx](self, ...) end
-    C.log(2, self._name .. ":execute(" .. tostring(idx) .. ") not implemented")
+    clu.log(2, self._name .. ":execute(" .. tostring(idx) .. ") not implemented")
   end
 
   VCLASS[id] = def
@@ -47,26 +48,26 @@ local function now_s() return os.time() end
 -- ---------------------------------------------------------------------------------------------
 local JESC = { ['"'] = '\\"', ["\\"] = "\\\\", ["\n"] = "\\n", ["\r"] = "\\r", ["\t"] = "\\t" }
 
-local function json(v)
-  local t = type(v)
-  if t == "string" then
-    return '"' .. v:gsub('[%c"\\]', function(c) return JESC[c] or string.format("\\u%04x", c:byte()) end) .. '"'
-  elseif t == "number" then
-    if math.type(v) == "integer" then return string.format("%d", v) end
-    if v ~= v or v == math.huge or v == -math.huge then return "null" end
-    return string.format("%.10g", v)
-  elseif t == "boolean" then
-    return v and "true" or "false"
-  elseif t == "table" then
+local function json(value)
+  local value_type = type(value)
+  if value_type == "string" then
+    return '"' .. value:gsub('[%c"\\]', function(character) return JESC[character] or string.format("\\u%04x", character:byte()) end) .. '"'
+  elseif value_type == "number" then
+    if math.type(value) == "integer" then return string.format("%d", value) end
+    if value ~= value or value == math.huge or value == -math.huge then return "null" end
+    return string.format("%.10g", value)
+  elseif value_type == "boolean" then
+    return value and "true" or "false"
+  elseif value_type == "table" then
     local parts = {}
-    if #v > 0 then
-      for _, x in ipairs(v) do parts[#parts + 1] = json(x) end
+    if #value > 0 then
+      for _, x in ipairs(value) do parts[#parts + 1] = json(x) end
       return "[" .. table.concat(parts, ",") .. "]"
     end
     local keys = {}
-    for k in pairs(v) do keys[#keys + 1] = k end
+    for k in pairs(value) do keys[#keys + 1] = k end
     table.sort(keys)
-    for _, k in ipairs(keys) do parts[#parts + 1] = json(tostring(k)) .. ":" .. json(v[k]) end
+    for _, k in ipairs(keys) do parts[#parts + 1] = json(tostring(k)) .. ":" .. json(value[k]) end
     return "{" .. table.concat(parts, ",") .. "}"
   end
   return "null"
@@ -76,97 +77,97 @@ local JUNESC = { b = "\b", f = "\f", n = "\n", r = "\r", t = "\t", ['"'] = '"', 
 
 -- JSON text -> value, or nil, err. null decodes to nil (in arrays: holes, n kept in .n).
 -- Nesting deeper than max_depth (default 8) is an error.
-local function jdecode(s, max_depth)
+local function jdecode(json_text, max_depth)
   max_depth = max_depth or 8
   local pos = 1
-  local function ws() pos = s:find("[^ \t\r\n]", pos) or #s + 1 end
-  local value
+  local function ws() pos = json_text:find("[^ \t\r\n]", pos) or #json_text + 1 end
+  local parse_value
   local function str()
     local out = {}
     pos = pos + 1
     while true do
-      local c = s:sub(pos, pos)
-      if c == "" then error("unterminated string") end
-      if c == '"' then pos = pos + 1; return table.concat(out) end
-      if c == "\\" then
-        local e = s:sub(pos + 1, pos + 1)
-        if e == "u" then
-          local h = s:sub(pos + 2, pos + 5)
-          if not h:match("^%x%x%x%x$") then error("bad \\u escape") end
-          out[#out + 1] = utf8.char(tonumber(h, 16))
+      local character = json_text:sub(pos, pos)
+      if character == "" then error("unterminated string") end
+      if character == '"' then pos = pos + 1; return table.concat(out) end
+      if character == "\\" then
+        local escape_code = json_text:sub(pos + 1, pos + 1)
+        if escape_code == "u" then
+          local hex_digits = json_text:sub(pos + 2, pos + 5)
+          if not hex_digits:match("^%x%x%x%x$") then error("bad \\u escape") end
+          out[#out + 1] = utf8.char(tonumber(hex_digits, 16))
           pos = pos + 6
-        elseif JUNESC[e] then
-          out[#out + 1] = JUNESC[e]
+        elseif JUNESC[escape_code] then
+          out[#out + 1] = JUNESC[escape_code]
           pos = pos + 2
         else
           error("bad escape")
         end
-      elseif c:byte() < 32 then
+      elseif character:byte() < 32 then
         error("control character in string")
       else
-        local run = s:match('^[^"\\%c]+', pos)
+        local run = json_text:match('^[^"\\%c]+', pos)
         out[#out + 1] = run
         pos = pos + #run
       end
     end
   end
-  function value(depth)
+  function parse_value(depth)
     if depth > max_depth then error("too deep") end
     ws()
-    local c = s:sub(pos, pos)
-    if c == '"' then return str() end
-    if c == "[" then
-      local a, n = {}, 0
+    local next_character = json_text:sub(pos, pos)
+    if next_character == '"' then return str() end
+    if next_character == "[" then
+      local array, array_length = {}, 0
       pos = pos + 1
       ws()
-      if s:sub(pos, pos) == "]" then pos = pos + 1; a.n = 0; return a end
+      if json_text:sub(pos, pos) == "]" then pos = pos + 1; array.n = 0; return array end
       while true do
-        n = n + 1
-        a[n] = value(depth + 1)
+        array_length = array_length + 1
+        array[array_length] = parse_value(depth + 1)
         ws()
-        c = s:sub(pos, pos)
+        next_character = json_text:sub(pos, pos)
         pos = pos + 1
-        if c == "]" then a.n = n; return a end
-        if c ~= "," then error("expected , or ]") end
+        if next_character == "]" then array.n = array_length; return array end
+        if next_character ~= "," then error("expected , or ]") end
       end
     end
-    if c == "{" then
-      local o = {}
+    if next_character == "{" then
+      local object = {}
       pos = pos + 1
       ws()
-      if s:sub(pos, pos) == "}" then pos = pos + 1; return o end
+      if json_text:sub(pos, pos) == "}" then pos = pos + 1; return object end
       while true do
         ws()
-        if s:sub(pos, pos) ~= '"' then error("expected key") end
-        local k = str()
+        if json_text:sub(pos, pos) ~= '"' then error("expected key") end
+        local key = str()
         ws()
-        if s:sub(pos, pos) ~= ":" then error("expected :") end
+        if json_text:sub(pos, pos) ~= ":" then error("expected :") end
         pos = pos + 1
-        o[k] = value(depth + 1)
+        object[key] = parse_value(depth + 1)
         ws()
-        c = s:sub(pos, pos)
+        next_character = json_text:sub(pos, pos)
         pos = pos + 1
-        if c == "}" then return o end
-        if c ~= "," then error("expected , or }") end
+        if next_character == "}" then return object end
+        if next_character ~= "," then error("expected , or }") end
       end
     end
-    if s:sub(pos, pos + 3) == "true" then pos = pos + 4; return true end
-    if s:sub(pos, pos + 4) == "false" then pos = pos + 5; return false end
-    if s:sub(pos, pos + 3) == "null" then pos = pos + 4; return nil end
-    local numtxt = s:match("^-?%d+%.?%d*[eE]?[-+]?%d*", pos)
-    local n = numtxt and tonumber(numtxt)
-    if not n then error("unexpected input at " .. pos) end
-    pos = pos + #numtxt
-    return n
+    if json_text:sub(pos, pos + 3) == "true" then pos = pos + 4; return true end
+    if json_text:sub(pos, pos + 4) == "false" then pos = pos + 5; return false end
+    if json_text:sub(pos, pos + 3) == "null" then pos = pos + 4; return nil end
+    local number_text = json_text:match("^-?%d+%.?%d*[eE]?[-+]?%d*", pos)
+    local parsed_number = number_text and tonumber(number_text)
+    if not parsed_number then error("unexpected input at " .. pos) end
+    pos = pos + #number_text
+    return parsed_number
   end
-  local ok, v = pcall(function()
-    local r = value(0)
+  local ok, decoded_value = pcall(function()
+    local result = parse_value(0)
     ws()
-    if pos <= #s then error("trailing data") end
-    return r
+    if pos <= #json_text then error("trailing data") end
+    return result
   end)
-  if not ok then return nil, tostring(v):gsub("^.-:%d+: ", "") end
-  return v
+  if not ok then return nil, tostring(decoded_value):gsub("^.-:%d+: ", "") end
+  return decoded_value
 end
 __json = { encode = json, decode = jdecode }
 __defclass = vclass -- extensions (http.lua) define their classes with it
@@ -180,24 +181,24 @@ __defclass = vclass -- extensions (http.lua) define their classes with it
 -- ---------------------------------------------------------------------------------------------
 local PERSIST_DELAY_MS = 5000
 local persist = { data = nil, dirty = false, due = nil }
-local persist_path = C.storage or ((C.root or ".") .. "/STORAGE.DAT")
+local persist_path = clu.storage or ((clu.root or ".") .. "/STORAGE.DAT")
 local persist_tmp = persist_path:gsub("%.%w+$", "") .. ".TMP"
 
 -- Serialize nil/boolean/number/string and tables of them (no functions/userdata/cycles).
-local function ser(v, depth)
-  local t = type(v)
-  if t == "nil" or t == "boolean" then return tostring(v)
-  elseif t == "number" then
-    if math.type(v) == "integer" then return string.format("%d", v) end
-    if v ~= v then return "0/0" elseif v == math.huge then return "1/0" elseif v == -math.huge then return "-1/0" end
-    local f = string.format("%.17g", v)
-    return f:find("[%.eEn]") and f or f .. ".0"
-  elseif t == "string" then return string.format("%q", v)
-  elseif t == "table" then
+local function ser(value, depth)
+  local value_type = type(value)
+  if value_type == "nil" or value_type == "boolean" then return tostring(value)
+  elseif value_type == "number" then
+    if math.type(value) == "integer" then return string.format("%d", value) end
+    if value ~= value then return "0/0" elseif value == math.huge then return "1/0" elseif value == -math.huge then return "-1/0" end
+    local formatted_number = string.format("%.17g", value)
+    return formatted_number:find("[%.eEn]") and formatted_number or formatted_number .. ".0"
+  elseif value_type == "string" then return string.format("%q", value)
+  elseif value_type == "table" then
     depth = (depth or 0) + 1
     if depth > 16 then return nil end
     local parts = {}
-    for k, x in pairs(v) do
+    for k, x in pairs(value) do
       local sk, sx = ser(k, depth), ser(x, depth)
       if sk and sx then parts[#parts + 1] = "[" .. sk .. "]=" .. sx end
     end
@@ -209,10 +210,10 @@ end
 __ser = ser
 
 local function read_file(path)
-  local f = io.open(path, "rb")
-  if not f then return nil end
-  local txt = f:read("a")
-  f:close()
+  local file = io.open(path, "rb")
+  if not file then return nil end
+  local txt = file:read("a")
+  file:close()
   return txt
 end
 
@@ -223,43 +224,43 @@ function persist.load()
     local txt = read_file(path)
     if txt then
       local fn = load("return " .. txt, "=storage", "t", {})
-      local ok, d = pcall(fn or error)
-      if ok and type(d) == "table" then
-        persist.data = d
+      local ok, data = pcall(fn or error)
+      if ok and type(data) == "table" then
+        persist.data = data
         break
       end
-      C.log(1, "storage: " .. path .. " unreadable, ignored")
+      clu.log(1, "storage: " .. path .. " unreadable, ignored")
     end
   end
   return persist.data
 end
 
 function persist.section(name)
-  local d = persist.load()
-  d[name] = d[name] or {}
-  return d[name]
+  local data = persist.load()
+  data[name] = data[name] or {}
+  return data[name]
 end
 
 function persist.mark(now)
   persist.dirty = true
-  persist.due = persist.due or ((now or C.millis()) + PERSIST_DELAY_MS)
+  persist.due = persist.due or ((now or clu.millis()) + PERSIST_DELAY_MS)
 end
 
 function persist.size() return #(ser(persist.load()) or "") end
 
 function persist.flush(force, now)
   if not persist.dirty then return true end
-  if not force and (now or C.millis()) < persist.due then return true end
+  if not force and (now or clu.millis()) < persist.due then return true end
   local txt = ser(persist.load()) or "{}"
-  local f = io.open(persist_tmp, "wb")
-  local ok = f and f:write(txt) and f:close()
+  local file = io.open(persist_tmp, "wb")
+  local ok = file and file:write(txt) and file:close()
   if ok then
     os.remove(persist_path)
     ok = os.rename(persist_tmp, persist_path)
   end
   if not ok then
-    C.log(1, "storage: write " .. persist_path .. " failed")
-    persist.due = (now or C.millis()) + PERSIST_DELAY_MS -- retry later
+    clu.log(1, "storage: write " .. persist_path .. " failed")
+    persist.due = (now or clu.millis()) + PERSIST_DELAY_MS -- retry later
     return false
   end
   persist.dirty, persist.due = false, nil
@@ -276,81 +277,81 @@ __persist = persist
 -- ---------------------------------------------------------------------------------------------
 local cron = {}
 
-local function cron_field(s, lo, hi)
-  local set, any = {}, s == "*"
-  for part in s:gmatch("[^,]+") do
+local function cron_field(field_text, lo, hi)
+  local set, any = {}, field_text == "*"
+  for part in field_text:gmatch("[^,]+") do
     local range, step = part:match("^([^/]+)/(%d+)$")
     range = range or part
     step = tonumber(step) or 1
     if step < 1 then return nil end
-    local a, b
+    local range_start, range_end
     if range == "*" then
-      a, b = lo, hi
+      range_start, range_end = lo, hi
     else
-      a, b = range:match("^(%d+)-(%d+)$")
-      if a then
-        a, b = tonumber(a), tonumber(b)
+      range_start, range_end = range:match("^(%d+)-(%d+)$")
+      if range_start then
+        range_start, range_end = tonumber(range_start), tonumber(range_end)
       else
-        a = tonumber(range:match("^(%d+)$"))
-        if not a then return nil end
-        b = (part:find("/")) and hi or a
+        range_start = tonumber(range:match("^(%d+)$"))
+        if not range_start then return nil end
+        range_end = (part:find("/")) and hi or range_start
       end
     end
-    if a < lo or b > hi or a > b then return nil end
-    for v = a, b, step do set[v] = true end
+    if range_start < lo or range_end > hi or range_start > range_end then return nil end
+    for value = range_start, range_end, step do set[value] = true end
   end
   return set, any
 end
 
 function cron.parse(rule)
   if type(rule) ~= "string" then return nil end
-  local f = {}
-  for w in rule:gmatch("%S+") do f[#f + 1] = w end
-  if #f ~= 5 then return nil end
-  local r = {}
+  local fields = {}
+  for w in rule:gmatch("%S+") do fields[#fields + 1] = w end
+  if #fields ~= 5 then return nil end
+  local parsed_rule = {}
   local any
-  r.min = cron_field(f[1], 0, 59)
-  r.hour = cron_field(f[2], 0, 23)
-  r.dom, r.dom_any = cron_field(f[3], 1, 31)
-  r.mon = cron_field(f[4], 1, 12)
-  r.dow, any = cron_field(f[5], 0, 7)
-  r.dow_any = any
-  if not (r.min and r.hour and r.dom and r.mon and r.dow) then return nil end
-  if r.dow[7] then r.dow[0] = true end
-  return r
+  parsed_rule.min = cron_field(fields[1], 0, 59)
+  parsed_rule.hour = cron_field(fields[2], 0, 23)
+  parsed_rule.dom, parsed_rule.dom_any = cron_field(fields[3], 1, 31)
+  parsed_rule.mon = cron_field(fields[4], 1, 12)
+  parsed_rule.dow, any = cron_field(fields[5], 0, 7)
+  parsed_rule.dow_any = any
+  if not (parsed_rule.min and parsed_rule.hour and parsed_rule.dom and parsed_rule.mon and parsed_rule.dow) then return nil end
+  if parsed_rule.dow[7] then parsed_rule.dow[0] = true end
+  return parsed_rule
 end
 
-local function day_match(r, t)
-  local dom, dow = r.dom[t.day], r.dow[t.wday - 1]
-  if r.dom_any and r.dow_any then return true end
-  if r.dom_any then return dow end
-  if r.dow_any then return dom end
+local function day_match(rule, date)
+  local dom, dow = rule.dom[date.day], rule.dow[date.wday - 1]
+  if rule.dom_any and rule.dow_any then return true end
+  if rule.dom_any then return dow end
+  if rule.dow_any then return dom end
   return dom or dow -- classic cron: either restricted field matches
 end
 
-function cron.match(r, ts)
-  local t = os.date("*t", ts)
-  return r.min[t.min] and r.hour[t.hour] and r.mon[t.month] and day_match(r, t) or false
+function cron.match(rule, ts)
+  local date = os.date("*t", ts)
+  return rule.min[date.min] and rule.hour[date.hour] and rule.mon[date.month] and day_match(rule, date) or false
 end
 
 -- First matching minute strictly after ts (nil if none within ~4 years, e.g. "0 0 31 2 *").
-function cron.next(r, ts)
-  local t = os.date("*t", ts - ts % 60 + 60)
-  t.sec = 0
+function cron.next(rule, ts)
+  local date = os.date("*t", ts - ts % 60 + 60)
+  date.sec = 0
   for _ = 1, 4 * 366 * 24 + 60 * 24 do
-    if not r.mon[t.month] then
-      t.month, t.day, t.hour, t.min = t.month + 1, 1, 0, 0
-    elseif not day_match(r, t) then
-      t.day, t.hour, t.min = t.day + 1, 0, 0
-    elseif not r.hour[t.hour] then
-      t.hour, t.min = t.hour + 1, 0
-    elseif not r.min[t.min] then
-      t.min = t.min + 1
-      if t.min > 59 then t.hour, t.min = t.hour + 1, 0 end
+    if not rule.mon[date.month] then
+      date.month, date.day, date.hour, date.min = date.month + 1, 1, 0, 0
+    elseif not day_match(rule, date) then
+      date.day, date.hour, date.min = date.day + 1, 0, 0
+    elseif not rule.hour[date.hour] then
+      date.hour, date.min = date.hour + 1, 0
+    elseif not rule.min[date.min] then
+      date.min = date.min + 1
+      if date.min > 59 then date.hour, date.min = date.hour + 1, 0 end
     else
-      return os.time(t)
+      return os.time(date)
     end
-    t = os.date("*t", os.time(t)) -- normalise (fills wday, rolls over)
+    date = os.date("*t", os.time(date)) -- normalise (fills wday, rolls over)
   end
   return nil
 end
@@ -358,20 +359,20 @@ end
 __cron = cron
 
 -- cron.next cached per wall-clock minute (features polled by clientReport every loop).
-local function next_cached(o, key, fn)
-  local m = os.time() // 60
-  local c = o._nc
-  if not c or c.m ~= m then c = { m = m }; o._nc = c end
-  if c[key] == nil then c[key] = { fn() } end
-  return c[key][1]
+local function next_cached(object, key, fn)
+  local minute = os.time() // 60
+  local cache = object._nc
+  if not cache or cache.m ~= minute then cache = { m = minute }; object._nc = cache end
+  if cache[key] == nil then cache[key] = { fn() } end
+  return cache[key][1]
 end
 
 -- Minute-boundary helper for cron-driven objects: true once per wall-clock minute.
-local function new_minute(o)
-  local m = now_s() // 60
-  if o._minute == m then return false end
-  local first = o._minute == nil
-  o._minute = m
+local function new_minute(object)
+  local minute = now_s() // 60
+  if object._minute == minute then return false end
+  local first = object._minute == nil
+  object._minute = minute
   return not first
 end
 
@@ -381,55 +382,55 @@ end
 -- ---------------------------------------------------------------------------------------------
 local Timer = vclass(6, {})
 
-function Timer.init(o)
-  o._f[0], o._f[1] = 1000, 0
-  o._state, o._left = 0, 1000
+function Timer.init(object)
+  object._f[0], object._f[1] = 1000, 0
+  object._state, object._left = 0, 1000
 end
 
-Timer.G[2] = function(o) return o._state end
-Timer.G[3] = function(o)
-  if o._state == 0 then return 0 end
-  return math.max(0, math.floor(o._left))
+Timer.G[2] = function(object) return object._state end
+Timer.G[3] = function(object)
+  if object._state == 0 then return 0 end
+  return math.max(0, math.floor(object._left))
 end
-Timer.S[0] = function(o, v)
-  o._f[0] = tonumber(v) or o._f[0]
-  if o._state == 1 then o._left, o._last = o._f[0], C.millis() end
+Timer.S[0] = function(object, value)
+  object._f[0] = tonumber(value) or object._f[0]
+  if object._state == 1 then object._left, object._last = object._f[0], clu.millis() end
 end
-Timer.S[1] = function(o, v) o._f[1] = (tonumber(v) or 0) ~= 0 and 1 or 0 end
+Timer.S[1] = function(object, value) object._f[1] = (tonumber(value) or 0) ~= 0 and 1 or 0 end
 
-Timer.X[0] = function(o) -- Start
-  o._left, o._last, o._state = tonumber(o._f[0]) or 1000, C.millis(), 1
-  o:_fire(1)
+Timer.X[0] = function(object) -- Start
+  object._left, object._last, object._state = tonumber(object._f[0]) or 1000, clu.millis(), 1
+  object:_fire(1)
 end
-Timer.X[1] = function(o) -- Stop
-  o._state, o._left = 0, tonumber(o._f[0]) or 1000
-  o:_fire(2)
+Timer.X[1] = function(object) -- Stop
+  object._state, object._left = 0, tonumber(object._f[0]) or 1000
+  object:_fire(2)
 end
-Timer.X[2] = function(o) -- Pause: pauses a running timer, resumes a paused one
-  if o._state == 1 then
-    o._state = 2
-    o:_fire(3)
-  elseif o._state == 2 then
-    o._state, o._last = 1, C.millis()
+Timer.X[2] = function(object) -- Pause: pauses a running timer, resumes a paused one
+  if object._state == 1 then
+    object._state = 2
+    object:_fire(3)
+  elseif object._state == 2 then
+    object._state, object._last = 1, clu.millis()
   end
 end
 
-function Timer.tick(o, now)
-  if o._state ~= 1 then return end
-  o._left = o._left - (now - o._last)
-  o._last = now
-  if o._left > 0 then return end
-  local period = tonumber(o._f[0]) or 1000
-  if o._f[1] == 1 and period > 0 then
-    o._left = o._left % period
-    if o._left == 0 then o._left = period end
+function Timer.tick(object, now)
+  if object._state ~= 1 then return end
+  object._left = object._left - (now - object._last)
+  object._last = now
+  if object._left > 0 then return end
+  local period = tonumber(object._f[0]) or 1000
+  if object._f[1] == 1 and period > 0 then
+    object._left = object._left % period
+    if object._left == 0 then object._left = period end
   else
     -- Countdown end: the timer stops (OnStop), then OnTimer, like the vCLU (Timer.ts).
     -- UNVERIFIED on a real CLU.
-    o._state, o._left = 0, period
-    o:_fire(2)
+    object._state, object._left = 0, period
+    object:_fire(2)
   end
-  o:_fire(0)
+  object:_fire(0)
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -438,43 +439,43 @@ end
 -- ---------------------------------------------------------------------------------------------
 local Calendar = vclass(15, {})
 
-function Calendar.init(o)
-  o._f[0], o._f[3] = "", 1
-  o._cancel = 0
+function Calendar.init(object)
+  object._f[0], object._f[3] = "", 1
+  object._cancel = 0
 end
 
-Calendar.S[0] = function(o, v)
-  o._nc = nil
-  o._rule = cron.parse(v)
-  o._f[0] = o._rule and v or "ERROR"
+Calendar.S[0] = function(object, value)
+  object._nc = nil
+  object._rule = cron.parse(value)
+  object._f[0] = object._rule and value or "ERROR"
 end
 Calendar.S[3] = function() end -- read-only
-Calendar.G[1] = function(o)
-  if not o._lastrun then return 0 end
-  return (now_s() - o._lastrun) // 60
+Calendar.G[1] = function(object)
+  if not object._lastrun then return 0 end
+  return (now_s() - object._lastrun) // 60
 end
-Calendar.G[2] = function(o)
-  if not o._rule or o._f[3] ~= 1 then return 0 end
-  local n = next_cached(o, "n", function() return cron.next(o._rule, now_s()) end)
-  return n and (n - now_s() + 59) // 60 or 0
+Calendar.G[2] = function(object)
+  if not object._rule or object._f[3] ~= 1 then return 0 end
+  local next_time = next_cached(object, "n", function() return cron.next(object._rule, now_s()) end)
+  return next_time and (next_time - now_s() + 59) // 60 or 0
 end
-Calendar.X[0] = function(o) o._f[3] = 1; o:_fire(1) end
-Calendar.X[1] = function(o) o._f[3] = 0; o:_fire(2) end
-Calendar.X[3] = function(o, n)
-  o._cancel = o._cancel + (tonumber(n) or 1)
-  o:_fire(3)
+Calendar.X[0] = function(object) object._f[3] = 1; object:_fire(1) end
+Calendar.X[1] = function(object) object._f[3] = 0; object:_fire(2) end
+Calendar.X[3] = function(object, cancel_count)
+  object._cancel = object._cancel + (tonumber(cancel_count) or 1)
+  object:_fire(3)
 end
 
-function Calendar.tick(o)
-  if not new_minute(o) or not o._rule or o._f[3] ~= 1 then return end
-  local t = now_s()
-  if not cron.match(o._rule, t) then return end
-  if o._cancel > 0 then
-    o._cancel = o._cancel - 1
+function Calendar.tick(object)
+  if not new_minute(object) or not object._rule or object._f[3] ~= 1 then return end
+  local current_time = now_s()
+  if not cron.match(object._rule, current_time) then return end
+  if object._cancel > 0 then
+    object._cancel = object._cancel - 1
     return
   end
-  o._lastrun = t
-  o:_fire(0)
+  object._lastrun = current_time
+  object:_fire(0)
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -487,131 +488,131 @@ end
 local ES = vclass(43, {})
 local ES_MAX = 16
 
-local function es_fmt(r) return "{" .. r.id .. "," .. r.state .. "," .. lit(r.cron) .. "}" end
+local function es_fmt(rule) return "{" .. rule.id .. "," .. rule.state .. "," .. lit(rule.cron) .. "}" end
 
-local function es_sorted(o)
-  local l = {}
-  for _, r in pairs(o._rules) do l[#l + 1] = r end
-  table.sort(l, function(a, b) return a.id < b.id end)
-  return l
+local function es_sorted(object)
+  local sorted_rules = {}
+  for _, r in pairs(object._rules) do sorted_rules[#sorted_rules + 1] = r end
+  table.sort(sorted_rules, function(left, right) return left.id < right.id end)
+  return sorted_rules
 end
 
-local function es_next(o)
-  local best, bt = nil, nil
-  for _, r in ipairs(es_sorted(o)) do
-    if r.state == 1 then
-      local t = cron.next(r.parsed, now_s())
-      if t and (not bt or t < bt) then best, bt = r, t end
+local function es_next(object)
+  local best_rule, best_time = nil, nil
+  for _, rule in ipairs(es_sorted(object)) do
+    if rule.state == 1 then
+      local next_time = cron.next(rule.parsed, now_s())
+      if next_time and (not best_time or next_time < best_time) then best_rule, best_time = rule, next_time end
     end
   end
-  return best
+  return best_rule
 end
 
-local function es_save(o)
-  local l = {}
-  for _, r in ipairs(es_sorted(o)) do l[#l + 1] = { r.id, r.state, r.cron } end
-  persist.section("es")[o._name] = l
+local function es_save(object)
+  local saved_rules = {}
+  for _, rule in ipairs(es_sorted(object)) do saved_rules[#saved_rules + 1] = { rule.id, rule.state, rule.cron } end
+  persist.section("es")[object._name] = saved_rules
   persist.mark()
 end
 
-function ES.init(o)
-  o._f[5] = 1
-  o._rules = {}
-  for _, r in ipairs(persist.section("es")[o._name] or {}) do
+function ES.init(object)
+  object._f[5] = 1
+  object._rules = {}
+  for _, r in ipairs(persist.section("es")[object._name] or {}) do
     local id, state, rule = tonumber(r[1]), tonumber(r[2]), r[3]
     local parsed = type(rule) == "string" and cron.parse(rule)
     if id and parsed and id >= 1 and id <= ES_MAX then
-      o._rules[id] = { id = id, state = state == 0 and 0 or 1, cron = rule, parsed = parsed }
+      object._rules[id] = { id = id, state = state == 0 and 0 or 1, cron = rule, parsed = parsed }
     end
   end
 end
 
-ES.G[0] = function(o)
-  local p = {}
-  for _, r in ipairs(es_sorted(o)) do p[#p + 1] = es_fmt(r) end
-  return "{" .. table.concat(p, ",") .. "}"
+ES.G[0] = function(object)
+  local formatted_rules = {}
+  for _, rule in ipairs(es_sorted(object)) do formatted_rules[#formatted_rules + 1] = es_fmt(rule) end
+  return "{" .. table.concat(formatted_rules, ",") .. "}"
 end
-ES.G[1] = function(o)
-  if o._current and now_s() - o._current_t < 60 then return es_fmt(o._current) end
+ES.G[1] = function(object)
+  if object._current and now_s() - object._current_t < 60 then return es_fmt(object._current) end
   return "N\\A"
 end
-ES.G[2] = function(o)
-  local r = next_cached(o, "n", function() return es_next(o) end)
-  return r and es_fmt(r) or "N\\A"
+ES.G[2] = function(object)
+  local next_rule = next_cached(object, "n", function() return es_next(object) end)
+  return next_rule and es_fmt(next_rule) or "N\\A"
 end
-ES.G[3] = function(o) return #es_sorted(o) end
-ES.G[4] = function(o) return ES_MAX - #es_sorted(o) end
-ES.S[5] = function(o, v)
-  local s = (tonumber(v) or 0) ~= 0 and 1 or 0
-  if s == o._f[5] then return end
-  o._f[5] = s
-  o:_fire(s == 1 and 0 or 1)
+ES.G[3] = function(object) return #es_sorted(object) end
+ES.G[4] = function(object) return ES_MAX - #es_sorted(object) end
+ES.S[5] = function(object, value)
+  local normalized_state = (tonumber(value) or 0) ~= 0 and 1 or 0
+  if normalized_state == object._f[5] then return end
+  object._f[5] = normalized_state
+  object:_fire(normalized_state == 1 and 0 or 1)
 end
 
-ES.X[0] = function(o) ES.S[5](o, 1) end
-ES.X[1] = function(o) ES.S[5](o, 0) end
-ES.X[2] = function(o, rule) -- AddRule -> id, 0 on error
+ES.X[0] = function(object) ES.S[5](object, 1) end
+ES.X[1] = function(object) ES.S[5](object, 0) end
+ES.X[2] = function(object, rule) -- AddRule -> id, 0 on error
   local parsed = cron.parse(rule)
   if not parsed then return 0 end
-  for _, r in pairs(o._rules) do
+  for _, r in pairs(object._rules) do
     if r.cron == rule then return r.id end
   end
   for id = 1, ES_MAX do
-    if not o._rules[id] then
-      o._rules[id] = { id = id, state = 1, cron = rule, parsed = parsed }
-      o._nc = nil
-      es_save(o)
-      o:_fire(3)
+    if not object._rules[id] then
+      object._rules[id] = { id = id, state = 1, cron = rule, parsed = parsed }
+      object._nc = nil
+      es_save(object)
+      object:_fire(3)
       return id
     end
   end
   return 0
 end
-ES.X[3] = function(o, id) -- DeleteRule -> 0 ok, 1 error
+ES.X[3] = function(object, id) -- DeleteRule -> 0 ok, 1 error
   id = tonumber(id)
-  if not id or not o._rules[id] then return 1 end
-  o._rules[id] = nil
-  o._nc = nil
-  es_save(o)
-  o:_fire(4)
+  if not id or not object._rules[id] then return 1 end
+  object._rules[id] = nil
+  object._nc = nil
+  es_save(object)
+  object:_fire(4)
   return 0
 end
-ES.X[4] = function(o, id)
-  local r = o._rules[tonumber(id) or -1]
-  return r and es_fmt(r) or "N\\A"
+ES.X[4] = function(object, id)
+  local rule = object._rules[tonumber(id) or -1]
+  return rule and es_fmt(rule) or "N\\A"
 end
-local function es_state(o, id, s)
-  local r = o._rules[tonumber(id) or -1]
-  if not r then return 1 end
-  if r.state ~= s then
-    r.state = s
-    es_save(o)
+local function es_state(object, id, state)
+  local rule = object._rules[tonumber(id) or -1]
+  if not rule then return 1 end
+  if rule.state ~= state then
+    rule.state = state
+    es_save(object)
   end
-  o._nc = nil
+  object._nc = nil
   return 0
 end
-ES.X[5] = function(o, id) return es_state(o, id, 1) end
-ES.X[6] = function(o, id) return es_state(o, id, 0) end
-ES.X[7] = function(o) return ES.G[0](o) end
-ES.X[8] = function(o) return ES.G[2](o) end
-ES.X[9] = function(o)
-  local had = next(o._rules) ~= nil
-  o._rules = {}
-  o._nc = nil
+ES.X[5] = function(object, id) return es_state(object, id, 1) end
+ES.X[6] = function(object, id) return es_state(object, id, 0) end
+ES.X[7] = function(object) return ES.G[0](object) end
+ES.X[8] = function(object) return ES.G[2](object) end
+ES.X[9] = function(object)
+  local had = next(object._rules) ~= nil
+  object._rules = {}
+  object._nc = nil
   if had then
-    es_save(o)
-    o:_fire(4)
+    es_save(object)
+    object:_fire(4)
   end
   return 0
 end
 
-function ES.tick(o)
-  if not new_minute(o) or o._f[5] ~= 1 then return end
-  local t = now_s()
-  for _, r in ipairs(es_sorted(o)) do
-    if r.state == 1 and cron.match(r.parsed, t) then
-      o._current, o._current_t = r, t
-      o:_fire(2)
+function ES.tick(object)
+  if not new_minute(object) or object._f[5] ~= 1 then return end
+  local current_time = now_s()
+  for _, rule in ipairs(es_sorted(object)) do
+    if rule.state == 1 and cron.match(rule.parsed, current_time) then
+      object._current, object._current_t = rule, current_time
+      object:_fire(2)
     end
   end
 end
@@ -624,74 +625,74 @@ end
 -- ---------------------------------------------------------------------------------------------
 local PS = vclass(40, {})
 
-function PS.init(o)
-  o._f[0], o._f[1], o._f[2], o._f[4], o._f[5], o._f[6] = 60, 1, 0, 2, 0, 0
-  o._last = C.millis()
-  o._ignore_until = 0
-  o._holding = false
+function PS.init(object)
+  object._f[0], object._f[1], object._f[2], object._f[4], object._f[5], object._f[6] = 60, 1, 0, 2, 0, 0
+  object._last = clu.millis()
+  object._ignore_until = 0
+  object._holding = false
 end
 
-local function ps_on(o)
-  if o._f[2] == 0 then
-    o._f[2] = 1
-    o:_fire(2)
+local function ps_on(object)
+  if object._f[2] == 0 then
+    object._f[2] = 1
+    object:_fire(2)
   end
 end
 
-local function ps_off(o)
-  if o._f[2] == 1 then
-    o._f[2] = 0
-    o:_fire(3)
+local function ps_off(object)
+  if object._f[2] == 1 then
+    object._f[2] = 0
+    object:_fire(3)
   end
 end
 
-local function ps_lock(o, v)
-  v = (tonumber(v) or 0) ~= 0 and 1 or 0
-  if v == 1 then
-    o._last = C.millis()
-    if o._f[5] == 0 then
-      o._f[5] = 1
-      ps_on(o)
+local function ps_lock(object, value)
+  value = (tonumber(value) or 0) ~= 0 and 1 or 0
+  if value == 1 then
+    object._last = clu.millis()
+    if object._f[5] == 0 then
+      object._f[5] = 1
+      ps_on(object)
     end
-  elseif o._f[5] == 1 then
-    o._f[5] = 0
-    o._ignore_until = C.millis() + (tonumber(o._f[4]) or 0) * 1000
-    ps_off(o)
+  elseif object._f[5] == 1 then
+    object._f[5] = 0
+    object._ignore_until = clu.millis() + (tonumber(object._f[4]) or 0) * 1000
+    ps_off(object)
   end
 end
 
-PS.G[3] = function(o)
-  if o._holding then return 0 end
-  return (C.millis() - o._last) // 1000
+PS.G[3] = function(object)
+  if object._holding then return 0 end
+  return (clu.millis() - object._last) // 1000
 end
-PS.S[1] = function(o, v)
-  local s = (tonumber(v) or 0) ~= 0 and 1 or 0
-  if s == o._f[1] then return end
-  o._f[1] = s
-  o:_fire(s == 1 and 0 or 1)
+PS.S[1] = function(object, value)
+  local normalized_state = (tonumber(value) or 0) ~= 0 and 1 or 0
+  if normalized_state == object._f[1] then return end
+  object._f[1] = normalized_state
+  object:_fire(normalized_state == 1 and 0 or 1)
 end
 PS.S[2] = function() end -- read-only
 PS.S[5] = ps_lock
-PS.X[0] = function(o) PS.S[1](o, 1) end
-PS.X[1] = function(o) PS.S[1](o, 0) end
-PS.X[2] = function(o) -- DetectPresence
-  local now = C.millis()
-  o._last = now
-  if o._f[6] == 1 then o._holding = true end
-  if o._f[1] ~= 1 or o._f[5] == 1 or now < o._ignore_until then return end
-  ps_on(o)
+PS.X[0] = function(object) PS.S[1](object, 1) end
+PS.X[1] = function(object) PS.S[1](object, 0) end
+PS.X[2] = function(object) -- DetectPresence
+  local now = clu.millis()
+  object._last = now
+  if object._f[6] == 1 then object._holding = true end
+  if object._f[1] ~= 1 or object._f[5] == 1 or now < object._ignore_until then return end
+  ps_on(object)
 end
-PS.X[3] = function(o) -- UndetectPresence
-  if o._holding then
-    o._holding = false
-    o._last = C.millis()
+PS.X[3] = function(object) -- UndetectPresence
+  if object._holding then
+    object._holding = false
+    object._last = clu.millis()
   end
 end
-PS.X[4] = function(o) ps_lock(o, o._f[5] == 1 and 0 or 1) end
+PS.X[4] = function(object) ps_lock(object, object._f[5] == 1 and 0 or 1) end
 
-function PS.tick(o, now)
-  if o._f[2] ~= 1 or o._f[5] == 1 or o._holding or o._f[1] ~= 1 then return end
-  if now - o._last >= (tonumber(o._f[0]) or 60) * 1000 then ps_off(o) end
+function PS.tick(object, now)
+  if object._f[2] ~= 1 or object._f[5] == 1 or object._holding or object._f[1] ~= 1 then return end
+  if now - object._last >= (tonumber(object._f[0]) or 60) * 1000 then ps_off(object) end
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -704,30 +705,30 @@ end
 -- ---------------------------------------------------------------------------------------------
 local Stat = vclass(47, {})
 
-function Stat.init(o)
-  o._f[0], o._f[1], o._f[2], o._f[6] = 0, 0, 0, 0
-  for _, i in ipairs({ 4, 5, 7, 8, 9 }) do o._f[i] = -1 end
+function Stat.init(object)
+  object._f[0], object._f[1], object._f[2], object._f[6] = 0, 0, 0, 0
+  for _, i in ipairs({ 4, 5, 7, 8, 9 }) do object._f[i] = -1 end
 end
 
-Stat.S[0] = function(o, v)
-  v = tonumber(v) or 0
-  if v ~= o._f[0] then
-    o._f[0] = v
-    o:_fire(0)
+Stat.S[0] = function(object, value)
+  value = tonumber(value) or 0
+  if value ~= object._f[0] then
+    object._f[0] = value
+    object:_fire(0)
   end
 end
 
 local Pulse = vclass(48, {})
 
-function Pulse.init(o)
-  o._f[10], o._f[1], o._f[2], o._f[3] = 0, 0, 0, -1
+function Pulse.init(object)
+  object._f[10], object._f[1], object._f[2], object._f[3] = 0, 0, 0, -1
 end
 
-Pulse.S[10] = function(o, v) o._f[10] = tonumber(v) or 0 end
+Pulse.S[10] = function(object, value) object._f[10] = tonumber(value) or 0 end
 
-Pulse.X[0] = function(o) -- TriggerPulse
-  o._f[10] = o._f[10] + 1
-  o:_fire(1)
+Pulse.X[0] = function(object) -- TriggerPulse
+  object._f[10] = object._f[10] + 1
+  object:_fire(1)
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -746,27 +747,27 @@ local storage_next_scan = 0
 
 local function sto_vars() return persist.section("vars") end
 
-local function sto_assign(name, v)
-  if type(setVar) == "function" then setVar(name, v) else _G[name] = v end
+local function sto_assign(name, value)
+  if type(setVar) == "function" then setVar(name, value) else _G[name] = value end
 end
 
 -- Tables are stored as deep copies (round-trip through ser, i.e. exactly what gets saved): an
 -- alias would follow in-place edits of the global and hide them from the change check.
-local function sto_copy(v, s)
-  if type(v) ~= "table" then return v end
-  return load("return " .. (s or ser(v)), "=storage", "t", {})()
+local function sto_copy(value, serialized_value)
+  if type(value) ~= "table" then return value end
+  return load("return " .. (serialized_value or ser(value)), "=storage", "t", {})()
 end
 
 local function sto_capture(name)
   local vars = sto_vars()
   local cur = _G[name]
-  local s = ser(cur)
-  if s == nil then
-    C.log(2, "storage: " .. name .. " has unsupported type " .. type(cur))
+  local serialized_value = ser(cur)
+  if serialized_value == nil then
+    clu.log(2, "storage: " .. name .. " has unsupported type " .. type(cur))
     return false
   end
-  if vars[name] == nil or s ~= ser(vars[name]) then
-    vars[name] = sto_copy(cur, s)
+  if vars[name] == nil or serialized_value ~= ser(vars[name]) then
+    vars[name] = sto_copy(cur, serialized_value)
     persist.mark()
     return true
   end
@@ -783,11 +784,11 @@ local function sto_scan(now) -- now nil: scan unconditionally (close hook)
   end
 end
 
-function Storage.init(o)
+function Storage.init(object)
   if storage_hooked then return end
   storage_hooked = true
   HOOKS.init[#HOOKS.init + 1] = function()
-    for name, v in pairs(sto_vars()) do sto_assign(name, sto_copy(v)) end
+    for name, value in pairs(sto_vars()) do sto_assign(name, sto_copy(value)) end
   end
   HOOKS.loop[#HOOKS.loop + 1] = sto_scan
   table.insert(HOOKS.close, 1, sto_scan) -- capture last changes before the final flush
@@ -803,13 +804,13 @@ Storage.X[3] = function() -- EraseAll
   persist.flush(true)
 end
 
-Storage.X[4] = function(o, name) -- Store
+Storage.X[4] = function(object, name) -- Store
   if type(name) == "string" and name ~= "" then
     sto_capture(name)
   else
     for n in pairs(sto_vars()) do sto_capture(n) end
   end
-  if persist.size() > STORAGE_BUDGET then C.log(2, "storage: over budget") end
+  if persist.size() > STORAGE_BUDGET then clu.log(2, "storage: over budget") end
   persist.flush(true)
 end
 
@@ -820,31 +821,31 @@ end
 local Push = vclass(31, {})
 local PUSH_MAX = 500
 
-function Push.init(o)
-  o._f[0], o._f[1], o._f[2], o._f[3] = "", "", "", 1
+function Push.init(object)
+  object._f[0], object._f[1], object._f[2], object._f[3] = "", "", "", 1
 end
 
-local function push_append(o, idx, v)
-  local s = o._f[idx] .. tostring(v or "")
-  if #s > PUSH_MAX then
-    s = s:sub(1, PUSH_MAX)
-    o:_fire(1)
+local function push_append(object, idx, value)
+  local message = object._f[idx] .. tostring(value or "")
+  if #message > PUSH_MAX then
+    message = message:sub(1, PUSH_MAX)
+    object:_fire(1)
   end
-  o._f[idx] = s
+  object._f[idx] = message
 end
 
-Push.S[0] = function(o, v) push_append(o, 0, v) end
-Push.S[1] = function(o, v) push_append(o, 1, v) end
+Push.S[0] = function(object, value) push_append(object, 0, value) end
+Push.S[1] = function(object, value) push_append(object, 1, value) end
 Push.S[2] = function() end
-Push.X[1] = function(o) o._f[0] = "" end
-Push.X[3] = function(o) o._f[1] = "" end
-Push.X[4] = function(o)
-  local now = C.millis()
-  if o._sent and now - o._sent < (tonumber(o._f[3]) or 1) * 1000 then return end
-  o._sent = now
-  o._f[2] = os.date("%Y-%m-%d %H:%M:%S")
-  C.log(3, "PUSH " .. o._name .. ": [" .. o._f[1] .. "] " .. o._f[0])
-  o:_fire(0)
+Push.X[1] = function(object) object._f[0] = "" end
+Push.X[3] = function(object) object._f[1] = "" end
+Push.X[4] = function(object)
+  local now = clu.millis()
+  if object._sent and now - object._sent < (tonumber(object._f[3]) or 1) * 1000 then return end
+  object._sent = now
+  object._f[2] = os.date("%Y-%m-%d %H:%M:%S")
+  clu.log(3, "PUSH " .. object._name .. ": [" .. object._f[1] .. "] " .. object._f[0])
+  object:_fire(0)
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -882,8 +883,8 @@ function sched.encode(rows) -- tests / tools; default zoom suffix as written by 
   local out = {}
   for d = 0, 6 do
     for q = 0, 95 do
-      local v = math.min(rows[d][q], SCHED_SCALE - 1)
-      local hi, lo = v // 90 + 1, v % 90 + 1
+      local value = math.min(rows[d][q], SCHED_SCALE - 1)
+      local hi, lo = value // 90 + 1, value % 90 + 1
       out[#out + 1] = SCHED_ALPHA:sub(hi, hi) .. SCHED_ALPHA:sub(lo, lo)
     end
   end
@@ -892,9 +893,9 @@ end
 
 -- Raw slot for wall-clock time ts (local time), plus the slot's start (seconds).
 function sched.slot(rows, ts)
-  local t = os.date("*t", ts)
-  local q = t.hour * 4 + t.min // 15
-  return rows[t.wday - 1][q], (t.wday - 1) * 96 + q
+  local date = os.date("*t", ts)
+  local quarter_hour = date.hour * 4 + date.min // 15
+  return rows[date.wday - 1][quarter_hour], (date.wday - 1) * 96 + quarter_hour
 end
 
 function sched.value(raw, min, max)
@@ -903,11 +904,11 @@ function sched.value(raw, min, max)
 end
 __sched = sched
 
-local function round_to(v, decimals)
-  local m = 10 ^ decimals
-  local r = math.floor(v * m + 0.5) / m
-  if decimals == 0 then return math.tointeger(r) or r end
-  return r
+local function round_to(value, decimals)
+  local multiplier = 10 ^ decimals
+  local rounded_value = math.floor(value * multiplier + 0.5) / multiplier
+  if decimals == 0 then return math.tointeger(rounded_value) or rounded_value end
+  return rounded_value
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -918,37 +919,37 @@ end
 -- ---------------------------------------------------------------------------------------------
 local Sched = vclass(16, {})
 
-function Sched.init(o)
-  o._f[0], o._f[1], o._f[2], o._f[3], o._f[4] = "", 1, 0, 0, 1
+function Sched.init(object)
+  object._f[0], object._f[1], object._f[2], object._f[3], object._f[4] = "", 1, 0, 0, 1
 end
-Sched.S[0] = function(o, v)
-  o._f[0] = tostring(v or "")
-  o._rows = sched.decode(o._f[0])
-  if o._f[0] ~= "" and not o._rows then C.log(2, o._name .. ": bad schedule Data") end
-  o._slot = nil -- re-evaluate on the next tick
+Sched.S[0] = function(object, value)
+  object._f[0] = tostring(value or "")
+  object._rows = sched.decode(object._f[0])
+  if object._f[0] ~= "" and not object._rows then clu.log(2, object._name .. ": bad schedule Data") end
+  object._slot = nil -- re-evaluate on the next tick
 end
 Sched.S[1] = function() end
 Sched.S[2] = function() end
 
-local function sched_apply(o, slot_id, raw)
-  local max = tonumber(o._f[4]) or 1
+local function sched_apply(object, slot_id, raw)
+  local max = tonumber(object._f[4]) or 1
   local dec = max <= 1 and 2 or max <= 10 and 1 or 0
-  o._slot = slot_id
-  o._f[2] = round_to(sched.value(raw, o._f[3], max), dec)
-  o:_fire(0)
+  object._slot = slot_id
+  object._f[2] = round_to(sched.value(raw, object._f[3], max), dec)
+  object:_fire(0)
 end
 
-Sched.X[0] = function(o)
-  o._f[1] = 1
-  o._slot = nil
-  o:_fire(1)
+Sched.X[0] = function(object)
+  object._f[1] = 1
+  object._slot = nil
+  object:_fire(1)
 end
-Sched.X[1] = function(o) o._f[1] = 0; o:_fire(2) end
+Sched.X[1] = function(object) object._f[1] = 0; object:_fire(2) end
 
-function Sched.tick(o)
-  if o._f[1] ~= 1 or not o._rows then return end
-  local raw, id = sched.slot(o._rows, now_s())
-  if id ~= o._slot then sched_apply(o, id, raw) end
+function Sched.tick(object)
+  if object._f[1] ~= 1 or not object._rows then return end
+  local raw, id = sched.slot(object._rows, now_s())
+  if id ~= object._slot then sched_apply(object, id, raw) end
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -968,147 +969,147 @@ local Thermo = vclass(18, {})
 local T_SRC, T_CTL, T_OUTTYPE, T_POINT, T_HOLIDAY, T_HYST, T_STATE, T_DIR, T_MODE, T_DATA,
       T_MIN, T_MAX, T_TARGET, T_OUT, T_CUR = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14
 
-function Thermo.init(o)
-  local f = o._f
-  f[T_OUTTYPE], f[T_POINT], f[T_HOLIDAY], f[T_HYST], f[T_STATE], f[T_DIR], f[T_MODE] = -1, 20, 17, 1, 1, 0, 0
-  f[T_DATA], f[T_MIN], f[T_MAX], f[T_OUT] = "", 0, 30, 0
-  o._next_read = 0
+function Thermo.init(object)
+  local features = object._f
+  features[T_OUTTYPE], features[T_POINT], features[T_HOLIDAY], features[T_HYST], features[T_STATE], features[T_DIR], features[T_MODE] = -1, 20, 17, 1, 1, 0, 0
+  features[T_DATA], features[T_MIN], features[T_MAX], features[T_OUT] = "", 0, 30, 0
+  object._next_read = 0
 end
 
-local function thermo_target(o)
-  local f, mode = o._f, o._f[T_MODE]
-  if mode == 1 then return tonumber(f[T_HOLIDAY]) end
-  if mode == 2 and o._rows then
-    return round_to(sched.value(sched.slot(o._rows, now_s()), f[T_MIN], f[T_MAX]), 1)
+local function thermo_target(object)
+  local features, mode = object._f, object._f[T_MODE]
+  if mode == 1 then return tonumber(features[T_HOLIDAY]) end
+  if mode == 2 and object._rows then
+    return round_to(sched.value(sched.slot(object._rows, now_s()), features[T_MIN], features[T_MAX]), 1)
   end
-  local p = tonumber(f[T_POINT]) or 20
-  if mode == 3 and o._heatup then return p + o._heatup.add end
-  return p
+  local point_value = tonumber(features[T_POINT]) or 20
+  if mode == 3 and object._heatup then return point_value + object._heatup.add end
+  return point_value
 end
 
-local function thermo_write(o, v)
-  local ctl = o._f[T_CTL]
+local function thermo_write(object, value)
+  local ctl = object._f[T_CTL]
   if type(ctl) == "table" and type(ctl[1]) == "table" then
-    ctl[1]:set(tonumber(ctl[2]) or 0, v)
+    ctl[1]:set(tonumber(ctl[2]) or 0, value)
   elseif type(ctl) == "string" and ctl ~= "" then
-    local code = ctl:gsub("%%v", (v == math.floor(v)) and string.format("%d", v) or tostring(v))
-    local fn, err = load(code, "=" .. o._name .. ".Control", "t")
-    if not fn then C.log(1, o._name .. ": bad Control: " .. tostring(err)); return end
-    __spawn(o._name .. " Control", fn)
+    local code = ctl:gsub("%%v", (value == math.floor(value)) and string.format("%d", value) or tostring(value))
+    local fn, err = load(code, "=" .. object._name .. ".Control", "t")
+    if not fn then clu.log(1, object._name .. ": bad Control: " .. tostring(err)); return end
+    __spawn(object._name .. " Control", fn)
   end
 end
 
-local function thermo_output(o, v)
-  local f = o._f
-  if v == f[T_OUT] and o._written then return end
-  local was = tonumber(f[T_OUT]) or 0
-  f[T_OUT], o._written = v, true
-  thermo_write(o, v)
-  if v > 0 and was <= 0 then o:_fire(3) elseif v <= 0 and was > 0 then o:_fire(4) end
+local function thermo_output(object, value)
+  local features = object._f
+  if value == features[T_OUT] and object._written then return end
+  local was = tonumber(features[T_OUT]) or 0
+  features[T_OUT], object._written = value, true
+  thermo_write(object, value)
+  if value > 0 and was <= 0 then object:_fire(3) elseif value <= 0 and was > 0 then object:_fire(4) end
 end
 
-local function thermo_control(o)
-  local f = o._f
-  local cur, target = tonumber(f[T_CUR]), thermo_target(o)
-  f[T_TARGET] = target
-  if f[T_STATE] ~= 1 or not cur or not target then return end
-  local hyst = math.max(tonumber(f[T_HYST]) or 1, 0)
-  local err = target - cur -- > 0: too cold
-  if f[T_DIR] == 1 then err = -err end
-  if f[T_OUTTYPE] == 1 then
+local function thermo_control(object)
+  local features = object._f
+  local current_value, target_value = tonumber(features[T_CUR]), thermo_target(object)
+  features[T_TARGET] = target_value
+  if features[T_STATE] ~= 1 or not current_value or not target_value then return end
+  local hyst = math.max(tonumber(features[T_HYST]) or 1, 0)
+  local err = target_value - current_value -- > 0: too cold
+  if features[T_DIR] == 1 then err = -err end
+  if features[T_OUTTYPE] == 1 then
     local out = hyst > 0 and (err + hyst / 2) / hyst or (err > 0 and 1 or 0)
-    thermo_output(o, round_to(math.max(0, math.min(1, out)), 3))
+    thermo_output(object, round_to(math.max(0, math.min(1, out)), 3))
   else
-    local on = f[T_OUT] > 0
+    local on = features[T_OUT] > 0
     if err >= hyst / 2 and (err > 0 or hyst > 0) then on = true elseif err <= -hyst / 2 then on = false end
-    thermo_output(o, on and 1 or 0)
+    thermo_output(object, on and 1 or 0)
   end
 end
 
-local function thermo_read(o)
-  local src = o._f[T_SRC]
+local function thermo_read(object)
+  local src = object._f[T_SRC]
   if type(src) == "table" and type(src[1]) == "table" then
-    o._f[T_CUR] = tonumber(src[1]:get(tonumber(src[2]) or 0))
+    object._f[T_CUR] = tonumber(src[1]:get(tonumber(src[2]) or 0))
   elseif type(src) == "string" and src:match("^[%a_][%w_]*$") then
-    o._f[T_CUR] = tonumber(type(getVar) == "function" and getVar(src) or _G[src])
+    object._f[T_CUR] = tonumber(type(getVar) == "function" and getVar(src) or _G[src])
   elseif type(src) == "string" and src ~= "" then
-    if o._reading then return end
-    local fn, err = load("return " .. src, "=" .. o._name .. ".Source", "t")
-    if not fn then C.log(1, o._name .. ": bad Source: " .. tostring(err)); return end
-    o._reading = true
-    __spawn(o._name .. " Source", function()
-      local ok, v = pcall(fn)
-      o._reading = false
-      if ok and tonumber(v) then o._f[T_CUR] = tonumber(v); thermo_control(o) end
+    if object._reading then return end
+    local fn, err = load("return " .. src, "=" .. object._name .. ".Source", "t")
+    if not fn then clu.log(1, object._name .. ": bad Source: " .. tostring(err)); return end
+    object._reading = true
+    __spawn(object._name .. " Source", function()
+      local ok, value = pcall(fn)
+      object._reading = false
+      if ok and tonumber(value) then object._f[T_CUR] = tonumber(value); thermo_control(object) end
     end)
     return "async"
   end
 end
 
-Thermo.S[T_SRC] = function(o, v) o._f[T_SRC] = v; o._next_read = 0 end
-Thermo.S[T_CTL] = function(o, v) o._f[T_CTL] = v; o._written = false end
-Thermo.S[T_POINT] = function(o, v)
-  v = tonumber(v)
-  if not v or v == o._f[T_POINT] then return end
-  o._f[T_POINT] = v
-  o:_fire(0)
-  thermo_control(o)
+Thermo.S[T_SRC] = function(object, value) object._f[T_SRC] = value; object._next_read = 0 end
+Thermo.S[T_CTL] = function(object, value) object._f[T_CTL] = value; object._written = false end
+Thermo.S[T_POINT] = function(object, value)
+  value = tonumber(value)
+  if not value or value == object._f[T_POINT] then return end
+  object._f[T_POINT] = value
+  object:_fire(0)
+  thermo_control(object)
 end
-Thermo.S[T_STATE] = function(o, v)
-  if (tonumber(v) or 0) ~= 0 then Thermo.X[0](o) else Thermo.X[1](o) end
+Thermo.S[T_STATE] = function(object, value)
+  if (tonumber(value) or 0) ~= 0 then Thermo.X[0](object) else Thermo.X[1](object) end
 end
-Thermo.S[T_MODE] = function(o, v)
-  v = math.tointeger(tonumber(v))
-  if v == nil or v < 0 or v > 3 then return end
-  local was = o._f[T_MODE]
-  o._f[T_MODE] = v
-  if v == 1 and was ~= 1 then o:_fire(5) elseif v ~= 1 and was == 1 then o:_fire(6) end
-  thermo_control(o)
+Thermo.S[T_MODE] = function(object, value)
+  value = math.tointeger(tonumber(value))
+  if value == nil or value < 0 or value > 3 then return end
+  local was = object._f[T_MODE]
+  object._f[T_MODE] = value
+  if value == 1 and was ~= 1 then object:_fire(5) elseif value ~= 1 and was == 1 then object:_fire(6) end
+  thermo_control(object)
 end
-Thermo.S[T_DATA] = function(o, v)
-  o._f[T_DATA] = tostring(v or "")
-  o._rows = sched.decode(o._f[T_DATA])
-  if o._f[T_DATA] ~= "" and not o._rows then C.log(2, o._name .. ": bad schedule Data") end
+Thermo.S[T_DATA] = function(object, value)
+  object._f[T_DATA] = tostring(value or "")
+  object._rows = sched.decode(object._f[T_DATA])
+  if object._f[T_DATA] ~= "" and not object._rows then clu.log(2, object._name .. ": bad schedule Data") end
 end
-Thermo.S[T_OUTTYPE] = function(o, v) o._f[T_OUTTYPE] = tonumber(v) or -1 end
+Thermo.S[T_OUTTYPE] = function(object, value) object._f[T_OUTTYPE] = tonumber(value) or -1 end
 for _, i in ipairs({ T_TARGET, T_OUT, T_CUR }) do Thermo.S[i] = function() end end -- read-only
 
-Thermo.X[0] = function(o) -- Start
-  if o._f[T_STATE] == 1 and o._started then return end
-  o._f[T_STATE], o._started = 1, true
-  o:_fire(1)
-  thermo_control(o)
+Thermo.X[0] = function(object) -- Start
+  if object._f[T_STATE] == 1 and object._started then return end
+  object._f[T_STATE], object._started = 1, true
+  object:_fire(1)
+  thermo_control(object)
 end
-Thermo.X[1] = function(o) -- Stop: output off
-  if o._f[T_STATE] == 0 then return end
-  o._f[T_STATE] = 0
-  thermo_output(o, 0)
-  o:_fire(2)
+Thermo.X[1] = function(object) -- Stop: output off
+  if object._f[T_STATE] == 0 then return end
+  object._f[T_STATE] = 0
+  thermo_output(object, 0)
+  object:_fire(2)
 end
-Thermo.X[2] = function(o) Thermo.S[T_POINT](o, (tonumber(o._f[T_POINT]) or 20) + 1) end
-Thermo.X[3] = function(o) Thermo.S[T_POINT](o, (tonumber(o._f[T_POINT]) or 20) - 1) end
-Thermo.X[4] = function(o, value, minutes) -- HeatUp(Value 0..15 °C, Time min)
+Thermo.X[2] = function(object) Thermo.S[T_POINT](object, (tonumber(object._f[T_POINT]) or 20) + 1) end
+Thermo.X[3] = function(object) Thermo.S[T_POINT](object, (tonumber(object._f[T_POINT]) or 20) - 1) end
+Thermo.X[4] = function(object, value, minutes) -- HeatUp(Value 0..15 °C, Time min)
   value, minutes = tonumber(value) or 0, tonumber(minutes) or 0
   if minutes <= 0 then return end
-  local back = o._f[T_MODE] == 3 and o._heatup and o._heatup.back or o._f[T_MODE]
-  o._heatup = { add = math.max(0, math.min(15, value)), till = C.millis() + minutes * 60000, back = back }
-  Thermo.S[T_MODE](o, 3)
+  local back = object._f[T_MODE] == 3 and object._heatup and object._heatup.back or object._f[T_MODE]
+  object._heatup = { add = math.max(0, math.min(15, value)), till = clu.millis() + minutes * 60000, back = back }
+  Thermo.S[T_MODE](object, 3)
 end
-Thermo.X[5] = function(o) Thermo.S[T_MODE](o, 1) end
-Thermo.X[6] = function(o) if o._f[T_MODE] == 1 then Thermo.S[T_MODE](o, 0) end end
-Thermo.X[7] = function(o) Thermo.S[T_MODE](o, 2) end
-Thermo.X[8] = function(o) if o._f[T_MODE] == 2 then Thermo.S[T_MODE](o, 0) end end
+Thermo.X[5] = function(object) Thermo.S[T_MODE](object, 1) end
+Thermo.X[6] = function(object) if object._f[T_MODE] == 1 then Thermo.S[T_MODE](object, 0) end end
+Thermo.X[7] = function(object) Thermo.S[T_MODE](object, 2) end
+Thermo.X[8] = function(object) if object._f[T_MODE] == 2 then Thermo.S[T_MODE](object, 0) end end
 
-function Thermo.tick(o, now)
-  if o._f[T_MODE] == 3 and o._heatup and now >= o._heatup.till then
-    local back = o._heatup.back
-    o._heatup = nil
-    Thermo.S[T_MODE](o, back)
+function Thermo.tick(object, now)
+  if object._f[T_MODE] == 3 and object._heatup and now >= object._heatup.till then
+    local back = object._heatup.back
+    object._heatup = nil
+    Thermo.S[T_MODE](object, back)
   end
-  if now < o._next_read then return end
-  local async = thermo_read(o)
-  o._next_read = now + (async and 10000 or 1000)
-  if not async then thermo_control(o) end
+  if now < object._next_read then return end
+  local async = thermo_read(object)
+  object._next_read = now + (async and 10000 or 1000)
+  if not async then thermo_control(object) end
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -1124,145 +1125,147 @@ end
 local Sun = vclass(39, {})
 local rad, deg = math.pi / 180, 180 / math.pi
 
-local function days_from_civil(y, m, d) -- days since 1970-01-01 (proleptic Gregorian)
-  y = m <= 2 and y - 1 or y
-  local era = (y >= 0 and y or y - 399) // 400
-  local yoe = y - era * 400
-  local doy = (153 * (m + (m > 2 and -3 or 9)) + 2) // 5 + d - 1
+local function days_from_civil(year, month, day) -- days since 1970-01-01 (proleptic Gregorian)
+  year = month <= 2 and year - 1 or year
+  local era = (year >= 0 and year or year - 399) // 400
+  local yoe = year - era * 400
+  local doy = (153 * (month + (month > 2 and -3 or 9)) + 2) // 5 + day - 1
   local doe = yoe * 365 + yoe // 4 - yoe // 100 + doy
   return era * 146097 + doe - 719468
 end
 
--- UTC epoch of sunrise (rising) / sunset on calendar day y-m-d at lat/lon; nil when the sun does
+-- UTC epoch of sunrise (rising) / sunset on calendar day year-month-day at lat/lon; nil when the sun does
 -- not rise / set that day.
-local function sun_event(y, m, d, lat, lon, rising)
-  local n = days_from_civil(y, m, d) - days_from_civil(y, 1, 1) + 1
-  local lng_hour = lon / 15
-  local t = n + ((rising and 6 or 18) - lng_hour) / 24
-  local M = 0.9856 * t - 3.289
-  local L = (M + 1.916 * math.sin(M * rad) + 0.020 * math.sin(2 * M * rad) + 282.634) % 360
-  local RA = (math.atan(0.91764 * math.tan(L * rad)) * deg) % 360
-  RA = (RA + (L // 90) * 90 - (RA // 90) * 90) / 15
-  local sin_dec = 0.39782 * math.sin(L * rad)
+local function sun_event(year, month, day, latitude, longitude, rising)
+  local day_of_year = days_from_civil(year, month, day) - days_from_civil(year, 1, 1) + 1
+  local longitude_hour = longitude / 15
+  local approx_time = day_of_year + ((rising and 6 or 18) - longitude_hour) / 24
+  local mean_anomaly = 0.9856 * approx_time - 3.289
+  local true_longitude = (mean_anomaly + 1.916 * math.sin(mean_anomaly * rad) +
+                          0.020 * math.sin(2 * mean_anomaly * rad) + 282.634) % 360
+  local right_ascension = (math.atan(0.91764 * math.tan(true_longitude * rad)) * deg) % 360
+  right_ascension = (right_ascension + (true_longitude // 90) * 90 - (right_ascension // 90) * 90) / 15
+  local sin_dec = 0.39782 * math.sin(true_longitude * rad)
   local cos_dec = math.cos(math.asin(sin_dec))
-  local cos_h = (math.cos(90.833 * rad) - sin_dec * math.sin(lat * rad)) / (cos_dec * math.cos(lat * rad))
+  local cos_h = (math.cos(90.833 * rad) - sin_dec * math.sin(latitude * rad)) / (cos_dec * math.cos(latitude * rad))
   if cos_h > 1 or cos_h < -1 or cos_h ~= cos_h then return nil end
-  local H = math.acos(cos_h) * deg
-  if rising then H = 360 - H end
-  local T = H / 15 + RA - 0.06571 * t - 6.622
-  local ut = (T - lng_hour) % 24
+  local hour_angle = math.acos(cos_h) * deg
+  if rising then hour_angle = 360 - hour_angle end
+  local local_mean_time = hour_angle / 15 + right_ascension - 0.06571 * approx_time - 6.622
+  local utc_hour = (local_mean_time - longitude_hour) % 24
   -- The event belongs to the local solar day y-m-d: its UTC hour is near 6/18 h - lon/15, which can
   -- fall on the previous/next UTC day (east: Sydney sunrise ~21 UTC the day before).
-  local expect = (rising and 6 or 18) - lng_hour
-  if ut - expect > 12 then ut = ut - 24 elseif expect - ut > 12 then ut = ut + 24 end
-  return math.floor(days_from_civil(y, m, d) * 86400 + ut * 3600 + 0.5)
+  local expected_utc_hour = (rising and 6 or 18) - longitude_hour
+  if utc_hour - expected_utc_hour > 12 then utc_hour = utc_hour - 24
+  elseif expected_utc_hour - utc_hour > 12 then utc_hour = utc_hour + 24 end
+  return math.floor(days_from_civil(year, month, day) * 86400 + utc_hour * 3600 + 0.5)
 end
 __sun_event = sun_event
 
 local function utc_offset(ts)
-  local z = os.date("%z", ts)
-  local sign, h, mi = tostring(z):match("^([+-])(%d%d)(%d%d)$")
+  local timezone_text = os.date("%z", ts)
+  local sign, hours, minutes = tostring(timezone_text):match("^([+-])(%d%d)(%d%d)$")
   if not sign then return 0 end
-  local off = tonumber(h) * 3600 + tonumber(mi) * 60
-  return sign == "-" and -off or off
+  local offset_seconds = tonumber(hours) * 3600 + tonumber(minutes) * 60
+  return sign == "-" and -offset_seconds or offset_seconds
 end
 
-local function sun_day(o, ts) -- sunrise/sunset for the local calendar day of ts (cached)
-  local t = os.date("*t", ts)
-  local lat, lon = tonumber(o._f[1]) or 0, tonumber(o._f[0]) or 0
-  local key = string.format("%d-%d-%d/%s/%s", t.year, t.month, t.day, lat, lon)
-  o._days = o._days or {}
-  local c = o._days[key]
-  if not c then
+local function sun_day(object, ts) -- sunrise/sunset for the local calendar day of ts (cached)
+  local date = os.date("*t", ts)
+  local lat, lon = tonumber(object._f[1]) or 0, tonumber(object._f[0]) or 0
+  local key = string.format("%d-%d-%d/%s/%s", date.year, date.month, date.day, lat, lon)
+  object._days = object._days or {}
+  local day_events = object._days[key]
+  if not day_events then
     if lat < -90 or lat > 90 or lon < -180 or lon > 180 then
-      c = {}
+      day_events = {}
     else
-      c = { rise = sun_event(t.year, t.month, t.day, lat, lon, true),
-            set = sun_event(t.year, t.month, t.day, lat, lon, false) }
+      day_events = { rise = sun_event(date.year, date.month, date.day, lat, lon, true),
+                     set = sun_event(date.year, date.month, date.day, lat, lon, false) }
     end
-    o._ndays = (o._ndays or 0) + 1
-    if o._ndays > 8 then o._days, o._ndays = {}, 1 end -- yesterday .. +2 days
-    o._days[key] = c
+    object._ndays = (object._ndays or 0) + 1
+    if object._ndays > 8 then object._days, object._ndays = {}, 1 end -- yesterday .. +2 days
+    object._days[key] = day_events
   end
-  return c
+  return day_events
 end
 
-local function sun_next(o, ts, which, offset_idx)
-  local off = (tonumber(o._f[offset_idx]) or 0) * 60
+local function sun_next(object, ts, which, offset_idx)
+  local off = (tonumber(object._f[offset_idx]) or 0) * 60
   for dd = -1, 2 do -- -1: CLU clock zone far from the location (its sunset after local midnight)
-    local e = sun_day(o, ts + dd * 86400)[which]
-    if e and e + off > ts then return e + off end
+    local event_time = sun_day(object, ts + dd * 86400)[which]
+    if event_time and event_time + off > ts then return event_time + off end
   end
   return nil
 end
 
 local function hhmm(ts, utc) return ts and os.date(utc and "!%H:%M" or "%H:%M", ts) or "N\\A" end
 
-local function sun_update(o, now)
-  local f, today = o._f, sun_day(o, now)
-  f[3], f[4] = hhmm(today.rise, true), hhmm(today.set, true)
-  f[5], f[6] = hhmm(today.rise), hhmm(today.set)
-  f[7], f[8] = today.rise or -1, today.set or -1
-  f[9] = today.rise and today.rise + utc_offset(today.rise) or -1
-  f[10] = today.set and today.set + utc_offset(today.set) or -1
-  if today.rise and today.set then
-    f[11] = 0
+local function sun_update(object, now)
+  local features, todays_events = object._f, sun_day(object, now)
+  features[3], features[4] = hhmm(todays_events.rise, true), hhmm(todays_events.set, true)
+  features[5], features[6] = hhmm(todays_events.rise), hhmm(todays_events.set)
+  features[7], features[8] = todays_events.rise or -1, todays_events.set or -1
+  features[9] = todays_events.rise and todays_events.rise + utc_offset(todays_events.rise) or -1
+  features[10] = todays_events.set and todays_events.set + utc_offset(todays_events.set) or -1
+  if todays_events.rise and todays_events.set then
+    features[11] = 0
     for dd = -1, 1 do
-      local d = sun_day(o, now + dd * 86400)
-      if d.rise and d.set and now >= d.rise and now < d.set then f[11] = 1 end
+      local day_events = sun_day(object, now + dd * 86400)
+      if day_events.rise and day_events.set and now >= day_events.rise and now < day_events.set then features[11] = 1 end
     end
   else
-    f[11] = -1
+    features[11] = -1
   end
-  local nr, ns = sun_next(o, now, "rise", 12), sun_next(o, now, "set", 13)
-  f[14] = nr and math.ceil((nr - now) / 60) or -1
-  f[15] = ns and math.ceil((ns - now) / 60) or -1
+  local next_sunrise, next_sunset = sun_next(object, now, "rise", 12), sun_next(object, now, "set", 13)
+  features[14] = next_sunrise and math.ceil((next_sunrise - now) / 60) or -1
+  features[15] = next_sunset and math.ceil((next_sunset - now) / 60) or -1
 end
 
-function Sun.init(o)
-  o._f[0], o._f[1], o._f[2], o._f[12], o._f[13] = 0, 0, 1, 0, 0
-  o._dirty = true
+function Sun.init(object)
+  object._f[0], object._f[1], object._f[2], object._f[12], object._f[13] = 0, 0, 1, 0, 0
+  object._dirty = true
 end
 for i = 3, 11 do Sun.S[i] = function() end end -- read-only
 Sun.S[14], Sun.S[15] = function() end, function() end
 for _, i in ipairs({ 0, 1, 12, 13 }) do
-  Sun.S[i] = function(o, v) o._f[i] = tonumber(v) or 0; o._dirty = true end
+  Sun.S[i] = function(object, value) object._f[i] = tonumber(value) or 0; object._dirty = true end
 end
-Sun.S[2] = function(o, v) if (tonumber(v) or 0) ~= 0 then Sun.X[0](o) else Sun.X[1](o) end end
-Sun.X[0] = function(o)
-  if o._f[2] == 1 and o._started then return end
-  o._f[2], o._started, o._last = 1, true, nil
-  o:_fire(0)
+Sun.S[2] = function(object, value) if (tonumber(value) or 0) ~= 0 then Sun.X[0](object) else Sun.X[1](object) end end
+Sun.X[0] = function(object)
+  if object._f[2] == 1 and object._started then return end
+  object._f[2], object._started, object._last = 1, true, nil
+  object:_fire(0)
 end
-Sun.X[1] = function(o)
-  if o._f[2] == 0 then return end
-  o._f[2] = 0
-  o:_fire(1)
+Sun.X[1] = function(object)
+  if object._f[2] == 0 then return end
+  object._f[2] = 0
+  object:_fire(1)
 end
 for i = 3, 15 do
-  Sun.G[i] = function(o)
-    if o._dirty then o._dirty = false; sun_update(o, now_s()) end
-    return o._f[i]
+  Sun.G[i] = function(object)
+    if object._dirty then object._dirty = false; sun_update(object, now_s()) end
+    return object._f[i]
   end
 end
 
-function Sun.tick(o)
+function Sun.tick(object)
   local now = now_s()
-  if o._last and now // 60 == o._last // 60 and not o._dirty then return end
-  local prev, prev_day = o._last, o._f[11]
-  sun_update(o, now)
-  o._dirty, o._last = false, now
-  if o._f[2] ~= 1 or not prev then return end
+  if object._last and now // 60 == object._last // 60 and not object._dirty then return end
+  local prev, prev_day = object._last, object._f[11]
+  sun_update(object, now)
+  object._dirty, object._last = false, now
+  if object._f[2] ~= 1 or not prev then return end
   -- events whose (offset) time passed since the previous check
   for _, e in ipairs({ { "rise", 12, 2 }, { "set", 13, 3 } }) do
-    local at = sun_next(o, prev, e[1], e[2])
+    local at = sun_next(object, prev, e[1], e[2])
     if at and at <= now then
-      o:_fire(e[3])
-      o:_fire(4)
+      object:_fire(e[3])
+      object:_fire(4)
     end
   end
-  if prev_day ~= o._f[11] and prev_day ~= -1 and o._f[11] ~= -1 then
-    o:_fire(o._f[11] == 1 and 5 or 6)
+  if prev_day ~= object._f[11] and prev_day ~= -1 and object._f[11] ~= -1 then
+    object:_fire(object._f[11] == 1 and 5 or 6)
   end
 end
 
@@ -1280,47 +1283,47 @@ end
 -- ---------------------------------------------------------------------------------------------
 local Remote = vclass(1, {})
 
-local function parse_result(r)
-  if r == nil then return "error" end
-  if r == "nil" then return nil elseif r == "true" then return true elseif r == "false" then return false end
-  local n = tonumber(r)
-  if n ~= nil then return n end
-  return r
+local function parse_result(result_text)
+  if result_text == nil then return "error" end
+  if result_text == "nil" then return nil elseif result_text == "true" then return true elseif result_text == "false" then return false end
+  local parsed_number = tonumber(result_text)
+  if parsed_number ~= nil then return parsed_number end
+  return result_text
 end
 
 -- Returns: sent, result (result only when the caller could wait for it).
-local function remote(o, script)
-  local id = C.remote(o._ip, script)
+local function remote(object, script)
+  local id = clu.remote(object._ip, script)
   if not id then return false, "error" end
-  local waited, r = __wait(id)
-  if not waited then return true, nil end
-  return true, parse_result(r)
+  local did_wait, result_text = __wait(id)
+  if not did_wait then return true, nil end
+  return true, parse_result(result_text)
 end
 
 -- Lua source literal for a proxied argument. lit() (clientReport format) only escapes '"', so
 -- backslashes, newlines or NULs in strings would break or alter the remote script; ser() is %q-based.
-local function rlit(v) return ser(v) or "nil" end
+local function rlit(value) return ser(value) or "nil" end
 
-function Remote:set(idx, v)
-  self._f[idx] = v
-  C.remote(self._ip, self._name .. ":set(" .. tostring(idx) .. ", " .. rlit(v) .. ")")
+function Remote:set(idx, value)
+  self._f[idx] = value
+  clu.remote(self._ip, self._name .. ":set(" .. tostring(idx) .. ", " .. rlit(value) .. ")")
 end
 
 function Remote:get(idx)
   if not coroutine.isyieldable() then return self._f[idx] end
-  local sent, r = remote(self, self._name .. ":get(" .. tostring(idx) .. ")")
-  if sent and r ~= "error" then self._f[idx] = r end
-  return r
+  local sent, result = remote(self, self._name .. ":get(" .. tostring(idx) .. ")")
+  if sent and result ~= "error" then self._f[idx] = result end
+  return result
 end
 
 function Remote:execute(idx, ...)
   if idx == 0 then
     local script = ...
-    local _, r = remote(self, tostring(script))
-    return r
+    local sent, result = remote(self, tostring(script))
+    return result
   end
   local args = { tostring(idx) }
   for i = 1, select("#", ...) do args[#args + 1] = rlit((select(i, ...))) end
-  local _, r = remote(self, self._name .. ":execute(" .. table.concat(args, ", ") .. ")")
-  return r
+  local sent, result = remote(self, self._name .. ":execute(" .. table.concat(args, ", ") .. ")")
+  return result
 end

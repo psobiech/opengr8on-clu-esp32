@@ -28,18 +28,18 @@
 --   MySensors.C / S / V / I                 command, presentation, variable, internal types
 --
 -- Example:
---   MySensors.on(12, 1, MySensors.V.V_TEMP, function(t) CLU_TEMP:set(0, t) end)
+--   MySensors.on(12, 1, MySensors.V.V_TEMP, function(value) CLU_TEMP:set(0, value) end)
 --   MySensors.send(13, 7, MySensors.V.V_STATUS, true)
-local C = __clu
+local clu = __clu
 local HOOKS = __hooks
 
 local RECV_PER_TICK = 16
 
-local M = {}
+local mysensors = {}
 
-M.C = { C_PRESENTATION = 0, C_SET = 1, C_REQ = 2, C_INTERNAL = 3, C_STREAM = 4 }
+mysensors.C = { C_PRESENTATION = 0, C_SET = 1, C_REQ = 2, C_INTERNAL = 3, C_STREAM = 4 }
 
-M.S = {
+mysensors.S = {
   S_DOOR = 0, S_MOTION = 1, S_SMOKE = 2, S_LIGHT = 3, S_BINARY = 3, S_DIMMER = 4, S_COVER = 5,
   S_TEMP = 6, S_HUM = 7, S_BARO = 8, S_WIND = 9, S_RAIN = 10, S_UV = 11, S_WEIGHT = 12,
   S_POWER = 13, S_HEATER = 14, S_DISTANCE = 15, S_LIGHT_LEVEL = 16, S_ARDUINO_NODE = 17,
@@ -49,7 +49,7 @@ M.S = {
   S_SOUND = 33, S_VIBRATION = 34, S_MOISTURE = 35, S_INFO = 36, S_GAS = 37, S_GPS = 38,
 }
 
-M.V = {
+mysensors.V = {
   V_TEMP = 0, V_HUM = 1, V_STATUS = 2, V_LIGHT = 2, V_PERCENTAGE = 3, V_DIMMER = 3,
   V_PRESSURE = 4, V_FORECAST = 5, V_RAIN = 6, V_RAINRATE = 7, V_WIND = 8, V_GUST = 9,
   V_DIRECTION = 10, V_UV = 11, V_WEIGHT = 12, V_DISTANCE = 13, V_IMPEDANCE = 14, V_ARMED = 15,
@@ -62,7 +62,7 @@ M.V = {
   V_CUSTOM = 48, V_POSITION = 49, V_IR_RECORD = 50,
 }
 
-M.I = {
+mysensors.I = {
   I_BATTERY_LEVEL = 0, I_TIME = 1, I_VERSION = 2, I_ID_REQUEST = 3, I_ID_RESPONSE = 4,
   I_INCLUSION_MODE = 5, I_CONFIG = 6, I_FIND_PARENT = 7, I_FIND_PARENT_RESPONSE = 8,
   I_LOG_MESSAGE = 9, I_CHILDREN = 10, I_SKETCH_NAME = 11, I_SKETCH_VERSION = 12, I_REBOOT = 13,
@@ -76,7 +76,7 @@ local TEXT = {}
 for _, k in ipairs({ "V_FORECAST", "V_HVAC_FLOW_STATE", "V_HVAC_SPEED", "V_IR_SEND", "V_IR_RECEIVE",
                      "V_RGB", "V_RGBW", "V_ID", "V_UNIT_PREFIX", "V_HVAC_FLOW_MODE", "V_TEXT",
                      "V_CUSTOM", "V_POSITION", "V_IR_RECORD" }) do
-  TEXT[M.V[k]] = true
+  TEXT[mysensors.V[k]] = true
 end
 
 local function decode(vtype, payload)
@@ -84,76 +84,76 @@ local function decode(vtype, payload)
   return tonumber(payload) or payload
 end
 
-local function encode(v)
-  if v == true then return "1" end
-  if v == false or v == nil then return "0" end
-  if type(v) == "number" then
-    if v == math.floor(v) and v > -1e15 and v < 1e15 then return string.format("%d", v) end
-    return string.format("%.6g", v)
+local function encode(value)
+  if value == true then return "1" end
+  if value == false or value == nil then return "0" end
+  if type(value) == "number" then
+    if value == math.floor(value) and value > -1e15 and value < 1e15 then return string.format("%d", value) end
+    return string.format("%.6g", value)
   end
-  return tostring(v)
+  return tostring(value)
 end
 
 -- handlers: { fn, node, child, vtype, raw }  (raw = every message)
 local handlers = {}
 
-local function add(h)
-  handlers[#handlers + 1] = h
-  return h
+local function add(handler)
+  handlers[#handlers + 1] = handler
+  return handler
 end
 
 local function check_fn(fn)
   if type(fn) ~= "function" then error("MySensors: handler function expected", 3) end
 end
 
-function M.on(node, child, vtype, fn)
+function mysensors.on(node, child, vtype, fn)
   check_fn(fn)
   return add({ fn = fn, node = node, child = child, vtype = vtype })
 end
 
-function M.onMessage(fn)
+function mysensors.onMessage(fn)
   check_fn(fn)
   return add({ fn = fn, raw = true })
 end
 
-function M.off(h)
+function mysensors.off(handler)
   for i = #handlers, 1, -1 do
-    if handlers[i] == h then table.remove(handlers, i) end
+    if handlers[i] == handler then table.remove(handlers, i) end
   end
 end
 
-function M.raw(node, child, cmd, typ, payload, ack)
-  return C.ms_send(node, child, cmd, typ, payload ~= nil and encode(payload) or "", ack)
+function mysensors.raw(node, child, cmd, typ, payload, ack)
+  return clu.ms_send(node, child, cmd, typ, payload ~= nil and encode(payload) or "", ack)
 end
 
-function M.send(node, child, vtype, value, ack)
-  return C.ms_send(node, child, M.C.C_SET, vtype, encode(value), ack)
+function mysensors.send(node, child, vtype, value, ack)
+  return clu.ms_send(node, child, mysensors.C.C_SET, vtype, encode(value), ack)
 end
 
-function M.request(node, child, vtype)
-  return C.ms_send(node, child, M.C.C_REQ, vtype, "")
+function mysensors.request(node, child, vtype)
+  return clu.ms_send(node, child, mysensors.C.C_REQ, vtype, "")
 end
 
-function M.internal(node, child, itype, payload)
-  return M.raw(node, child, M.C.C_INTERNAL, itype, payload)
+function mysensors.internal(node, child, itype, payload)
+  return mysensors.raw(node, child, mysensors.C.C_INTERNAL, itype, payload)
 end
 
-function M.get(node, child, vtype)
-  local p, age = C.ms_get(node, child, vtype)
-  if p == nil then return nil end
-  return decode(vtype, p), age
+function mysensors.get(node, child, vtype)
+  local payload, age = clu.ms_get(node, child, vtype)
+  if payload == nil then return nil end
+  return decode(vtype, payload), age
 end
 
-M.nodes = C.ms_nodes
-M.status = C.ms_status
-M.trace = C.ms_trace
-M.slots = C.ms_slots
-M.unmap = C.ms_unmap
+mysensors.nodes = clu.ms_nodes
+mysensors.status = clu.ms_status
+mysensors.trace = clu.ms_trace
+mysensors.slots = clu.ms_slots
+mysensors.unmap = clu.ms_unmap
 
-local function match(h, msg)
-  if h.raw then return true end
-  return msg.cmd == M.C.C_SET and (h.node == nil or h.node == msg.node) and
-         (h.child == nil or h.child == msg.child) and (h.vtype == nil or h.vtype == msg.type)
+local function match(handler, msg)
+  if handler.raw then return true end
+  return msg.cmd == mysensors.C.C_SET and (handler.node == nil or handler.node == msg.node) and
+         (handler.child == nil or handler.child == msg.child) and (handler.vtype == nil or handler.vtype == msg.type)
 end
 
 local function dispatch(msg)
@@ -164,14 +164,14 @@ local function dispatch(msg)
     if match(h, msg) then
       local ok, err
       if h.raw then ok, err = pcall(h.fn, msg) else ok, err = pcall(h.fn, value, msg) end
-      if not ok then C.log(1, "MySensors handler: " .. tostring(err)) end
+      if not ok then clu.log(1, "MySensors handler: " .. tostring(err)) end
     end
   end
 end
 
 local function tick()
   for _ = 1, RECV_PER_TICK do
-    local node, child, cmd, ack, typ, payload = C.ms_recv()
+    local node, child, cmd, ack, typ, payload = clu.ms_recv()
     if not node then break end
     dispatch({ node = node, child = child, cmd = cmd, ack = ack, type = typ, payload = payload })
   end
@@ -179,4 +179,4 @@ end
 
 HOOKS.loop[#HOOKS.loop + 1] = tick
 
-MySensors = M
+MySensors = mysensors

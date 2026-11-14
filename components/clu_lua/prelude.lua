@@ -7,7 +7,7 @@
 --   OBJECT:new(class, moduleObj, channel, "DOU8786")   IO object hosted on a module
 --   OBJECT:new(class, "STO99999")                      virtual object
 -- Behaviour per class is provided by C hooks in __clu (get/set/execute return handled flag).
-local C = __clu -- removed from _G by the C side after objects.lua is loaded
+local clu = __clu -- removed from _G by the C side after objects.lua is loaded
 
 -- Sandbox: Lua does not verify precompiled bytecode, so a crafted binary chunk can read/write
 -- arbitrary memory. Everything that compiles code is text-only, string.dump is gone and the debug
@@ -15,16 +15,16 @@ local C = __clu -- removed from _G by the C side after objects.lua is loaded
 do
   local _load, _loadfile, select, assert = load, loadfile, select, assert
   -- Forward the env argument only when given: load(s, n, m, nil) sets _ENV to nil.
-  function load(chunk, name, _, ...)
+  function load(chunk, name, requested_mode, ...)
     if select("#", ...) > 0 then return _load(chunk, name, "t", ...) end
     return _load(chunk, name, "t")
   end
-  function loadfile(path, _, ...)
+  function loadfile(path, requested_mode, ...)
     if select("#", ...) > 0 then return _loadfile(path, "t", ...) end
     return _loadfile(path, "t")
   end
   function dofile(path) return assert(loadfile(path))() end
-  if loadstring then loadstring = function(s, name) return load(s, name) end end
+  if loadstring then loadstring = function(source, name) return load(source, name) end end
   string.dump = nil
   local traceback = debug and debug.traceback
   debug = { traceback = traceback }
@@ -60,70 +60,70 @@ OBJECT = {}
 OBJECT.__index = OBJECT
 OBJECT.__name = "OBJECT"
 
-function OBJECT:new(class, a, b, c)
+function OBJECT:new(class, first, second, third)
   local gate_mask, gate_gw
   if class == 5000 then
     -- The local GATE: OM passes the project netmask / gateway instead of a name. Served like a
     -- local CLU (class 0); the firmware maps the GATE feature indices (__clu.gate).
-    class, gate_mask, gate_gw = 0, b, c
-    b, c = C.sn and string.format("CLU%d", C.sn) or "GATE", nil
+    class, gate_mask, gate_gw = 0, second, third
+    second, third = clu.sn and string.format("CLU%d", clu.sn) or "GATE", nil
   end
-  local o = setmetatable({ _class = class, _f = {}, _ev = {} }, OBJECT)
-  o._netmask, o._gateway = gate_mask, gate_gw
-  if c ~= nil then
+  local object = setmetatable({ _class = class, _f = {}, _ev = {} }, OBJECT)
+  object._netmask, object._gateway = gate_mask, gate_gw
+  if third ~= nil then
     if class == 2 then
-      o._sn, o._hwType, o._name = a, b, tostring(c)
-      modules[#modules + 1] = o
+      object._sn, object._hwType, object._name = first, second, tostring(third)
+      modules[#modules + 1] = object
     else
-      o._module, o._channel, o._name = a, b, tostring(c)
+      object._module, object._channel, object._name = first, second, tostring(third)
     end
-  elseif b ~= nil then
-    o._ip, o._name = a, tostring(b)
-    if class == 0 then local_clu = o end
+  elseif second ~= nil then
+    object._ip, object._name = first, tostring(second)
+    if class == 0 then local_clu = object end
   else
-    o._name = tostring(a)
+    object._name = tostring(first)
   end
   -- Declared again (e.g. via req:): the new object replaces the old one (same name, or same
   -- module serial), so the old one stops ticking and is not kept alive by the registries.
-  local prev = objects[o._name]
+  local prev = objects[object._name]
   for i = #ticking, 1, -1 do
     if ticking[i] == prev then table.remove(ticking, i) end
   end
-  for i = #modules - 1, 1, -1 do -- o itself is last
-    local m = modules[i]
-    if m == prev or (o._sn ~= nil and m._sn == o._sn) then table.remove(modules, i) end
+  for i = #modules - 1, 1, -1 do -- object itself is last
+    local module = modules[i]
+    if module == prev or (object._sn ~= nil and module._sn == object._sn) then table.remove(modules, i) end
   end
-  local cls = (c == nil) and vclass[class] or nil
+  local cls = (third == nil) and vclass[class] or nil
   if cls then
-    setmetatable(o, cls)
-    if cls.init then cls.init(o) end
-    if cls.tick then ticking[#ticking + 1] = o end
+    setmetatable(object, cls)
+    if cls.init then cls.init(object) end
+    if cls.tick then ticking[#ticking + 1] = object end
   end
-  objects[o._name] = o
-  C.new(o)
-  return o
+  objects[object._name] = object
+  clu.new(object)
+  return object
 end
 
 function OBJECT:get(idx)
-  local handled, v = C.get(self, idx)
-  if handled then return v end
+  local handled, value = clu.get(self, idx)
+  if handled then return value end
   return self._f[idx]
 end
 
-function OBJECT:set(idx, v)
-  if not C.set(self, idx, v) then
-    self._f[idx] = v
+function OBJECT:set(idx, value)
+  if not clu.set(self, idx, value) then
+    self._f[idx] = value
   end
 end
 
 function OBJECT:execute(idx, ...)
-  return C.execute(self, idx, ...)
+  return clu.execute(self, idx, ...)
 end
 
 function OBJECT:add_event(idx, fn)
-  local l = self._ev[idx]
-  if not l then l = {}; self._ev[idx] = l end
-  l[#l + 1] = fn
+  local event_handlers = self._ev[idx]
+  if not event_handlers then event_handlers = {}; self._ev[idx] = event_handlers end
+  event_handlers[#event_handlers + 1] = fn
 end
 
 -- Event handlers run as coroutines, so a remote CLU call inside one (CLUx:execute(0, "...")) can
@@ -136,21 +136,21 @@ local WAIT_MAX_MS = 10000 -- C side always answers within ~1.5 s; this only guar
 
 local function resume(co, what, ...)
   local ok, err = coroutine.resume(co, ...)
-  if not ok then C.log(1, what .. ": " .. tostring(err)) end
+  if not ok then clu.log(1, what .. ": " .. tostring(err)) end
 end
 
 function __wait(id)
   local co, main = coroutine.running()
   if main or not coroutine.isyieldable() then return false end
-  waiting[id] = { co = co, what = labels[co] or "remote call", due = C.millis() + WAIT_MAX_MS }
+  waiting[id] = { co = co, what = labels[co] or "remote call", due = clu.millis() + WAIT_MAX_MS }
   return true, coroutine.yield()
 end
 
 function __remote_done(id, result)
-  local w = waiting[id]
-  if not w then return end
+  local wait_entry = waiting[id]
+  if not wait_entry then return end
   waiting[id] = nil
-  resume(w.co, w.what, result)
+  resume(wait_entry.co, wait_entry.what, result)
 end
 
 local function wait_timeouts(now)
@@ -167,49 +167,49 @@ function __spawn(what, fn, ...)
 end
 
 function OBJECT:_fire(idx)
-  local l = self._ev[idx]
-  if not l then return end
+  local event_handlers = self._ev[idx]
+  if not event_handlers then return end
   local what = self._name .. " event " .. idx
-  for _, fn in ipairs(l) do __spawn(what, fn) end
+  for _, fn in ipairs(event_handlers) do __spawn(what, fn) end
 end
 
 GATE = OBJECT
 
 -- Called from C to deliver driver events / value updates.
 function __fire(name, idx)
-  local o = objects[name]
-  if o then o:_fire(idx) end
+  local object = objects[name]
+  if object then object:_fire(idx) end
 end
 
-function __update(name, idx, v)
-  local o = objects[name]
-  if o then o._f[idx] = v end
+function __update(name, idx, value)
+  local object = objects[name]
+  if object then object._f[idx] = value end
 end
 
 function __local_clu() return local_clu end
 
 -- Lua literal formatting for clientReport / fetchValues (vclu luaStringify).
-local function lit(v)
-  local t = type(v)
-  if v == nil then return "nil"
-  elseif t == "boolean" then return v and "true" or "false"
-  elseif t == "number" then return tostring(v)
-  elseif t == "string" then return '"' .. v:gsub('"', '\\"') .. '"'
-  elseif t == "table" then
+local function lit(value)
+  local value_type = type(value)
+  if value == nil then return "nil"
+  elseif value_type == "boolean" then return value and "true" or "false"
+  elseif value_type == "number" then return tostring(value)
+  elseif value_type == "string" then return '"' .. value:gsub('"', '\\"') .. '"'
+  elseif value_type == "table" then
     local parts = {}
-    for _, x in ipairs(v) do parts[#parts + 1] = lit(x) end
+    for _, x in ipairs(value) do parts[#parts + 1] = lit(x) end
     return "{" .. table.concat(parts, ",") .. "}"
   end
-  return tostring(v)
+  return tostring(value)
 end
 __lit = lit
 
 local function fetch(subs)
   local vals = {}
   for i, s in ipairs(subs or {}) do
-    local o = s[1]
-    if type(o) == "string" then o = objects[o] end
-    vals[i] = o and lit(o:get(s[2])) or "nil"
+    local object = s[1]
+    if type(object) == "string" then object = objects[object] end
+    vals[i] = object and lit(object:get(s[2])) or "nil"
   end
   return "{" .. table.concat(vals, ",") .. "}"
 end
@@ -220,10 +220,10 @@ local clients = {}
 SYSTEM = {}
 
 function SYSTEM.Init()
-  C.init()
+  clu.init()
   for _, f in ipairs(hooks.init) do
     local ok, err = pcall(f)
-    if not ok then C.log(1, "init hook: " .. tostring(err)) end
+    if not ok then clu.log(1, "init hook: " .. tostring(err)) end
   end
   if local_clu then local_clu:_fire(0) end -- OnInit
 end
@@ -246,8 +246,8 @@ local function report_client(cl)
   if snap ~= cl.last then
     cl.last = snap
     local msg = "clientReport:" .. cl.sid .. ":" .. snap
-    C.report(cl.addr, cl.port, msg)
-    if cl.from and cl.from ~= cl.addr then C.report(cl.from, cl.port, msg) end
+    clu.report(cl.addr, cl.port, msg)
+    if cl.from and cl.from ~= cl.addr then clu.report(cl.from, cl.port, msg) end
   end
 end
 
@@ -256,36 +256,36 @@ end
 function __shutdown()
   for _, f in ipairs(hooks.close) do
     local ok, err = pcall(f)
-    if not ok then C.log(1, "close hook: " .. tostring(err)) end
+    if not ok then clu.log(1, "close hook: " .. tostring(err)) end
   end
 end
 
 -- Nothing in here may raise: MAIN.LUA runs `repeat SYSTEM.Loop() until false`, so an error
 -- escaping SYSTEM.Loop would end MAIN.LUA (-> BAD_M.LUA, emergency mode).
 function SYSTEM.Loop()
-  local lok, lerr = pcall(C.loop)
-  if not lok then C.log(1, "loop: " .. tostring(lerr)) end
-  local now = C.millis()
+  local lok, lerr = pcall(clu.loop)
+  if not lok then clu.log(1, "loop: " .. tostring(lerr)) end
+  local now = clu.millis()
   time_check(now)
-  for _, o in ipairs(ticking) do
-    local ok, err = pcall(o.tick, o, now)
-    if not ok then C.log(1, o._name .. " tick: " .. tostring(err)) end
+  for _, object in ipairs(ticking) do
+    local ok, err = pcall(object.tick, object, now)
+    if not ok then clu.log(1, object._name .. " tick: " .. tostring(err)) end
   end
   for _, f in ipairs(hooks.loop) do
     local ok, err = pcall(f, now)
-    if not ok then C.log(1, "loop hook: " .. tostring(err)) end
+    if not ok then clu.log(1, "loop hook: " .. tostring(err)) end
   end
   if next(waiting) then wait_timeouts(now) end
   for key, cl in pairs(clients) do
     local ok, err = pcall(report_client, cl)
     if not ok then
-      C.log(1, "clientReport " .. tostring(key) .. " dropped: " .. tostring(err))
+      clu.log(1, "clientReport " .. tostring(key) .. " dropped: " .. tostring(err))
       clients[key] = nil -- clearing a visited field during pairs() is allowed
     end
   end
 end
 
-function SYSTEM.Wait(_, ms) C.wait(ms or 0) end
+function SYSTEM.Wait(unused, ms) clu.wait(ms or 0) end
 
 local MAX_CLIENTS = 16
 local client_seq = 0
@@ -296,12 +296,12 @@ function SYSTEM:clientRegister(addr, port, sid, subs)
   if not clients[key] then
     -- No expiry is known for real CLUs (ClientsAliveTime is commented out in the interface):
     -- bound the registry instead, dropping the oldest registration.
-    local n, oldest = 0, nil
+    local client_count, oldest = 0, nil
     for k, cl in pairs(clients) do
-      n = n + 1
+      client_count = client_count + 1
       if not oldest or cl.seq < clients[oldest].seq then oldest = k end
     end
-    if n >= MAX_CLIENTS then clients[oldest] = nil end
+    if client_count >= MAX_CLIENTS then clients[oldest] = nil end
   end
   client_seq = client_seq + 1
   clients[key] =
@@ -318,12 +318,12 @@ function SYSTEM:fetchValues(subs) return "values:" .. fetch(subs) end
 function SYSTEM:mqttRegister() end
 function SYSTEM:mqttDestroy() end
 
-function logDebug(...) C.log(4, ...) end
-function logInfo(...) C.log(3, ...) end
-function log(...) C.log(3, ...) end
-function logWarning(...) C.log(2, ...) end
-function logError(...) C.log(1, ...) end
-function print(...) C.log(3, ...) end
+function logDebug(...) clu.log(4, ...) end
+function logInfo(...) clu.log(3, ...) end
+function log(...) clu.log(3, ...) end
+function logWarning(...) clu.log(2, ...) end
+function logError(...) clu.log(1, ...) end
+function print(...) clu.log(3, ...) end
 
-package.path = C.root .. "/?.lua"
+package.path = clu.root .. "/?.lua"
 package.cpath = ""

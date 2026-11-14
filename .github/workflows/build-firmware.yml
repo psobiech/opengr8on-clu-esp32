@@ -31,6 +31,10 @@ jobs:
           restore-keys: |
             ccache-firmware-${{ runner.os }}-${{ runner.arch }}-esp-idf-v6.0.2-${{ inputs.target }}-${{ inputs.preset }}-${{ hashFiles('CMakePresets.json', 'sdkconfig.defaults*', 'sdkconfig.*', 'dependencies.lock', 'components/**/idf_component.yml', 'main/idf_component.yml') }}-
 
+      - name: Use release compiler settings
+        # appended to base defaults -> later lines override CONFIG_COMPILER_OPTIMIZATION_DEBUG for every preset
+        run: cat sdkconfig.defaults.release >> sdkconfig.defaults
+
       - name: ESP-IDF build
         if: ${{ !inputs.capture-build-log }}
         uses: espressif/esp-idf-ci-action@v1
@@ -79,6 +83,7 @@ jobs:
              "$bdir/flash_args" "$bdir/flasher_args.json" "$out/"
           cp tools/mknvs.py "$out/"
           echo "${{ inputs.target }}" > "$out/CHIP"
+          git checkout -- sdkconfig.defaults  # undo release append so --dirty stays clean
           git describe --tags --always --dirty > "$out/VERSION"
           ls -lR "$out"
 

@@ -424,7 +424,7 @@ Podmenu **RS485 bus (TF-Bus / MySensors)**.
 | Opcja | Domyślnie | Opis |
 |---|---|---|
 | `CLU_SOFT_RESET` | y | `req_reset` przeładowuje Lua zamiast restartu układu |
-| `CLU_SETUP_WINDOW_S` | 60 | okno konfiguracji po uruchomieniu CLU [s]: discovery, zmiana klucza/IP, TFTP (`0` = zawsze) |
+| `CLU_SETUP_WINDOW_S` | 0 | okno konfiguracji po uruchomieniu CLU [s]: discovery, zmiana klucza/IP, TFTP (`0` = zawsze) |
 | `CLU_SETUP_BUTTON_GPIO` | 0 (BOOT) | przycisk otwierający okno konfiguracji w trakcie pracy, `-1` = brak |
 | `CLU_LUA_5_3` / `CLU_LUA_5_5` | 5.3 | wersja Lua (5.3 jak w CLU, 5.5 eksperymentalnie) |
 | `CLU_LUA_MEM_LIMIT_KB` | 4096 | limit sterty Lua (KB) |
@@ -624,7 +624,7 @@ wymaga tylko `gcc`/`gcov`, `python3` i `luac$(LUA)`.
   instrukcje Lua; długie wywołania C (np. `string.find` z backtrackingiem) nie są przerywane.
 - **Brak wyroczni paddingu CBC:** pakiety, które dają się odszyfrować, ale nie są poleceniem
   `req…`, nie dostają odpowiedzi.
-- **Okno konfiguracji po starcie** (`CLU_SETUP_WINDOW_S`, domyślnie 60 s, `0` wyłącza): tylko przez
+- **Okno konfiguracji po starcie** (`CLU_SETUP_WINDOW_S`, domyślnie `0` = wyłączone, np. 60 s włącza): tylko przez
   tyle sekund od pełnego uruchomienia CLU po starcie układu (zasilanie, przycisk reset, restart;
   odliczanie rusza, gdy WiFi po raz pierwszy dostanie IP) albo od
   wciśnięcia przycisku konfiguracji (`CLU_SETUP_BUTTON_GPIO`, domyślnie BOOT/GPIO0, przytrzymanie ≥100 ms

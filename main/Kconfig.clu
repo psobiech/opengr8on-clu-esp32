@@ -456,7 +456,7 @@ menu "OpenGr8on ESP32 CLU"
     config CLU_SETUP_WINDOW_S
         int "Setup window after startup [s] (0 = always open)"
         range 0 86400
-        default 60
+        default 0
         help
             Discovery (req_discovery_clu), re-keying (req_set_key, anything under the PIN / temp
             key), req_set_clu_ip and opening TFTP (req_start_ftp, req_diagnostic_refresh) are
@@ -470,7 +470,7 @@ menu "OpenGr8on ESP32 CLU"
             A soft reset (CLU_SOFT_RESET) does not reopen the window; the setup button does.
             In emergency mode (MAIN.LUA failed, EMERGNCY.LUA running) the window stays open with
             no time limit, until the CLU leaves it.
-            0 disables the restriction.
+            0 (default) disables the restriction; set e.g. 60 to enable it.
 
     config CLU_SETUP_BUTTON_GPIO
         int "Setup button GPIO (-1 = none)"

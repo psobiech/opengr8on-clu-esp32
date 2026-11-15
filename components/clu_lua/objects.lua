@@ -1326,6 +1326,28 @@ end
 -- backslashes, newlines or NULs in strings would break or alter the remote script; ser() is %q-based.
 local function rlit(value) return ser(value) or "nil" end
 
+-- Secure channel: after SYSTEM.Init probe every remote CLU of OM.LUA (one at a time, the calls are
+-- serialised anyway) with checkAlive(), so unknown CLUs are paired while the setup window is open
+-- instead of at the first script call. Unpaired / legacy CLUs are retried by the first real call.
+if clu.secure then
+  HOOKS.init[#HOOKS.init + 1] = function()
+    local peer_names, seen_ips = {}, {}
+    for name, object in pairs(__objects) do
+      if getmetatable(object) == Remote and object._ip and not seen_ips[object._ip] then
+        seen_ips[object._ip] = true
+        peer_names[#peer_names + 1] = name
+      end
+    end
+    table.sort(peer_names)
+    __spawn("secure pairing", function()
+      for _, name in ipairs(peer_names) do
+        local object = __objects[name]
+        if object then remote(object, "checkAlive()") end
+      end
+    end)
+  end
+end
+
 function Remote:set(idx, value)
   self._f[idx] = value
   clu.remote(self._ip, self._name .. ":set(" .. tostring(idx) .. ", " .. rlit(value) .. ")")

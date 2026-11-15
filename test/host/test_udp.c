@@ -1171,6 +1171,67 @@ static void test_setup_window(void)
     s_tftp_on = -1;
 }
 
+#if CONFIG_CLU_SEC_DISABLE_LEGACY
+/** @brief CLU_SEC_DISABLE_LEGACY: outside the window only discovery and checkAlive() on UDP 1234. */
+static void test_legacy_lock(void)
+{
+    clu_cipher_t *prj = &g_clu.project;
+    s_setup_latched = false;
+    s_now_us = (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000 + 1;
+    check("locked: window closed", !setup_window_open() && legacy_locked());
+
+    s_lua_calls = 0;
+    sent_reset();
+    rx_reset();
+    rx_add_str(prj, "req:192.168.1.20:00000001:x=1", "192.168.1.50");
+    run_task(udp_task);
+    check_str("locked: Lua under the project key refused", sent_str(0, prj), "resp:ERROR");
+    check("locked: script not run", s_lua_calls == 0);
+
+    sent_reset();
+    rx_reset();
+    rx_add_str(prj, "req:192.168.1.20:00000002:checkAlive()", "192.168.1.50");
+    run_task(udp_task);
+    check("locked: checkAlive() still answered", s_lua_calls == 1 && strncmp(sent_str(0, prj), "resp:192.168.1.20:00000002:", 27) == 0);
+
+    int reloads = s_reloads, refreshes = s_refreshes;
+    s_tftp_on = -1;
+    sent_reset();
+    rx_reset();
+    rx_add_str(prj, "req_reset:192.168.1.20", "192.168.1.50");
+    rx_add_str(prj, "req_refresh_modules:192.168.1.20", "192.168.1.50");
+    rx_add_str(prj, "req_tftp_stop", "192.168.1.50");
+    rx_add_str(prj, "req_start_ftp", "192.168.1.50");
+    run_task(udp_task);
+    check("locked: reset / refresh / TFTP refused",
+          s_nsent == 4 && s_reloads == reloads && s_refreshes == refreshes && s_tftp_on == -1 &&
+              strcmp(sent_str(0, prj), "resp:ERROR") == 0 && strcmp(sent_str(3, prj), "resp:ERROR") == 0);
+
+    sent_reset();
+    udp_server_send_report("192.168.1.99", 6000, "{}");
+    check("locked: clientReport not sent", s_nsent == 0);
+
+    // Outbound remote call to a legacy CLU: refused without sending.
+    s_nposted = 0;
+    uint32_t id = udp_server_remote_exec(0xc0a80115, "x()");
+    remote_req_t r;
+    xQueueReceive(s_remote_q, &r, 0);
+    remote_call(10, &r);
+    free(r.script);
+    check("locked: remote call to a legacy CLU refused", id && s_nsent == 0 && s_nposted == 1);
+
+    // Setup button: everything works again.
+    s_now_us = 0;
+    atomic_store(&s_setup_until_us, (int64_t)CONFIG_CLU_SETUP_WINDOW_S * 1000000);
+    sent_reset();
+    rx_reset();
+    rx_add_str(prj, "req:192.168.1.20:00000003:x=1", "192.168.1.50");
+    run_task(udp_task);
+    check("window open: Lua accepted again", !legacy_locked() && s_lua_calls == 2 &&
+                                                 strncmp(sent_str(0, prj), "resp:192.168.1.20:00000003:", 27) == 0);
+}
+#endif
+
 int main(void)
 {
     g_clu.sn = 0x0c0ffee1;
@@ -1188,6 +1249,12 @@ int main(void)
     check("local IP towards a peer: that of its interface, as text",
           strcmp(local_ip(inet_addr("192.168.1.50"), me), "192.168.1.20") == 0 && s_net_peer == inet_addr("192.168.1.50") &&
               strcmp(local_ip(inet_addr("10.0.0.50"), me), "10.0.0.20") == 0);
+#if CONFIG_CLU_SEC_DISABLE_LEGACY
+    test_legacy_lock();
+    check("tx lock released", host_mutex_held == 0);
+    printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
+    return failures ? EXIT_FAILURE : EXIT_SUCCESS;
+#endif
     test_discovery();
     test_set_ip();
     test_set_key();

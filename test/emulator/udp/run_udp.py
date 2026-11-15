@@ -109,6 +109,7 @@ class Device:
         emulator_timeout: int,
         tcp_port: int | None = None,
         psram_size: str = "8M",
+        sec_port: int | None = None,
     ):
         self.name = name
         self.udp_port = udp_port
@@ -136,6 +137,9 @@ class Device:
         network = f"user,hostfwd=udp:127.0.0.1:{udp_port}-:1234"
         if tcp_port is not None:
             network += f",hostfwd=tcp:127.0.0.1:{tcp_port}-:80"
+        self.sec_port = sec_port
+        if sec_port is not None:
+            network += f",hostfwd=udp:127.0.0.1:{sec_port}-:{SEC_PORT}"
         command = [
             emulator,
             "--chip",
@@ -353,6 +357,121 @@ class Relay:
             raise RuntimeError("UDP relay did not stop")
 
 
+SEC_PORT = 1235
+SEC_TYPES = {1: "hs_init", 2: "hs_resp", 4: "data", 8: "probe", 9: "probe_resp"}
+
+
+class SecRelay:
+    """Forward secure-channel datagrams (UDP 1235) between the guests, keeping flows open both ways.
+
+    Both guests reach each other as the host gateway 192.168.4.1. A packet to the listener from a new
+    guest source opens a flow to ``target_port`` (the other guest's 1235 host-forward) and keeps that
+    target for the flow's lifetime; everything the target sends back on that flow, including later
+    requests it initiates on an established session, returns to the original sender. Upstream sockets are unconnected: the target's NAT may use another
+    source port than the host-forward. ``drop`` discards new traffic from the listener (timeout check);
+    ``replay_last_data()`` resends the last forwarded DATA request unchanged (replay check).
+    """
+
+    def __init__(self, bind_port: int = SEC_PORT):
+        self.target_port = None
+        self.drop = False
+        self.records = []
+        self.errors = []
+        self.flows = {}  # sender address -> (upstream socket, target port)
+        self.senders = {}  # upstream socket -> sender address
+        self.last_data = None
+        self.t0 = time.monotonic()
+        self.stop = threading.Event()
+        self.listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.listener.bind(("127.0.0.1", bind_port))
+        self.thread = threading.Thread(target=self._run, name="clu-sec-relay", daemon=True)
+        self.thread.start()
+
+    def _record(self, direction: str, data: bytes) -> None:
+        self.records.append({"direction": direction, "type": SEC_TYPES.get(data[0], data[0]) if data else None,
+                             "bytes": len(data), "t": round(time.monotonic() - self.t0, 3),
+                             "sha256": hashlib.sha256(data).hexdigest()})
+
+    def _flow(self, sender):
+        flow = self.flows.get(sender)
+        if flow is None:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.bind(("127.0.0.1", 0))
+            flow = self.flows[sender] = (sock, self.target_port)
+            self.senders[sock] = sender
+        return flow
+
+    def _run(self) -> None:
+        try:
+            while not self.stop.is_set():
+                readable, _, _ = select.select([self.listener, *self.senders], [], [], 0.1)
+                for sock in readable:
+                    if sock is self.listener:
+                        data, sender = self.listener.recvfrom(4096)
+                        if self.drop or (self.target_port is None and sender not in self.flows):
+                            self._record("dropped", data)
+                            continue
+                        self._record("forward", data)
+                        upstream, target = self._flow(sender)
+                        if data and data[0] == 4:
+                            self.last_data = (upstream, target, data)
+                        upstream.sendto(data, ("127.0.0.1", target))
+                    else:
+                        data = sock.recv(4096)
+                        self._record("back", data)
+                        self.listener.sendto(data, self.senders[sock])
+        except OSError as exc:
+            if not self.stop.is_set():
+                self.errors.append(repr(exc))
+        except Exception as exc:
+            self.errors.append(repr(exc))
+
+    def replay_last_data(self) -> None:
+        upstream, target, data = self.last_data
+        self._record("replayed", data)
+        upstream.sendto(data, ("127.0.0.1", target))
+
+    def close(self) -> None:
+        self.stop.set()
+        self.thread.join(timeout=3)
+        for sock in self.senders:
+            sock.close()
+        self.listener.close()
+        if self.thread.is_alive():
+            raise RuntimeError("secure UDP relay did not stop")
+
+
+def burn_gateway_port(host_port: int) -> None:
+    """Work around esp-emu user-net reply routing for a second UDP host-forward rule.
+
+    esp-emu shows each new host peer of a host-forward rule to the guest as 192.168.4.1:40000, 40001, ...
+    counted per rule, but routes the guest's replies by that gateway port alone. The 1234 rule's first
+    peer (Device.sock) and the 1235 rule's first peer would both be :40000, and replies from 1235 would
+    reach the legacy socket. One throwaway datagram (type 0, ignored by the firmware) takes :40000 on
+    the 1235 rule, so the relay's flows get ports the 1234 rule does not use.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.sendto(b"\x00", ("127.0.0.1", host_port))
+
+
+def validate_secure_records(legacy: list[dict], secure: list[dict]) -> None:
+    """Secure mode: no CLU-to-CLU request on UDP 1234; probe, handshake and DATA both ways on 1235."""
+    legacy_between = [row for row in legacy if row["direction"] in ("request", "response")]
+    if legacy_between:
+        raise ValueError(f"{len(legacy_between)} CLU packets went over the legacy protocol")
+    forwarded = [row["type"] for row in secure if row["direction"] == "forward"]
+    back = [row["type"] for row in secure if row["direction"] == "back"]
+    for kind in ("probe", "hs_init"):
+        if kind not in forwarded:
+            raise ValueError(f"no {kind} forwarded on the secure channel")
+    for kind in ("probe_resp", "hs_resp"):
+        if kind not in back:
+            raise ValueError(f"no {kind} returned on the secure channel")
+    data = forwarded.count("data") + back.count("data")
+    if data < 12:
+        raise ValueError(f"expected >= 12 DATA packets (6 requests, 6 replies), got {data}")
+
+
 def check_key_selection(device: Device) -> None:
     """Send the padding-collision vector as the first Lua session under KEY_SELECTION_KEY.
 
@@ -371,7 +490,7 @@ def check_key_selection(device: Device) -> None:
         raise RuntimeError(f"{device.name}: padding collision selected the wrong UDP key: {result!r}")
 
 
-def check_logs(devices: list[Device], nonce: str) -> None:
+def check_logs(devices: list[Device], nonce: str, secure: bool = False) -> None:
     for device in devices:
         if device.process.poll() is not None:
             raise RuntimeError(f"{device.name}: emulator exited early with {device.process.returncode}")
@@ -381,8 +500,12 @@ def check_logs(devices: list[Device], nonce: str) -> None:
             if match:
                 raise RuntimeError(f"{device.name}: emulator log contains failure signature {match.group(0)!r}")
         expected = [f"UDP_READY {device.name} {nonce}"]
+        if secure:
+            expected.append("sec: listening on udp/1235")
         if device.name == "A":
             expected.append(f"UDP_TIMEOUT_OK A {nonce}")
+            if secure:
+                expected.append("paired with CLU 221010156")
         for marker in expected:
             if marker not in output:
                 raise RuntimeError(f"{device.name}: missing Lua marker {marker!r}")
@@ -394,8 +517,11 @@ def run_test(args: argparse.Namespace) -> str:
             raise FileNotFoundError(f"required file does not exist: {path}")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
+    secure = getattr(args, "secure", False)
     devices = []
     relay = None
+    sec_relay = None
+    captured_request = None
     nonce = secrets.token_hex(8)
     project_key = secrets.token_bytes(16)
     project_iv = secrets.token_bytes(16)
@@ -413,11 +539,14 @@ def run_test(args: argparse.Namespace) -> str:
                     args.out_dir,
                     args.emulator_timeout,
                     psram_size=getattr(args, "psram_size", "8M"),
+                    sec_port=port + 10 if secure else None,
                 )
             )
         for device in devices:
             device.wait_for("main: WiFi IP 192.168.4.2")
             device.wait_for("no /fs/a/MAIN.LUA, idle")
+            if device.sec_port is not None:
+                burn_gateway_port(device.sec_port)
             device.discover()
             device.set_project_key(KEY_SELECTION_KEY, KEY_SELECTION_IV)
             check_key_selection(device)
@@ -430,8 +559,12 @@ def run_test(args: argparse.Namespace) -> str:
             device.wait_for(f"UDP_READY {device.name} {nonce}")
 
         relay = Relay(project_key, project_iv)
+        if secure:
+            sec_relay = SecRelay()
         for source, target in ((devices[0], devices[1]), (devices[1], devices[0])):
             relay.target_port = target.udp_port
+            if sec_relay is not None:
+                sec_relay.target_port = target.sec_port
             if source.call("return udp_start(false)", retries=1) != "started":
                 raise RuntimeError(f"{source.name}: failed to start native UDP exchange")
             source.wait_for(f"UDP_DONE {source.name} {nonce}", timeout=45)
@@ -442,7 +575,21 @@ def run_test(args: argparse.Namespace) -> str:
             for sequence in range(1, 4):
                 source.wait_for(f"UDP_REPLY_OK {source.name} {sequence} {nonce}")
                 target.wait_for(f"UDP_RECEIVED {target.name} {nonce}:{source.name}:ping:{sequence}")
+            if sec_relay is not None and source is devices[0]:
+                captured_request = sec_relay.last_data  # A's ping 3 to B
 
+        if sec_relay is not None:
+            # Resend A's ping 3 to B unchanged: B must drop it (a second udp_ping(3) would also log
+            # "bad UDP sequence").
+            if captured_request is None:
+                raise RuntimeError("no secure DATA request captured for the replay check")
+            sec_relay.last_data = captured_request
+            sec_relay.replay_last_data()
+            time.sleep(2)
+            if devices[1].call("return udp_completed", retries=1) != "3" or devices[1].call(
+                    "return udp_received", retries=1) != "3":
+                raise RuntimeError("B acted on a replayed secure-channel packet")
+            sec_relay.drop = True
         relay.target_port = None
         if devices[0].call("return udp_start(true)", retries=1) != "started":
             raise RuntimeError("A: failed to start dropped-packet timeout check")
@@ -451,6 +598,15 @@ def run_test(args: argparse.Namespace) -> str:
             raise RuntimeError("B received a packet that should have been dropped")
         if relay.errors:
             raise RuntimeError(f"UDP relay failed: {relay.errors}")
+        if sec_relay is not None:
+            if sec_relay.errors:
+                raise RuntimeError(f"secure UDP relay failed: {sec_relay.errors}")
+            validate_secure_records(relay.records, sec_relay.records)
+            check_logs(devices, nonce, secure=True)
+            return (
+                "PASS: secure CLU channel A -> B 3/3, B -> A 3/3 over UDP 1235 (auto-paired, no CLU traffic on "
+                f"UDP 1234); replayed DATA ignored; dropped-packet timeout verified. nonce={nonce}"
+            )
         validate_packet_records(relay.records)
         check_logs(devices, nonce)
         summary = (
@@ -460,6 +616,13 @@ def run_test(args: argparse.Namespace) -> str:
         return summary
     finally:
         try:
+            if sec_relay is not None:
+                try:
+                    sec_relay.close()
+                finally:
+                    (args.out_dir / "secure-packets.json").write_text(
+                        json.dumps(sec_relay.records, indent=2) + "\n", encoding="utf-8"
+                    )
             if relay is not None:
                 try:
                     relay.close()
@@ -483,6 +646,8 @@ def main() -> int:
     parser.add_argument("--psram-size", default="8M", help="emulated PSRAM size (for example 2M or 8M)")
     parser.add_argument("--host-timeout", type=float, default=240, help="overall wall-clock timeout in seconds")
     parser.add_argument("--emulator-timeout", type=int, default=180, help="each emulator time limit in seconds")
+    parser.add_argument("--secure", action="store_true",
+                        help="firmware built with CLU_SECURE_CHANNEL: CLU calls must use UDP 1235 (SECURE.md)")
     args = parser.parse_args()
     if args.host_timeout <= 0 or args.emulator_timeout <= 0:
         parser.error("timeouts must be greater than zero")

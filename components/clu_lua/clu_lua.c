@@ -835,6 +835,8 @@ static int vm_setup(lua_State *L)
     lua_setfield(L, -2, "sn");
     lua_pushboolean(L, s_cfg.gate);
     lua_setfield(L, -2, "gate");
+    lua_pushboolean(L, s_cfg.secure);
+    lua_setfield(L, -2, "secure");
     for (int i = 0; i < s_n_exts; i++) {
         if (s_exts[i].fns) {
             luaL_setfuncs(L, s_exts[i].fns, 0);

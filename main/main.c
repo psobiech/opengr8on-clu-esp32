@@ -59,6 +59,10 @@
 #include "tfbus_uart.h"
 #include "udp_server.h"
 
+#ifndef CONFIG_CLU_SECURE_CHANNEL
+#define CONFIG_CLU_SECURE_CHANNEL 0
+#endif
+
 static const char *TAG = "main";
 
 #if !CONFIG_CLU_WIFI && !CONFIG_CLU_ETH
@@ -479,6 +483,7 @@ void app_main(void)
         .sn = g_clu.sn,
         .fw_version = CLU_FW_VERSION,
         .gate = CLU_IS_GATE,
+        .secure = CONFIG_CLU_SECURE_CHANNEL,
         .reset_reason = boot_reset_reason(),
         .report = udp_server_send_report,
         .on_init = on_lua_init,

@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "clu_crypto.h"
@@ -35,6 +36,16 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "sdkconfig.h"
+
+#ifndef CONFIG_CLU_SECURE_CHANNEL
+#define CONFIG_CLU_SECURE_CHANNEL 0
+#endif
+#ifndef CONFIG_CLU_SEC_DISABLE_LEGACY
+#define CONFIG_CLU_SEC_DISABLE_LEGACY 0
+#endif
+#if CONFIG_CLU_SECURE_CHANNEL
+#include "clu_sec.h"
+#endif
 
 static const char *TAG = "udp";
 static int s_sock = -1;
@@ -91,6 +102,15 @@ static bool setup_window_open(void)
 #else
     return true;
 #endif
+}
+
+/**
+ * @brief True when the legacy protocol is restricted (CLU_SEC_DISABLE_LEGACY outside the setup
+ * window): only discovery, the pubkey request and checkAlive() are served on UDP 1234.
+ */
+static bool legacy_locked(void)
+{
+    return CONFIG_CLU_SEC_DISABLE_LEGACY && !setup_window_open();
 }
 
 /**
@@ -195,6 +215,8 @@ static const char *local_ip(uint32_t peer_be, char buf[16])
 // send_enc runs in the UDP task and in the Lua task (clientReport via udp_server_send_report):
 // the shared output buffer is guarded.
 static SemaphoreHandle_t s_tx_lock;
+// lua_request()'s result buffer: the UDP task and the secure channel worker both answer Lua calls.
+static SemaphoreHandle_t s_lua_lock;
 
 /**
  * @brief Encrypt @p plain with @p key and send it to @p to.
@@ -424,7 +446,7 @@ static void on_set_ip(const char *request_text, const clu_cipher_t *used, bool b
 void udp_server_send_report(const char *addr, int port, const char *body)
 {
     struct sockaddr_in to = {.sin_family = AF_INET, .sin_port = htons(port)};
-    if (s_sock < 0 || inet_aton(addr, &to.sin_addr) == 0) {
+    if (s_sock < 0 || inet_aton(addr, &to.sin_addr) == 0 || legacy_locked()) {
         return;
     }
     char *msg = malloc(strlen(body) + 32);
@@ -436,26 +458,29 @@ void udp_server_send_report(const char *addr, int port, const char *body)
     free(msg);
 }
 
+static int lua_exec(const char *script, uint32_t from_be, bool privileged, char *out, size_t cap);
+
 /**
- * @brief `req:<ip>:<session>:<script>`: evaluate the script in the Lua runtime and answer
- * `resp:<ip>:<session>:<value>`.
+ * @brief Legacy `req:<ip>:<session>:<script>`: evaluate the script in the Lua runtime and build the answer
+ * `resp:<ip>:<session>:<value>` (or `resp:ERROR`).
  *
- * @param s          Plaintext request (modified in place).
- * @param used       Key the request decrypted with (the answer uses it).
- * @param privileged Request came under the project/temp key; otherwise only checkAlive() is allowed.
- * @param from       Sender.
+ * @param request_text Plaintext request (modified in place).
+ * @param from_be      Sender IPv4, network order.
+ * @param privileged   Otherwise only checkAlive() is allowed.
+ * @param response     Answer buffer.
+ * @param cap          Capacity of @p response.
+ * @return Answer length, 0 for a malformed request (no answer).
  */
-static void on_lua(char *request_text, const clu_cipher_t *used, bool privileged,
-                   const struct sockaddr_in *from)
+static size_t lua_request(char *request_text, uint32_t from_be, bool privileged, char *response, size_t cap)
 {
     // req:<ip>:<session>:<script>[\r\n]
     char *session_separator = strchr(request_text + 4, ':');
     if (!session_separator) {
-        return;
+        return 0;
     }
     char *script_separator = strchr(session_separator + 1, ':');
     if (!script_separator) {
-        return;
+        return 0;
     }
     *script_separator = 0;
     unsigned long session = strtoul(session_separator + 1, NULL, 16);
@@ -465,13 +490,101 @@ static void on_lua(char *request_text, const clu_cipher_t *used, bool privileged
         script[--script_length] = 0;
     }
 
-    if (!privileged && strcasecmp(script, "checkAlive()") != 0) {
-        send_str(used, "resp:ERROR", from);
-        return;
-    }
     static char val[BUF_SZ - 64];
+    if (lua_exec(script, from_be, privileged, val, sizeof val) < 0) {
+        return (size_t)snprintf(response, cap, "resp:ERROR");
+    }
+    char local_ip_buffer[16];
+    int written = snprintf(response, cap, "resp:%s:%08lx:%s", local_ip(from_be, local_ip_buffer), session, val);
+    return written < 0 ? 0 : (size_t)written < cap ? (size_t)written : cap - 1;
+}
+
+/**
+ * @brief Legacy `req:<ip>:<session>:<script>`: run lua_request() and answer under @p used.
+ *
+ * @param request_text Plaintext request (modified in place).
+ * @param used       Key the request decrypted with (the answer uses it).
+ * @param privileged Request came under the project/temp key; otherwise only checkAlive() is allowed.
+ * @param from       Sender.
+ */
+static void on_lua(char *request_text, const clu_cipher_t *used, bool privileged,
+                   const struct sockaddr_in *from)
+{
+    static char response[BUF_SZ];
+    if (lua_request(request_text, from->sin_addr.s_addr, privileged, response, sizeof response)) {
+        send_str(used, response, from);
+    }
+}
+
+#if CONFIG_CLU_SECURE_CHANNEL
+/**
+ * @brief Secure channel request from a paired peer: run the script, return its value.
+ */
+static size_t secure_request(const char *script, uint32_t from_be, char *out, size_t cap)
+{
+    int value_length = lua_exec(script, from_be, true, out, cap);
+    return value_length < 0 ? 0 : (size_t)value_length;
+}
+
+static uint64_t secure_wall_ms(void)
+{
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    return now.tv_sec >= 1700000000 ? (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_usec / 1000u : 0;
+}
+
+/**
+ * @brief `req:upgrade:v1:<cmd>[:arg]` on the legacy protocol.
+ *
+ * pubkey: `resp:upgrade:v1:pubkey:<sn>:<64 hex>:<port>` (the key is pinned on pairing, never trusted
+ * from this answer). forget:<sn|fingerprint>: setup window only, `resp:upgrade:v1:forget:<n>`.
+ */
+static void on_upgrade(const char *cmd, const clu_cipher_t *used, const struct sockaddr_in *from)
+{
+    char response[160];
+    if (strcmp(cmd, "pubkey") == 0 && clu_sec_active()) {
+        int prefix_length = snprintf(response, sizeof response, "resp:upgrade:v1:pubkey:");
+        size_t key_length = clu_sec_pubkey_text(response + prefix_length, sizeof response - (size_t)prefix_length);
+        snprintf(response + prefix_length + key_length, sizeof response - (size_t)prefix_length - key_length, ":%d",
+                 CONFIG_CLU_SEC_PORT);
+    } else if (strncmp(cmd, "forget:", 7) == 0 && clu_sec_active()) {
+        if (!setup_window_open()) {
+            log_locked("req:upgrade:v1:forget", from);
+            snprintf(response, sizeof response, "resp:ERROR");
+        } else {
+            snprintf(response, sizeof response, "resp:upgrade:v1:forget:%d", clu_sec_forget(cmd + 7));
+        }
+    } else {
+        snprintf(response, sizeof response, "resp:ERROR");
+    }
+    send_str(used, response, from);
+}
+#endif
+
+/**
+ * @brief Evaluate @p script in the Lua runtime (serialized by s_lua_lock) and copy its value to @p out.
+ *
+ * Shared by the legacy protocol and the secure channel.
+ *
+ * @param script     Script, CR/LF already stripped.
+ * @param from_be    Sender IPv4, network order.
+ * @param privileged Otherwise only checkAlive() is allowed.
+ * @param out        Value buffer (NUL-terminated).
+ * @param cap        Capacity of @p out.
+ * @return Value length, or -1 when the script is not allowed.
+ */
+static int lua_exec(const char *script, uint32_t from_be, bool privileged, char *out, size_t cap)
+{
+    if (!privileged && strcasecmp(script, "checkAlive()") != 0) {
+        return -1;
+    }
+    static char val[BUF_SZ - 64]; // shared by the UDP task and the secure worker: s_lua_lock
+    struct in_addr from_address = {.s_addr = from_be};
     char from_ip[16];
-    inet_ntoa_r(from->sin_addr, from_ip, sizeof from_ip);
+    inet_ntoa_r(from_address, from_ip, sizeof from_ip);
+    if (s_lua_lock) {
+        xSemaphoreTake(s_lua_lock, portMAX_DELAY);
+    }
     if (clu_lua_call(script, from_ip, val, sizeof val, LUA_CALL_TIMEOUT_MS) != ESP_OK) {
         if (strcasecmp(script, "checkAlive()") == 0) {
             strcpy(val, "false"); // runtime busy / not ready
@@ -480,10 +593,14 @@ static void on_lua(char *request_text, const clu_cipher_t *used, bool privileged
             strcpy(val, "nil");
         }
     }
-    static char response[BUF_SZ];
-    char local_ip_buffer[16];
-    snprintf(response, sizeof response, "resp:%s:%08lx:%s", local_ip(from->sin_addr.s_addr, local_ip_buffer), session, val);
-    send_str(used, response, from);
+    size_t value_length = strnlen(val, sizeof val);
+    value_length = value_length < cap - 1 ? value_length : cap - 1;
+    memcpy(out, val, value_length);
+    out[value_length] = 0;
+    if (s_lua_lock) {
+        xSemaphoreGive(s_lua_lock);
+    }
+    return (int)value_length;
 }
 
 /**
@@ -538,6 +655,14 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
     if (bcast) {
         return;
     }
+#if CONFIG_CLU_SECURE_CHANNEL
+    if (strncmp(command_text, "req:upgrade:v1:", 15) == 0) {
+        command_text[strcspn(command_text, "\r\n")] = 0;
+        on_upgrade(command_text + 15, used, from);
+        return;
+    }
+#endif
+    const bool locked = legacy_locked();
     if (keyed_cmd(buf, len, "req_set_key", &tail, &tail_len)) {
         if (!setup) {
             log_locked("req_set_key", from);
@@ -545,6 +670,12 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
             return;
         }
         on_set_key(tail, tail_len, buf, used, from);
+        return;
+    }
+    if (locked && !starts(buf, len, "req")) {
+        // CLU_SEC_DISABLE_LEGACY: reset, TFTP, diagnostics, module refresh only in the window.
+        log_locked("legacy command", from);
+        send_str(used, "resp:ERROR", from);
         return;
     }
     if (starts(buf, len, "req_reset")) {
@@ -567,7 +698,8 @@ static void dispatch(uint8_t *buf, size_t len, const clu_cipher_t *used, bool us
         esp_restart();
     }
     if (starts(buf, len, "req")) {
-        on_lua(command_text, used, used_project || used_temp, from);
+        // CLU_SEC_DISABLE_LEGACY: only checkAlive() outside the window.
+        on_lua(command_text, used, (used_project || used_temp) && !locked, from);
         return;
     }
     if (used_project && !setup &&
@@ -761,6 +893,28 @@ static void remote_call(int sock, const remote_req_t *remote_request)
         clu_lua_post_remote(remote_request->id, NULL);
         return;
     }
+    char sess[10];
+    snprintf(sess, sizeof sess, "%08lx", (unsigned long)session);
+#if CONFIG_CLU_SECURE_CHANNEL
+    {
+        static char secure_reply[BUF_SZ];
+        clu_sec_result_t result = clu_sec_call(remote_request->ip, remote_request->script, secure_reply,
+                                               sizeof secure_reply, REMOTE_TIMEOUT_MS);
+        if (result == CLU_SEC_OK) {
+            clu_lua_post_remote(remote_request->id, secure_reply);
+            return;
+        }
+        if (result == CLU_SEC_FAIL) {
+            clu_lua_post_remote(remote_request->id, NULL);
+            return;
+        }
+    }
+#endif
+    if (legacy_locked()) {
+        ESP_LOGW(TAG, "remote call to a legacy CLU refused (legacy protocol disabled)");
+        clu_lua_post_remote(remote_request->id, NULL);
+        return;
+    }
     clu_cipher_t key = g_clu.project;
     int encrypted_length = clu_encrypt(&key, (const uint8_t *)msg, message_length, enc, sizeof enc);
     struct sockaddr_in to = {.sin_family = AF_INET, .sin_port = htons(CLU_UDP_PORT),
@@ -773,8 +927,6 @@ static void remote_call(int sock, const remote_req_t *remote_request)
         return;
     }
 
-    char sess[10];
-    snprintf(sess, sizeof sess, "%08lx", (unsigned long)session);
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(REMOTE_TIMEOUT_MS);
     while ((int32_t)(deadline - xTaskGetTickCount()) > 0) {
         struct sockaddr_in from;
@@ -837,10 +989,19 @@ static void remote_task(void *arg)
 void udp_server_start(void)
 {
     s_tx_lock = xSemaphoreCreateMutex();
+    s_lua_lock = xSemaphoreCreateMutex();
     s_remote_q = xQueueCreate(REMOTE_QUEUE, sizeof(remote_req_t));
     s_discovery_q = xQueueCreate(DISCOVERY_QUEUE, sizeof(discovery_reply_t));
     xTaskCreatePinnedToCore(discovery_task, "clu_disc", 4096, NULL, 4, NULL, 0);
     xTaskCreatePinnedToCore(udp_task, "clu_udp", 8192, NULL, 5, NULL, 0);
-    xTaskCreatePinnedToCore(remote_task, "clu_remote", 6144, NULL, 4, NULL, 0);
+    // The secure path runs probe / handshake (X25519) on this task's stack.
+    xTaskCreatePinnedToCore(remote_task, "clu_remote", CONFIG_CLU_SECURE_CHANNEL ? 8192 : 6144, NULL, 4, NULL, 0);
+#if CONFIG_CLU_SECURE_CHANNEL
+    clu_sec_cfg_t secure_cfg = {.serial_number = g_clu.sn,
+                                .pairing_allowed = setup_window_open,
+                                .wall_ms = secure_wall_ms,
+                                .handle_request = secure_request};
+    clu_sec_start(&secure_cfg);
+#endif
     setup_start();
 }

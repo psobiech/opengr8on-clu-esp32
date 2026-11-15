@@ -238,6 +238,7 @@ pierwszym `req_set_key`. Linia z PIN-em trafia tylko na UART, nie na telnet.
 |---|---|
 | `main/` | start, WiFi/Ethernet/IP (`clu_net`, `clu_eth`), czas/SNTP/RTC (`clu_time`), serwer UDP/1234 (`udp_server`), diagnostyka OM (`clu_diag`), stan CLU (`clu_state`) |
 | `components/clu_crypto` | AES-128-CBC/PKCS#7 (PSA crypto, mbedtls 4) |
+| `components/clu_secure` | bezpieczny kanał (Noise IK, przypinanie kluczy), zob. [SECURE.md](SECURE.md) |
 | `components/clu_proto` | wyprowadzanie kluczy, ramkowanie TF-Bus, emulowane moduły TF-Bus, protokół TFTP, linie MySensors (czysty C, testowany na hoście) |
 | `components/clu_lua` | środowisko Lua: prelude (model obiektów OM), obiekty wirtualne (`objects.lua`) |
 | `components/lua` | Lua 5.3.6 (domyślnie, jak w CLU) i 5.5.1 (opcja `CLU_LUA_5_5`), domyślnie `float` + 64-bitowe liczby całkowite; opcjonalny tryb 32-bit (`CLU_LUA_32BITS`) |
@@ -252,6 +253,7 @@ pierwszym `req_set_key`. Linia z PIN-em trafia tylko na UART, nie na telnet.
 | `components/clu_rtc` | zegar RTC PCF85063 albo DS3231 na I2C (podtrzymywany bateryjnie) |
 | `components/clu_i2c` | wspólne magistrale I2C (jedna na parę pinów: RTC + ekspander IO) |
 | `components/clu_localio` | IO płytki (PCF8575) jako moduł IO_MODULE_DIN_8 odpowiadający na ramki TF-Bus |
+| `tools/clu_sec.py` | klient bezpiecznego kanału: parowanie, wywołania Lua, zob. [SECURE.md](SECURE.md) |
 | `tools/mknvs.py` | obraz partycji `cfg` z ustawieniami dla gotowych obrazów (seryjny, PIN, WiFi, MQTT) |
 | `web/` | flasher w przeglądarce (GitHub Pages): obraz z Releases + ustawienia generowane na stronie (`web/nvs.js`) |
 
@@ -334,6 +336,7 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 - **`MQTT.*` w USER.LUA** — własne mapowania encji, ukrywanie, publikowanie dowolnych tematów.
 - **MySensors zamiast TF-Bus** (opcja kompilacji), zob. [MYSENSORS.md](MYSENSORS.md).
 - **Emulacja GATE HTTP** (HttpRequest / HttpListener) zamiast CLU, zob. [GATE_HTTP.md](GATE_HTTP.md).
+- **Bezpieczny kanał CLU↔CLU** (opcja, Noise IK, przypinane klucze), zob. [SECURE.md](SECURE.md).
 - **Bez chmury Grentona** — OM nie rejestruje CLU w chmurze (zob. niżej).
 - **Aktualizacja firmware przez sieć** (OTA, HTTP z hasłem, cofanie nieudanej aktualizacji).
 - **Lua 5.5** jako opcja kompilacji.

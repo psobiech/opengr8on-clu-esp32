@@ -30,6 +30,11 @@ CONFIG_HEAP_POISONING_LIGHT=y
 # OTA HTTP server (listener, control socket, 2 clients)
 CONFIG_LWIP_MAX_SOCKETS=16
 
+# esp-mqtt sends one queued (enqueued) message per task loop pass and then waits up to this long for
+# inbound data: at the default 1000 ms a burst of N state updates took N seconds to reach the broker.
+CONFIG_MQTT_USE_CUSTOM_CONFIG=y
+CONFIG_MQTT_POLL_READ_TIMEOUT_MS=20
+
 # OTA (components/clu_ota): a new image that restarts before it reaches the network (clu_ota_confirm)
 # is rolled back to the previous one by the bootloader.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

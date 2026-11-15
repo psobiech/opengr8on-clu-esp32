@@ -46,6 +46,16 @@ menu "OpenGr8on ESP32 CLU"
 
     endif
 
+    config CLU_NET_DIAG_INTERVAL
+        int "Network diagnostics log interval (s, 0 = off)"
+        range 0 3600
+        default 0
+        help
+            Every N seconds log one line: internal heap (free / minimum ever / largest block),
+            PSRAM free, interfaces up, MQTT link, and with WiFi the AP (BSSID, channel, RSSI),
+            followed by the WiFi driver's buffer statistics (esp_wifi_statis_dump). For chasing
+            link stalls: correlate with MQTT drops and the broker log.
+
     menuconfig CLU_ETH
         bool "Ethernet"
         default y if IDF_TARGET_ESP32

@@ -37,10 +37,12 @@
 #include "clu_telnet.h"
 #include "clu_tftp.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #if CONFIG_CLU_ETH
 #include "esp_eth.h"
@@ -97,6 +99,41 @@ static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
     net_state(id == IP_EVENT_STA_GOT_IP ? CLU_NET_WIFI : CLU_NET_ETH, true);
     clu_ota_confirm(); // a fresh OTA image that reached the network is kept (no rollback)
 }
+
+#if CONFIG_CLU_NET_DIAG_INTERVAL > 0
+/** @brief Periodic network diagnostics line (CLU_NET_DIAG_INTERVAL), esp_timer task. */
+static void net_diag(void *arg)
+{
+    char wifi[64] = "";
+#if CONFIG_CLU_WIFI
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+        snprintf(wifi, sizeof wifi, " | ap " MACSTR " ch %d rssi %d", MAC2STR(ap.bssid), ap.primary, ap.rssi);
+    } else {
+        strlcpy(wifi, " | ap none", sizeof wifi);
+    }
+#endif
+    ESP_LOGI(TAG, "diag: heap %u min %u big %u psram %u | net wifi %d eth %d | mqtt %d%s",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), !!(s_net_up & 1u << CLU_NET_WIFI),
+             !!(s_net_up & 1u << CLU_NET_ETH), clu_mqtt_connected(), wifi);
+#if CONFIG_CLU_WIFI
+    esp_wifi_statis_dump(WIFI_STATIS_BUFFER | WIFI_STATIS_RXTX);
+#endif
+}
+
+/** @brief Start the periodic diagnostics timer. */
+static void net_diag_start(void)
+{
+    const esp_timer_create_args_t args = {.callback = net_diag, .name = "net_diag"};
+    esp_timer_handle_t timer;
+    if (esp_timer_create(&args, &timer) == ESP_OK) {
+        esp_timer_start_periodic(timer, CONFIG_CLU_NET_DIAG_INTERVAL * 1000000ULL);
+    }
+}
+#endif
 
 #if CONFIG_CLU_ETH
 /** @brief Ethernet link down: that interface down at once (IP_EVENT_ETH_LOST_IP only follows after a timer). */
@@ -228,6 +265,9 @@ static void net_start(void)
 #endif
 #if CONFIG_CLU_WIFI
     wifi_start();
+#endif
+#if CONFIG_CLU_NET_DIAG_INTERVAL > 0
+    net_diag_start();
 #endif
 }
 

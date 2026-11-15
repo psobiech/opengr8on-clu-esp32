@@ -1,4 +1,16 @@
 -- @file mqtt_defaults.lua
+-- TF-Bus module hwType -> model (Home Assistant device per module, "<model> <serial>").
+local MODULE_MODELS = {
+  [0x03] = "SMART PANEL FM 4",
+  [0x15] = "RELAY DIN 4",
+  [0x17] = "ROLLER SH DIN",
+  [0x18] = "LED RGBW DIN",
+  [0x1a] = "DIMMER MOSFET DIN",
+  [0x1c] = "TOUCH PANEL FM 4",
+  [0x1e] = "IO MODULE DIN 8",
+  [0x2a] = "ROLLER SH DIN 3",
+}
+
 local DEFAULTS = {
   [3] = { { kind = "binary_sensor" }, { kind = "event" } },                         -- DIN
   [4] = { { kind = "switch" } },                                                    -- DOUT

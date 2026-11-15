@@ -139,7 +139,13 @@ local sw = find(CFG .. "switch" .. NODE .. "DOU0001/config")
 check("DOU -> switch discovery", sw ~= nil and sw.r == true and sw.q == 1)
 check("switch uses ~ base", sw and sw.p:find('"~":"grenton/CLU100000001/DOU0001"', 1, true) ~= nil)
 check("friendly name from NAME_IO", sw and sw.p:find('"name":"LIGHT A"', 1, true) ~= nil)
-check("device named from NAME_CLU", sw and sw.p:find('"name":"CLU TEST"', 1, true) ~= nil)
+check("module IO on its module device (model + serial)", sw and sw.p:find(
+  '"device":{"identifiers":["opengr8on_CLU100000001_13ab6c81"],"model":"IO MODULE DIN 8","name":"IO MODULE DIN 8 330001537","serial_number":"330001537","via_device":"opengr8on_CLU100000001"}', 1, true) ~= nil)
+local tmr_cfg = find(CFG .. "sensor" .. NODE .. "TMR0001/config")
+check("virtual object on the CLU device, named from NAME_CLU",
+  tmr_cfg and tmr_cfg.p:find('"identifiers":["opengr8on_CLU100000001"]', 1, true) and tmr_cfg.p:find('"name":"CLU TEST"', 1, true) ~= nil)
+local rol_cfg = find(CFG .. "cover" .. NODE .. "ROL0001/config")
+check("other module: own device", rol_cfg and rol_cfg.p:find('"name":"ROLLER SH DIN 3 550000001"', 1, true) ~= nil)
 check("availability topic", sw and sw.p:find('"availability_topic":"grenton/CLU100000001/status"', 1, true) ~= nil)
 check("unique_id", sw and sw.p:find('"unique_id":"opengr8on_CLU100000001_DOU0001"', 1, true) ~= nil)
 check("override: DOU0002 -> light", find(CFG .. "light" .. NODE .. "DOU0002/config") ~= nil)
@@ -217,10 +223,13 @@ check("leaf sensors: state_topic is ~", (find(CFG .. "sensor" .. NODE .. "system
 check("no flat system_* / module topics", count("grenton/CLU100000001/system_") == 0 and count("grenton/CLU100000001/13ab6c81") == 0)
 check("tfbus counters", (find("grenton/CLU100000001/system/tfbus/online") or {}).p ~= nil
   and (find("grenton/CLU100000001/system/tfbus/total") or {}).p ~= nil)
+local link_cfg = find(CFG .. "binary_sensor" .. NODE .. "system_tfbus_modules_13ab6c81/config")
+check("module link entity on the module device", link_cfg and link_cfg.p:find('"identifiers":["opengr8on_CLU100000001_13ab6c81"]', 1, true)
+  and link_cfg.p:find('"name":"TF-Bus link"', 1, true) ~= nil)
 check("module connectivity", (find("grenton/CLU100000001/system/tfbus/modules/13ab6c81") or {}).p == "ON"
   and (find("grenton/CLU100000001/system/tfbus/modules/20c85581") or {}).p == "OFF"
   and (find(CFG .. "binary_sensor" .. NODE .. "system_tfbus_modules_13ab6c81/config") or {}).p:find('"device_class":"connectivity"', 1, true) ~= nil
-  and (find(CFG .. "binary_sensor" .. NODE .. "system_tfbus_modules_13ab6c81/config") or {}).p:find('"name":"Module 330001537"', 1, true) ~= nil)
+  and (find(CFG .. "binary_sensor" .. NODE .. "system_tfbus_modules_13ab6c81/config") or {}).p:find('"name":"TF-Bus link"', 1, true) ~= nil)
 check("heap in KiB", (find("grenton/CLU100000001/system/memory/heap_free") or {}).p == "200")
 check("rssi", (find("grenton/CLU100000001/system/network/rssi") or {}).p == "-61")
 check("ip text sensor", (find("grenton/CLU100000001/system/network/ip") or {}).p == "192.168.1.100"

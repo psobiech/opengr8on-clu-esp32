@@ -28,7 +28,25 @@ local function load_labels()
   end
 end
 
-local device, origin
+local device, origin, module_devices
+
+-- Home Assistant device of a module object (class 2): CLU > module > its inputs / outputs.
+local function module_device(module)
+  local module_dev = module_devices[module]
+  if not module_dev then
+    local model = MODULE_MODELS[module._hwType] or string.format("Module 0x%02X", tonumber(module._hwType) or 0)
+    local sn = tostring(module._sn)
+    module_dev = {
+      identifiers = { NODE .. "_" .. module._name },
+      name = model .. " " .. sn,
+      model = model,
+      serial_number = sn,
+      via_device = NODE,
+    }
+    module_devices[module] = module_dev
+  end
+  return module_dev
+end
 
 local function build()
   if not labels then load_labels() end
@@ -41,7 +59,7 @@ local function build()
     sw_version = cfg.fw,
   }
   origin = { name = "opengr8on-clu-esp32" }
-  entities, by_base, by_object = {}, {}, {}
+  entities, by_base, by_object, module_devices = {}, {}, {}, {}
 
   local function add(name, object, entity_options)
     for entity_index, options in ipairs(entity_options or {}) do
@@ -51,6 +69,8 @@ local function build()
       else
         local entity = kind(object, options)
         entity.obj = object
+        local module = object._class == 2 and object or object._module -- module itself / its IO
+        if type(module) == "table" and module._sn ~= nil then entity.device = module_device(module) end
         -- e.base: topic path under root. First state-bearing entity of an object owns
         -- <root>/<obj>; later ones get <obj>_<n>; opts.group prefixes a path ("system/memory").
         local base = options.base or name
@@ -114,7 +134,7 @@ end
 
 local function config_payload(entity)
   local discovery = { ["~"] = ROOT .. "/" .. entity.base, name = entity.name, unique_id = entity.uid,
-              availability_topic = cfg.status, device = device, origin = origin }
+              availability_topic = cfg.status, device = entity.device or device, origin = origin }
   for key, value in pairs(entity.disc) do discovery[key] = value end
   return json(discovery)
 end

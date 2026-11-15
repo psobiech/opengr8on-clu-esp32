@@ -497,8 +497,10 @@ przeciwnym razie wbudowany pakiet publicznych CA.
 
 1. Zainstaluj broker (np. dodatek Mosquitto) i integrację MQTT w HA z włączonym discovery.
 2. Utwórz użytkownika brokera dla CLU, wpisz URI i dane w menuconfig, zbuduj i wgraj.
-3. Wgraj projekt z OM. Po połączeniu CLU pojawia się w HA jako jedno urządzenie nazwane według
-   `-- NAME_CLU` z OM.LUA; encje mają nazwy z komentarzy `-- NAME_IO`.
+3. Wgraj projekt z OM. Po połączeniu CLU pojawia się w HA jako urządzenie nazwane według
+   `-- NAME_CLU` z OM.LUA, a każdy moduł TF-Bus jako osobne urządzenie podpięte pod CLU
+   (`via_device`, nazwa `<model> <numer seryjny>`) z własnymi wejściami / wyjściami; obiekty
+   wirtualne i diagnostyka zostają przy CLU. Encje mają nazwy z komentarzy `-- NAME_IO`.
 
 Discovery (`homeassistant/<component>/opengr8on_CLU<serial>/<obj>/config`, retained) jest wysyłane
 przy każdym połączeniu i gdy HA opublikuje `online` na `homeassistant/status`. Konfiguracje encji,

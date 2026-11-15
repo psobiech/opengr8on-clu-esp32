@@ -77,7 +77,7 @@ end
 KINDS.module = function(object)
   return {
     comp = "binary_sensor",
-    default_name = object._sn and string.format("Module %d", object._sn),
+    default_name = "TF-Bus link", -- on the module's own device
     disc = { state_topic = "~/state", device_class = "connectivity" },
     states = {
       state = function()

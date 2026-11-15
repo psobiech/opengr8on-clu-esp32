@@ -50,7 +50,7 @@ typedef struct {
         struct { const char *topic, *msg; int qos, retain; } last_will;
         int keepalive;
     } session;
-    struct { int reconnect_timeout_ms; } network;
+    struct { int timeout_ms; int reconnect_timeout_ms; } network;
     struct { int size; } buffer;
 } esp_mqtt_client_config_t;
 

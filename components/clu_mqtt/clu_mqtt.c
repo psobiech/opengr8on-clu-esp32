@@ -207,7 +207,10 @@ static bool client_create(void)
         .credentials.client_id = s_client_id,
         .session.keepalive = CONFIG_CLU_MQTT_KEEPALIVE,
         .session.last_will = {.topic = s_status, .msg = "offline", .qos = 1, .retain = 1},
-        .network.reconnect_timeout_ms = 5000,
+        // A stalled write (WiFi TX not getting through) blocks the MQTT task for this long before the
+        // connection is dropped, and again on the ping after a failed resend: 10 s default -> 4 s.
+        .network.timeout_ms = 4000,
+        .network.reconnect_timeout_ms = 2000,
         .buffer.size = 2048,
     };
     if (username()[0]) {

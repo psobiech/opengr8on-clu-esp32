@@ -45,10 +45,14 @@ static void check(const char *name, int cond)
 struct host_queue {
     size_t item, cap, head, n;
     uint8_t *buf;
+    struct host_queue *next; // all queues, freed at exit
 };
+static struct host_queue *s_queues;
 QueueHandle_t xQueueCreate(UBaseType_t len, UBaseType_t item)
 {
     QueueHandle_t q = calloc(1, sizeof *q);
+    q->next = s_queues;
+    s_queues = q;
     q->item = item;
     q->cap = len;
     q->buf = calloc(len, item);
@@ -459,6 +463,12 @@ int main(void)
 
     lua_close(L);
     free(s_ca_pem);
+    while (s_queues) {
+        struct host_queue *q = s_queues;
+        s_queues = q->next;
+        free(q->buf);
+        free(q);
+    }
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

@@ -27,9 +27,9 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .ccache
-          key: ccache-firmware-${{ runner.os }}-${{ runner.arch }}-esp-idf-v6.1.0-${{ inputs.target }}-${{ inputs.preset }}-${{ hashFiles('CMakePresets.json', 'sdkconfig.defaults*', 'sdkconfig.*', 'dependencies.lock', 'components/**/idf_component.yml', 'main/idf_component.yml') }}-${{ github.sha }}
+          key: ccache-firmware-${{ runner.os }}-${{ runner.arch }}-esp-idf-v6.1.1-${{ inputs.target }}-${{ inputs.preset }}-${{ hashFiles('CMakePresets.json', 'sdkconfig.defaults*', 'sdkconfig.*', 'dependencies.lock', 'components/**/idf_component.yml', 'main/idf_component.yml') }}-${{ github.sha }}
           restore-keys: |
-            ccache-firmware-${{ runner.os }}-${{ runner.arch }}-esp-idf-v6.1.0-${{ inputs.target }}-${{ inputs.preset }}-${{ hashFiles('CMakePresets.json', 'sdkconfig.defaults*', 'sdkconfig.*', 'dependencies.lock', 'components/**/idf_component.yml', 'main/idf_component.yml') }}-
+            ccache-firmware-${{ runner.os }}-${{ runner.arch }}-esp-idf-v6.1.1-${{ inputs.target }}-${{ inputs.preset }}-${{ hashFiles('CMakePresets.json', 'sdkconfig.defaults*', 'sdkconfig.*', 'dependencies.lock', 'components/**/idf_component.yml', 'main/idf_component.yml') }}-
 
       - name: Use release compiler settings
         # appended to base defaults -> later lines override CONFIG_COMPILER_OPTIMIZATION_DEBUG for every preset
@@ -39,7 +39,7 @@ jobs:
         if: ${{ !inputs.capture-build-log }}
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v6.1.0
+          esp_idf_version: v6.1.1
           target: ${{ inputs.target }}
           path: '.'
           extra_docker_args: -v ./.ccache:/root/.ccache -e CCACHE_DIR=/root/.ccache -e CCACHE_BASEDIR=/project -e CCACHE_MAXSIZE=2G
@@ -49,7 +49,7 @@ jobs:
         if: ${{ inputs.capture-build-log }}
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v6.1.0
+          esp_idf_version: v6.1.1
           target: ${{ inputs.target }}
           path: '.'
           extra_docker_args: -v ./.ccache:/root/.ccache -e CCACHE_DIR=/root/.ccache -e CCACHE_BASEDIR=/project -e CCACHE_MAXSIZE=2G

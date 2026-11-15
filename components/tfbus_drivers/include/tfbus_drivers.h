@@ -6,6 +6,7 @@
  */
 #pragma once
 
+#include <math.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "tfbus_master.h"
@@ -55,6 +56,16 @@ extern const tfbus_driver_t tfbus_drv_roller_sh_din;
 extern const tfbus_driver_t tfbus_drv_dimmer_mosfet_din;
 extern const tfbus_driver_t tfbus_drv_led_rgbw_din;
 /** @} */
+
+/**
+ * @brief Lua number -> hundredths (21.5 -> 2150), rounded; NaN -> 0, saturated at +-2e9.
+ *
+ * Drivers keep sensor values / limits as integer hundredths: exact comparisons, no FPU in the bus task.
+ */
+static inline int32_t drv_centi(float value)
+{
+    return !(value == value) ? 0 : value >= 2e7f ? 2000000000 : value <= -2e7f ? -2000000000 : (int32_t)lroundf(value * 100.0f);
+}
 
 #ifdef __cplusplus
 }

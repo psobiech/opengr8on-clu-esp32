@@ -344,7 +344,7 @@ int main(void)
     // CLU features -> modules
 #if CLU_IS_GATE
     on_clu_feature(14, NULL, 5);
-    on_clu_feature(14, NULL, NAN);
+    on_clu_feature(14, NULL, INT32_MIN); // NaN
     on_clu_feature(2, "8.8.8.8", 0);
     on_clu_feature(3, "1.1.1.1", 0);
     on_clu_feature(18, NULL, 0);
@@ -357,8 +357,8 @@ int main(void)
 #else
     on_clu_feature(22, "ntp.example", 0);
     on_clu_feature(23, NULL, 5);
-    on_clu_feature(23, NULL, NAN);
-    on_clu_feature(23, NULL, 1e9);
+    on_clu_feature(23, NULL, INT32_MIN); // NaN
+    on_clu_feature(23, NULL, 1000000000);
     on_clu_feature(23, NULL, -3);
     on_clu_feature(25, "8.8.8.8", 0);
     on_clu_feature(26, "1.1.1.1", 0);

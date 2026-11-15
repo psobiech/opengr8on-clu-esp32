@@ -12,8 +12,8 @@
 /** @brief Panel sensor (temperature, light, ...) with change-threshold events. */
 typedef struct {
     char name[24];                    /**< Lua object name (empty = not declared). */
-    float threshold, min, max;        /**< Event threshold and valid range. */
-    float value, last_event_value;    /**< Current value and value at the last change event. */
+    int32_t threshold, min, max;      /**< Event threshold and valid range [1/100]. */
+    int32_t value, last_event_value;  /**< Current value and value at the last change event [1/100]. */
     bool have, out_of_range;          /**< Value received; currently out of [min, max]. */
 } panel_sensor_t;
 
@@ -23,9 +23,9 @@ typedef struct {
  * Events: 0 OnValueChange, 1 OnValueRise, 2 OnValueLower, 3 OnOutOfRange.
  *
  * @param sensor Sensor.
- * @param new_value New value.
+ * @param new_value New value [1/100] (posted to Lua as new_value / 100).
  */
-void panel_sensor_update(panel_sensor_t *sensor, float new_value);
+void panel_sensor_update(panel_sensor_t *sensor, int32_t new_value);
 
 /** @brief PANEL_BUTTON feature 1 Mode (SMART_PANEL_FM_4 interface). */
 enum { PANEL_MODE_MONOSTABLE = 0, PANEL_MODE_BISTABLE = 1, PANEL_MODE_LOCKED = 2 };

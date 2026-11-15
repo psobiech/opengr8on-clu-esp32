@@ -262,9 +262,9 @@ static uint32_t cb_remote(uint32_t ip, const char *script)
     snprintf(s_remote_script, sizeof s_remote_script, "%s", script);
     return s_remote_id;
 }
-static void cb_feature(int idx, const char *str, float num)
+static void cb_feature(int idx, const char *str, int32_t num)
 {
-    snprintf(s_feature, sizeof s_feature, "%d:%s:%g", idx, str ? str : "-", num);
+    snprintf(s_feature, sizeof s_feature, "%d:%s:%ld", idx, str ? str : "-", (long)num);
 }
 static bool cb_cloud(void) { return s_cloud; }
 static bool cb_reload(void)

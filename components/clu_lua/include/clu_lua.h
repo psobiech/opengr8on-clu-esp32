@@ -56,8 +56,9 @@ typedef struct {
     /** Lua call on another CLU (ip in host order, 0xC0A80191 = 192.168.1.145): queue the script and
      *  return a call id > 0 (0 = not sent). The reply goes back with clu_lua_post_remote(id, ...). */
     uint32_t (*remote)(uint32_t ip, const char *script);
-    /** Local CLU feature set from Lua (CLUxxx:set(idx, v)); str is NULL for non-string values. */
-    void (*clu_feature)(int idx, const char *str, float num);
+    /** Local CLU feature set from Lua (CLUxxx:set(idx, v)); str is NULL for non-string values; num is
+     *  the value as an integer: truncated, saturated to int32, NaN -> INT32_MIN, non-number -> 0. */
+    void (*clu_feature)(int idx, const char *str, int32_t num);
     /** CloudConnection (feature 19): true while the cloud link (MQTT broker) is up. Optional. */
     bool (*cloud_connected)(void);
     /** clu_lua_reload(): old VM closed, new one not created yet. Forget everything OM.LUA declared

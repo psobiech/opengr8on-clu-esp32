@@ -722,6 +722,21 @@ static int clu0_execute(lua_State *L, int obj, int idx, int first, int nargs)
     }
 }
 
+/** @brief Lua value at @p val as int32 for clu_feature: truncated, saturated; NaN -> INT32_MIN, non-number -> 0. */
+static int32_t feature_num(lua_State *L, int val)
+{
+    int is_integer;
+    lua_Integer integer_value = lua_tointegerx(L, val, &is_integer);
+    if (is_integer) {
+        return integer_value > INT32_MAX ? INT32_MAX : integer_value < INT32_MIN ? INT32_MIN : (int32_t)integer_value;
+    }
+    if (!lua_isnumber(L, val)) {
+        return 0;
+    }
+    lua_Number num = lua_tonumber(L, val);
+    return !(num == num) ? INT32_MIN : num >= (lua_Number)INT32_MAX ? INT32_MAX : num <= (lua_Number)INT32_MIN ? INT32_MIN : (int32_t)num;
+}
+
 /**
  * @brief Class 0 set: forward to the host's clu_feature.
  *
@@ -732,7 +747,7 @@ static bool clu0_set(lua_State *L, int obj, int idx, int val)
 {
     if (s_cfg.clu_feature) {
         s_cfg.clu_feature(idx, lua_type(L, val) == LUA_TSTRING ? lua_tostring(L, val) : NULL,
-                          lua_isnumber(L, val) ? lua_tonumber(L, val) : 0);
+                          feature_num(L, val));
     }
     // GATE: UseCloud = true switches UseNTP (21) on as well (GATE HTTP manual, NTP section).
     if (s_cfg.gate && idx == 18 &&

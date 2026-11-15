@@ -4,6 +4,7 @@
  */
 #include "ms_vmod.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -363,12 +364,31 @@ void ms_vmod_present(uint8_t node, uint8_t child, uint8_t stype, const char *des
     xSemaphoreGive(s_mx);
 }
 
+/** @brief True when the leading decimal number of @p payload is non-zero ("1", "0.5"; not "0", "0.0", "-0"). */
+static bool payload_nonzero(const char *payload)
+{
+    while (isspace((unsigned char)*payload)) {
+        payload++;
+    }
+    if (*payload == '+' || *payload == '-') {
+        payload++;
+    }
+    for (bool dot = false; isdigit((unsigned char)*payload) || (*payload == '.' && !dot); payload++) {
+        if (*payload == '.') {
+            dot = true;
+        } else if (*payload != '0') {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ms_vmod_value(uint8_t node, uint8_t child, uint8_t vtype, const char *payload)
 {
     if (!s_n) {
         return;
     }
-    bool on = strtod(payload, NULL) != 0;
+    bool on = payload_nonzero(payload); // no strtod: soft-float double parse just for a zero test
     xSemaphoreTake(s_mx, portMAX_DELAY);
     for (int i = 0; i < s_n; i++) {
         for (int j = 0; j < MS_VMOD_SLOTS; j++) {

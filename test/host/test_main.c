@@ -189,6 +189,7 @@ static clu_mqtt_cfg_t s_mc;
 void clu_mqtt_init(const clu_mqtt_cfg_t *c) { s_mc = *c; L("mqtt_init"); }
 void clu_mqtt_start(void) { L("mqtt_start"); }
 void clu_mqtt_set_enabled(bool on) { L("mqtt(%d)", on); }
+void clu_mqtt_set_online(bool on) { L("online(%d)", on); }
 bool clu_mqtt_connected(void) { return false; }
 void clu_sysinfo_init(void) { L("sysinfo"); }
 static clu_ota_cfg_t s_oc;
@@ -223,7 +224,7 @@ int main(void)
     check_log("boot order: NVS, crypto, identity (PIN logged) before the telnet hook, then storage, bus, WiFi "
               "(no wait for an IP), services, TFTP, UDP before Lua",
               "nvs_init crypto state_load telnet_init time_init mount(/fs,storage,1) config_files " BUS_BOOT
-              "netif handler(IP_EVENT,0) handler(IP_EVENT,4) net_init(wifi,sta) wifi_init handler(WIFI_EVENT,-1) "
+              "netif handler(IP_EVENT,0) handler(IP_EVENT,4) handler(IP_EVENT,1) handler(IP_EVENT,5) net_init(wifi,sta) wifi_init handler(WIFI_EVENT,-1) "
               "wifi_config ps(0) wifi_start txpower(60) sntp telnet_start ota_start mqtt_init " HTTP_BOOT "sysinfo tftp(/fs) udp_start "
               "lua_start ");
     check("storage: a:\\ and p:\\ created", !strcmp(s_mkdirs, "/fs/a /fs/p "));
@@ -301,10 +302,23 @@ int main(void)
     ip_event_got_ip_t ip = {.ip_info.ip.addr = 0x1401a8c0};
     s_log[0] = 0;
     s_ip_handler(NULL, IP_EVENT, IP_EVENT_STA_GOT_IP, &ip);
-    check_log("WiFi got IP: setup window armed, SNTP polls now, OTA image confirmed",
-              "net_up sntp_restart mqtt_start ota_confirm ");
+    check_log("WiFi got IP: setup window armed, SNTP polls now, MQTT online, OTA image confirmed",
+              "net_up sntp_restart online(1) ota_confirm ");
+    s_ip_handler(NULL, IP_EVENT, IP_EVENT_STA_GOT_IP, &ip);
+    check_log("WiFi got IP again (DHCP renew): MQTT state unchanged", "net_up sntp_restart ota_confirm ");
     s_ip_handler(NULL, IP_EVENT, IP_EVENT_ETH_GOT_IP, &ip);
-    check_log("Ethernet got IP: the same", "net_up sntp_restart mqtt_start ota_confirm ");
+    check_log("Ethernet got IP too: MQTT stays online", "net_up sntp_restart online(1) ota_confirm ");
+    s_ip_handler(NULL, IP_EVENT, IP_EVENT_ETH_LOST_IP, NULL);
+    check_log("Ethernet lost IP, WiFi still up: MQTT stays online", "online(1) ");
+    s_ip_handler(NULL, IP_EVENT, IP_EVENT_STA_LOST_IP, NULL);
+    check_log("WiFi lost IP too: MQTT offline", "online(0) ");
+    s_ip_handler(NULL, IP_EVENT, IP_EVENT_STA_LOST_IP, NULL);
+    check_log("lost IP again: nothing", "");
+    s_ip_handler(NULL, IP_EVENT, IP_EVENT_ETH_GOT_IP, &ip);
+    check_log("Ethernet alone: MQTT online", "net_up sntp_restart online(1) ota_confirm ");
+    s_ip_handler(NULL, IP_EVENT, IP_EVENT_ETH_LOST_IP, NULL);
+    s_ip_handler(NULL, IP_EVENT, IP_EVENT_STA_GOT_IP, &ip);
+    s_log[0] = 0;
 
 #if CONFIG_CLU_WIFI
     // ---- prebuilt firmware: WiFi credentials from NVS win over menuconfig; no SSID -> WiFi off
@@ -327,7 +341,9 @@ int main(void)
     wifi_event_sta_disconnected_t dis = {.reason = 201, .rssi = -80};
     s_log[0] = 0;
     s_wifi_handler(NULL, WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &dis);
-    check_log("disconnected: reconnect", "connect ");
+    check_log("disconnected: MQTT offline at once (no waiting for the lost-IP timer), reconnect", "online(0) connect ");
+    s_wifi_handler(NULL, WIFI_EVENT, WIFI_EVENT_STA_DISCONNECTED, &dis);
+    check_log("disconnected again (auth retries): reconnect only", "connect ");
     s_log[0] = 0;
     s_wifi_handler(NULL, WIFI_EVENT, 99, NULL);
     check_log("other events ignored", "");

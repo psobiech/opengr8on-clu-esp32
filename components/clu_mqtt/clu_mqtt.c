@@ -19,6 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "mqtt_client.h"
 #include "sdkconfig.h"
 
@@ -62,7 +63,9 @@ static char s_client_id[48];
 static char *s_ca_pem;
 static bool s_enabled = true; // UseCloud interface default
 static bool s_started;
-static SemaphoreHandle_t s_lock; // apply(): Lua task (UseCloud, SYSTEM.Init) vs IP event
+static volatile bool s_online; // some interface has link + IP (clu_mqtt_set_online())
+static SemaphoreHandle_t s_lock; // apply(): Lua task (UseCloud, SYSTEM.Init) vs the network worker
+static TaskHandle_t s_net_task;  // runs apply() for clu_mqtt_set_online(): stopping may block
 
 /** @brief Broker URI / credentials: clu_mqtt_cfg_t (cfg partition settings) when set, else menuconfig. */
 /** @brief Setting from clu_mqtt_cfg_t, or the menuconfig value when NULL / "". */
@@ -230,10 +233,10 @@ static bool client_create(void)
     return true;
 }
 
-/** @brief Start or stop the connection to match started && UseCloud && broker configured. Under s_lock. */
+/** @brief Start or stop the connection to match online && UseCloud && broker configured. Under s_lock. */
 static void apply_locked(void)
 {
-    bool want = s_started && s_enabled && broker_uri()[0];
+    bool want = s_online && s_enabled && broker_uri()[0];
     if (want == s_running) {
         return;
     }
@@ -245,8 +248,9 @@ static void apply_locked(void)
         s_running = esp_mqtt_client_start(s_client) == ESP_OK;
     } else {
         ESP_LOGI(TAG, "UseCloud off: disconnecting");
-        if (s_connected) {
-            // Clean disconnect skips the LWT: mark entities unavailable ourselves.
+        if (s_connected && s_online) {
+            // Clean disconnect skips the LWT: mark entities unavailable ourselves (network down:
+            // the broker fires the LWT when the keepalive runs out).
             esp_mqtt_client_publish(s_client, s_status, "offline", 0, 1, 1);
         }
         esp_mqtt_client_stop(s_client);
@@ -272,14 +276,43 @@ void clu_mqtt_set_enabled(bool on)
     apply();
 }
 
-void clu_mqtt_start(void)
+/** @brief First start (network or SYSTEM.Init): say once when there is no broker. */
+static void note_started(void)
 {
-    bool first = !s_started;
-    s_started = true;
-    if (first && !broker_uri()[0]) {
+    if (!s_started && !broker_uri()[0]) {
         ESP_LOGI(TAG, "no broker configured (cfg partition mqtt_uri or menuconfig CLU_MQTT_BROKER_URI), MQTT off");
     }
+    s_started = true;
+}
+
+void clu_mqtt_start(void)
+{
+    note_started();
     apply();
+}
+
+/** @brief Network worker: apply the online state off the event loop (esp_mqtt_client_stop() may wait for a connect). */
+static void net_task(void *arg)
+{
+    for (;;) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        apply();
+    }
+}
+
+void clu_mqtt_set_online(bool online)
+{
+    if (online == s_online) {
+        return;
+    }
+    s_online = online;
+    ESP_LOGI(TAG, "network %s", online ? "up" : "down: stopping the client");
+    if (online) {
+        note_started();
+    }
+    if (s_net_task) {
+        xTaskNotifyGive(s_net_task);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -391,7 +424,8 @@ void clu_mqtt_init(const clu_mqtt_cfg_t *cfg)
     s_rx = xQueueCreate(RX_QUEUE, sizeof(rx_msg_t *));
     clu_lua_register_ext(s_fns, mqtt_lua_start, mqtt_lua_end - mqtt_lua_start - 1, "=mqtt");
     s_lock = xSemaphoreCreateMutex();
-    if (s_started) {
+    xTaskCreate(net_task, "mqtt_net", 3072, NULL, 3, &s_net_task);
+    if (s_online) {
         apply(); // network came up before init
     }
 }

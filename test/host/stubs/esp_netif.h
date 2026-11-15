@@ -7,7 +7,7 @@ typedef struct esp_netif_obj esp_netif_t;
 typedef struct { uint32_t addr; } esp_ip4_addr_t;
 typedef struct { esp_ip4_addr_t ip, netmask, gw; } esp_netif_ip_info_t;
 typedef struct { esp_netif_ip_info_t ip_info; } ip_event_got_ip_t;
-enum { IP_EVENT_STA_GOT_IP = 0, IP_EVENT_ETH_GOT_IP = 4 };
+enum { IP_EVENT_STA_GOT_IP = 0, IP_EVENT_STA_LOST_IP = 1, IP_EVENT_ETH_GOT_IP = 4, IP_EVENT_ETH_LOST_IP = 5 };
 extern const char *const IP_EVENT;
 #define ESP_IPADDR_TYPE_V4 0
 typedef struct {

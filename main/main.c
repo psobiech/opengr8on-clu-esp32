@@ -42,6 +42,9 @@
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_vfs_fat.h"
+#if CONFIG_CLU_ETH
+#include "esp_eth.h"
+#endif
 #if CONFIG_CLU_WIFI
 #include "esp_wifi.h"
 #endif
@@ -60,18 +63,48 @@ static const char *TAG = "main";
 #error "Enable WiFi (CLU_WIFI) and / or Ethernet (CLU_ETH)"
 #endif
 
+// Interfaces with link + IP, one bit per clu_net_if_t. Event loop only.
+static uint8_t s_net_up;
+
 /**
- * @brief IP event handler (WiFi STA / Ethernet got an address): arm the setup window, poll SNTP, start MQTT.
+ * @brief Interface @p nif came up (got IP) or went down (link lost / IP lost). MQTT runs while any
+ * interface is up, so WiFi and Ethernet can back each other up.
+ */
+static void net_state(clu_net_if_t nif, bool up)
+{
+    uint8_t mask = up ? s_net_up | 1u << nif : s_net_up & ~(1u << nif);
+    if (mask != s_net_up) {
+        s_net_up = mask;
+        clu_mqtt_set_online(mask != 0); // non-blocking; MQTT does not wait for the Lua scripts
+    }
+}
+
+/**
+ * @brief IP event handler. Got IP (WiFi STA / Ethernet, also a static IP on link up): arm the setup
+ * window, poll SNTP, MQTT online. Lost IP: that interface down.
  */
 static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
+    if (id == IP_EVENT_STA_LOST_IP || id == IP_EVENT_ETH_LOST_IP) {
+        ESP_LOGW(TAG, "%s lost IP", id == IP_EVENT_STA_LOST_IP ? "WiFi" : "Ethernet");
+        net_state(id == IP_EVENT_STA_LOST_IP ? CLU_NET_WIFI : CLU_NET_ETH, false);
+        return;
+    }
     const ip_event_got_ip_t *ip_event = data;
     ESP_LOGI(TAG, "%s IP " IPSTR, id == IP_EVENT_STA_GOT_IP ? "WiFi" : "Ethernet", IP2STR(&ip_event->ip_info.ip));
     udp_server_net_up();
     esp_sntp_restart(); // first poll now instead of at the next retry after a failed early one
-    clu_mqtt_start(); // MQTT does not wait for the Lua scripts (SYSTEM.Init)
+    net_state(id == IP_EVENT_STA_GOT_IP ? CLU_NET_WIFI : CLU_NET_ETH, true);
     clu_ota_confirm(); // a fresh OTA image that reached the network is kept (no rollback)
 }
+
+#if CONFIG_CLU_ETH
+/** @brief Ethernet link down: that interface down at once (IP_EVENT_ETH_LOST_IP only follows after a timer). */
+static void on_eth_down(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    net_state(CLU_NET_ETH, false);
+}
+#endif
 
 #if CONFIG_CLU_WIFI
 // SSID / password: cfg partition wifi_ssid / wifi_pass (prebuilt firmware), else menuconfig.
@@ -109,6 +142,7 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data)
         // 204=HANDSHAKE_TIMEOUT 205=CONNECTION_FAIL 210=NO_AP_FOUND_W_COMPATIBLE_SECURITY
         // 211=NO_AP_FOUND_IN_AUTHMODE_THRESHOLD 212=NO_AP_FOUND_IN_RSSI_THRESHOLD
         ESP_LOGW(TAG, "WiFi disconnected: reason %d rssi %d", wifi_event->reason, wifi_event->rssi);
+        net_state(CLU_NET_WIFI, false); // IP_EVENT_STA_LOST_IP only follows after a timer
         esp_wifi_connect();
     }
 }
@@ -186,7 +220,10 @@ static void net_start(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_ip, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, on_ip, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, on_ip, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_LOST_IP, on_ip, NULL));
 #if CONFIG_CLU_ETH
+    ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_DISCONNECTED, on_eth_down, NULL));
     clu_eth_start();
 #endif
 #if CONFIG_CLU_WIFI

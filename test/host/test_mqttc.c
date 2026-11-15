@@ -118,6 +118,16 @@ esp_err_t esp_mqtt_client_start(esp_mqtt_client_handle_t c)
     s_starts++;
     return s_start_fail ? ESP_FAIL : ESP_OK;
 }
+// Network worker (net_task): created, notified; tests run apply() in its place.
+static int s_notifies;
+static int s_task_dummy;
+BaseType_t xTaskCreate(void (*fn)(void *), const char *n, uint32_t s, void *a, UBaseType_t p, TaskHandle_t *h)
+{
+    *h = &s_task_dummy;
+    return 1; // pdPASS
+}
+void xTaskNotifyGive(TaskHandle_t t) { s_notifies++; }
+uint32_t ulTaskNotifyTake(BaseType_t c, TickType_t w) { return 0; }
 esp_err_t esp_mqtt_client_stop(esp_mqtt_client_handle_t c)
 {
     s_stops++;
@@ -188,6 +198,7 @@ static void reconfigure(const char *uri)
     s_client = NULL;
     s_running = s_connected = false;
     s_started = false;
+    s_online = true; // tests below: network up, clu_mqtt_start() applies
     free(s_ca_pem);
     s_ca_pem = NULL;
 }
@@ -216,6 +227,7 @@ int main(void)
     check("init: configured client id", !strcmp(s_client_id, "my-clu"));
 
     // ---- no broker: nothing started
+    s_online = true;
     clu_mqtt_start();
     check("no broker configured: no client", s_inits == 0 && !s_running);
 
@@ -346,6 +358,32 @@ int main(void)
     check("UseCloud off while not connected: no 'offline' publish", s_npubs == 0 && s_stops == 2);
     clu_mqtt_set_enabled(true);
 
+    // ---- network state (WiFi / Ethernet link + IP): the worker task applies it
+    event(MQTT_EVENT_CONNECTED, NULL);
+    int stops = s_stops, starts = s_starts, notifies = s_notifies;
+    s_npubs = 0;
+    clu_mqtt_set_online(false);
+    check("network down: worker notified, nothing done on the caller's (event loop) thread",
+          s_notifies == notifies + 1 && s_running && s_stops == stops);
+    apply(); // worker
+    check("network down: client stopped, no 'offline' publish over a dead link (the LWT covers it)",
+          !s_running && s_stops == stops + 1 && s_npubs == 0 && !clu_mqtt_connected());
+    clu_mqtt_set_online(false);
+    check("network down again: no notify", s_notifies == notifies + 1);
+    clu_mqtt_start(); // SYSTEM.Init while offline
+    check("SYSTEM.Init while offline: no connect", !s_running && s_starts == starts);
+    clu_mqtt_set_online(true);
+    apply(); // worker
+    check("network up: same client restarted", s_notifies == notifies + 2 && s_running && s_starts == starts + 1);
+    clu_mqtt_set_enabled(false);
+    clu_mqtt_set_online(false);
+    apply();
+    clu_mqtt_set_online(true);
+    apply();
+    check("network up with UseCloud off: stays off", !s_running);
+    clu_mqtt_set_enabled(true);
+    check("UseCloud on while online: connects", s_running);
+
     // ---- start failure, init failure
     reconfigure("mqtt://broker.lan");
     s_start_fail = 1;
@@ -391,8 +429,10 @@ int main(void)
     reconfigure("mqtt://early.lan");
     s_lock = NULL;
     int inits = s_inits;
-    clu_mqtt_start();
-    check("start before init: nothing yet", s_inits == inits && !s_running);
+    s_online = false;
+    s_net_task = NULL;
+    clu_mqtt_set_online(true); // IP event before clu_mqtt_init()
+    check("online before init: nothing yet", s_inits == inits && !s_running);
     clu_mqtt_init(&cfg);
     check("init after an early start: connects", s_inits == inits + 1 && s_running);
     clu_mqtt_start(); // SYSTEM.Init later

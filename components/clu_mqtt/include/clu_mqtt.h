@@ -6,8 +6,8 @@
  * the local CLU feature UseCloud (18) switches the connection on/off and CloudConnection (19)
  * reports it.
  *
- * Threading: all functions are thread-safe (clu_mqtt_set_enabled() comes from the Lua task,
- * clu_mqtt_start() from the IP event and SYSTEM.Init).
+ * Threading: all functions are thread-safe (clu_mqtt_set_enabled() and clu_mqtt_start() come from
+ * the Lua task, clu_mqtt_set_online() from the network event loop and never blocks).
  */
 #pragma once
 
@@ -41,12 +41,20 @@ void clu_mqtt_init(const clu_mqtt_cfg_t *cfg);
 void clu_mqtt_set_enabled(bool on);
 
 /**
- * @brief Connect (if UseCloud and a broker is configured). Idempotent; may come before clu_mqtt_init().
- *
- * Called when the network gets an IP, independent of the Lua scripts, and again from SYSTEM.Init
- * (OM.LUA applied UseCloud). Home Assistant discovery waits for SYSTEM.Init on the Lua side.
+ * @brief SYSTEM.Init (OM.LUA applied UseCloud): connect if online, UseCloud on and a broker is
+ * configured. Idempotent; may come before clu_mqtt_init(). Home Assistant discovery waits for
+ * SYSTEM.Init on the Lua side.
  */
 void clu_mqtt_start(void);
+
+/**
+ * @brief Network state: true while some interface (WiFi / Ethernet) has link + IP. Online starts
+ * the client without waiting for the Lua scripts; offline stops it, so no reconnect attempts
+ * while there is no route. Non-blocking (a worker task does the start / stop); may come before
+ * clu_mqtt_init().
+ * @param online Some interface is up.
+ */
+void clu_mqtt_set_online(bool online);
 
 /** @brief CloudConnection: broker connected. */
 bool clu_mqtt_connected(void);

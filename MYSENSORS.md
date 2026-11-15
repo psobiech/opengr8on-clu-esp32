@@ -99,7 +99,8 @@ Kontroler (firmware, bez skryptów):
 - `C_REQ` — odpowiedź ostatnią znaną wartością (z węzła albo wysłaną przez skrypt);
 - prezentacje, nazwa / wersja szkicu, poziom baterii — rejestr węzłów (`MySensors.nodes()`);
 - własne ramki wracające przez odbiornik RS485 są pomijane (nadawca 0), wysyłka dopiero po kilku ms
-  ciszy na magistrali.
+  ciszy na magistrali, po jednej ramce co 25 ms (węzeł ma bufor na jedną wiadomość i nie
+  potwierdza odbioru: seria ramek, np. kilka przekaźników naraz, gubiła dalsze komendy).
 
 Nie ma aktualizacji firmware węzłów (`C_STREAM`) ani kolejkowania wiadomości dla uśpionych węzłów.
 

@@ -220,10 +220,22 @@ static void feed(const char *text)
     }
 }
 
+/** @brief Send the whole queue, one frame per GW_GAP_MS (as the UART task would over time). */
+static void flush_all(void)
+{
+    int64_t now = s_last_byte_ms + GW_IDLE_MS;
+    if (now < s_last_tx_ms + GW_GAP_MS) {
+        now = s_last_tx_ms + GW_GAP_MS;
+    }
+    for (int i = 0; s_gwq_n && i < 4 * GW_QUEUE; i++, now += GW_GAP_MS) {
+        gw_flush(now);
+    }
+}
+
 /** @brief What the CLU put on the bus (send queue flushed), as text lines with node = destination. */
 static int sent(const char *want)
 {
-    gw_flush(s_last_byte_ms + GW_IDLE_MS);
+    flush_all();
     char got[4096] = "";
     for (size_t i = 0; i + 9 <= s_bin_len;) {
         uint8_t len = s_bin[i + 4];
@@ -250,7 +262,7 @@ static int sent(const char *want)
 /** @brief Flush the send queue and forget what went out. */
 static void drain(void)
 {
-    gw_flush(s_last_byte_ms + GW_IDLE_MS);
+    flush_all();
     s_bin_len = 0;
     s_out[0] = 0;
 }
@@ -286,6 +298,7 @@ static void reset_state(void)
     s_trace = false;
     s_gwq_head = s_gwq_n = 0;
     s_last_byte_ms = -1000;
+    s_last_tx_ms = -1000;
     ms_rs485_rx_init(&s_frx, MS_GATEWAY);
     s_bin_len = 0;
     s_probe_next = 256; // no node check running
@@ -766,6 +779,7 @@ static void node_frame(uint8_t to, uint8_t from, uint8_t child, uint8_t cmd, uin
 /** @brief Frames the CLU wrote, decoded as node @p as would: count, last one in *last. */
 static int sent_frames(uint8_t as, ms_bin_t *last, uint8_t *to)
 {
+    flush_all(); // tick() sends one frame per GW_GAP_MS
     ms_rs485_rx_t rx;
     ms_rs485_rx_init(&rx, as);
     ms_rs485_frame_t f;
@@ -897,6 +911,7 @@ static void test_gateway(void)
 
     // send queue full; UART failure
     s_last_byte_ms = 50000;
+    s_last_tx_ms = -1000; // the clock above ran ahead of these timestamps
     for (int i = 0; i < GW_QUEUE + 1; i++) {
         gw_answer(12, MS_I_PONG, 1);
     }
@@ -912,6 +927,22 @@ static void test_gateway(void)
     gw_flush(70000);
     s_cfg.de_pin = -1;
     check("gateway: RS485: waits for the frame to leave", s_tx == tx + 1);
+
+    // burst (several relays at once): one frame per GW_GAP_MS, a node reply pushes the next back
+    for (int i = 0; i < 3; i++) {
+        gw_answer(12, MS_I_PONG, 1);
+    }
+    gw_flush(80000);
+    check("gateway: burst: one frame per pass", s_tx == tx + 2 && s_gwq_n == 2);
+    gw_flush(80000 + GW_GAP_MS - 1);
+    check("gateway: burst: next frame waits for the gap", s_tx == tx + 2);
+    s_last_byte_ms = 80000 + GW_GAP_MS - 1; // the node answers in the gap
+    gw_flush(80000 + GW_GAP_MS);
+    check("gateway: burst: node talking -> wait for quiet", s_tx == tx + 2);
+    gw_flush(80000 + GW_GAP_MS - 1 + GW_IDLE_MS);
+    check("gateway: burst: then the next frame", s_tx == tx + 3 && s_gwq_n == 1);
+    gw_flush(80000 + 3 * GW_GAP_MS);
+    check("gateway: burst: all sent", s_tx == tx + 4 && s_gwq_n == 0);
 
     s_bin_len = 0;
     s_out[0] = 0;

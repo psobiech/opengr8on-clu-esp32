@@ -94,6 +94,11 @@ static bool s_trace;                         // every message at INFO (MySensors
 // the CLU is node 0, the gateway, on the MY_RS485 bus
 #define GW_QUEUE 16          // frames waiting for a quiet bus
 #define GW_IDLE_MS 5         // bus quiet this long before we send (nodes wait for silence too)
+// After each of our frames: the node has one message buffer, no link-level ACK, and often answers
+// (state report, echo). A burst of frames (several relays switched at once) overran nodes: the
+// later commands were lost. One frame per gap gives it time to act and reply first (a reply moves
+// s_last_byte_ms, so the next frame waits for it).
+#define GW_GAP_MS 25
 #define GW_CHECK_MS 30000    // link judged this often (nodes talk only when something happens)
 static ms_rs485_rx_t s_frx;
 static struct {
@@ -102,6 +107,7 @@ static struct {
 } s_gwq[GW_QUEUE];
 static int s_gwq_head, s_gwq_n;
 static int64_t s_last_byte_ms = -1000;
+static int64_t s_last_tx_ms = -1000; // our last frame sent (GW_GAP_MS)
 
 // Node check: every known node id is asked to present itself (I_PRESENTATION), one at a time: the
 // next one as soon as the node answers (its first frame comes within ~50 ms), else after
@@ -339,10 +345,10 @@ static void gw_queue(uint8_t to, const uint8_t *data, size_t len)
     s_gwq[queue_index].len = (uint8_t)ms_rs485_encode(to, MS_GATEWAY, data, len, s_gwq[queue_index].buf, sizeof s_gwq[queue_index].buf);
 }
 
-/** @brief Send queued frames if nobody talked for GW_IDLE_MS (UART task). */
+/** @brief Send the next queued frame if nobody talked for GW_IDLE_MS and ours went GW_GAP_MS ago (UART task). */
 static void gw_flush(int64_t now)
 {
-    while (s_gwq_n && now - s_last_byte_ms >= GW_IDLE_MS) {
+    while (s_gwq_n && now - s_last_byte_ms >= GW_IDLE_MS && now - s_last_tx_ms >= GW_GAP_MS) {
         int queue_index = s_gwq_head;
         s_gwq_head = (s_gwq_head + 1) % GW_QUEUE;
         s_gwq_n--;
@@ -354,6 +360,8 @@ static void gw_flush(int64_t now)
             uart_wait_tx_done(s_cfg.uart_num, pdMS_TO_TICKS(100));
         }
         s_tx++;
+        s_last_tx_ms = now;
+        break; // one frame per gap (a failed write took no bus time: the next one may go)
     }
 }
 
@@ -711,7 +719,8 @@ static void ms_task(void *arg)
 {
     uint8_t buf[64];
     for (;;) {
-        int bytes_read = uart_read_bytes(s_cfg.uart_num, buf, sizeof buf, pdMS_TO_TICKS(20));
+        // Frames waiting: wake often enough to keep the GW_GAP_MS pace.
+        int bytes_read = uart_read_bytes(s_cfg.uart_num, buf, sizeof buf, pdMS_TO_TICKS(s_gwq_n ? 5 : 20));
         int64_t now = now_ms();
         if (bytes_read > 0) {
             gw_bytes(buf, (size_t)bytes_read, now);
@@ -966,6 +975,7 @@ esp_err_t clu_mysensors_init(const clu_mysensors_cfg_t *cfg)
     s_trace = cfg->trace;
     ms_rs485_rx_init(&s_frx, MS_GATEWAY);
     s_gwq_head = s_gwq_n = 0;
+    s_last_tx_ms = -1000;
     s_check_ms = 0;
     strlcpy(s_gw_version, "CLU RS485 gateway", sizeof s_gw_version);
     s_mx = xSemaphoreCreateMutex();

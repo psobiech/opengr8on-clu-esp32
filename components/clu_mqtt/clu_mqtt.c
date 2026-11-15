@@ -65,9 +65,11 @@ static bool s_started;
 static SemaphoreHandle_t s_lock; // apply(): Lua task (UseCloud, SYSTEM.Init) vs IP event
 
 /** @brief Broker URI / credentials: clu_mqtt_cfg_t (cfg partition settings) when set, else menuconfig. */
-static const char *broker_uri(void) { return s_cfg.broker_uri ? s_cfg.broker_uri : CONFIG_CLU_MQTT_BROKER_URI; }
-static const char *username(void) { return s_cfg.username ? s_cfg.username : CONFIG_CLU_MQTT_USERNAME; }
-static const char *password(void) { return s_cfg.password ? s_cfg.password : CONFIG_CLU_MQTT_PASSWORD; }
+/** @brief Setting from clu_mqtt_cfg_t, or the menuconfig value when NULL / "". */
+static const char *setting(const char *v, const char *kconfig) { return v && v[0] ? v : kconfig; }
+static const char *broker_uri(void) { return setting(s_cfg.broker_uri, CONFIG_CLU_MQTT_BROKER_URI); }
+static const char *username(void) { return setting(s_cfg.username, CONFIG_CLU_MQTT_USERNAME); }
+static const char *password(void) { return setting(s_cfg.password, CONFIG_CLU_MQTT_PASSWORD); }
 static bool s_running;
 static volatile bool s_connected;
 static volatile int s_gen; // bumped on every (re)connect: the Lua side republishes everything

@@ -413,7 +413,8 @@ int main(void)
     s_cfg.broker_uri = "";
     s_cfg.username = s_cfg.password = NULL;
     clu_mqtt_start();
-    check("NVS broker URI empty: MQTT off even with a menuconfig broker", !s_running);
+    check("NVS broker URI empty: menuconfig broker used",
+          s_running && !strcmp(s_mc.broker.address.uri, "mqtt://kconfig.lan"));
     s_cfg.broker_uri = NULL;
 
     lua_close(L);

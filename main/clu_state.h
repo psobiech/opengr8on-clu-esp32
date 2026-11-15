@@ -93,8 +93,8 @@ void clu_state_write_config_files(void);
  * @brief Device setting from the provisioning partition "cfg" (string key), for prebuilt firmware.
  *
  * Keys: wifi_ssid, wifi_pass, mqtt_uri, mqtt_user, mqtt_pass (see tools/mknvs.py; the same
- * partition also carries sn / pin, adopted by clu_state_load()). A value present there wins over
- * the menuconfig default. The partition is separate from the runtime NVS; the firmware only reads
+ * partition also carries sn / pin, adopted by clu_state_load()). A non-empty value there wins
+ * over the menuconfig default; an empty one counts as unset. The partition is separate from the runtime NVS; the firmware only reads
  * it (NVS formats it once if blank).
  *
  * @param key      NVS key.

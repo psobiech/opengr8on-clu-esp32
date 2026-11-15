@@ -496,6 +496,11 @@ static void test_provisioned(void)
           !strcmp(clu_state_setting("wifi_ssid", "dflt"), "NvsNet") &&
               !strcmp(clu_state_setting("mqtt_uri", NULL), "mqtts://broker.lan:8883") &&
               !strcmp(clu_state_setting("wifi_pass", "pw"), "pw") && !clu_state_setting("mqtt_user", NULL));
+    nvs_open_from_partition("cfg", "cfg", NVS_READWRITE, &h);
+    nvs_set_str(h, "mqtt_uri", "");
+    check("setting: empty value in the cfg partition = unset, falls back",
+          !strcmp(clu_state_setting("mqtt_uri", "mqtt://k"), "mqtt://k") && !clu_state_setting("mqtt_uri", NULL));
+    nvs_set_str(h, "mqtt_uri", "mqtts://broker.lan:8883");
     int in_cfg = 0;
     for (int i = 0; i < nvs_n; i++) {
         in_cfg += !strncmp(nvs_db[i].ns, "cfg:", 4);

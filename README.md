@@ -162,7 +162,7 @@ esptool --chip esp32s3 --port /dev/ttyUSB0 write-flash 0x12000 cfg.bin
 | `--serial` | `cfg/sn` (u32) | numer seryjny CLU, dziesiętnie (jak `CLU_SERIAL`) |
 | `--pin` | `cfg/pin` | PIN / klucz prywatny, 8 znaków (jak `CLU_PRIVATE_KEY`) |
 | `--wifi-ssid`, `--wifi-pass` | `cfg/wifi_ssid`, `cfg/wifi_pass` | sieć WiFi; tylko obraz `waveshare` (płytki z Ethernetem są budowane bez WiFi) |
-| `--mqtt-uri` | `cfg/mqtt_uri` | broker, np. `mqtt://192.168.1.10:1883`, `mqtts://host:8883`; puste = MQTT wyłączone |
+| `--mqtt-uri` | `cfg/mqtt_uri` | broker, np. `mqtt://192.168.1.10:1883`, `mqtts://host:8883`; puste = wartość z menuconfig |
 | `--mqtt-user`, `--mqtt-pass` | `cfg/mqtt_user`, `cfg/mqtt_pass` | dane logowania do brokera |
 | `--ota-pass` | `cfg/ota_pass` | hasło aktualizacji przez sieć, 8..64 bajty (zob. [Aktualizacja przez sieć](#aktualizacja-przez-sieć-ota)); pominięte = OTA wyłączone |
 

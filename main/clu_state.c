@@ -71,7 +71,8 @@ const char *clu_state_setting(const char *key, const char *fallback)
     }
     size_t len = 0;
     char *setting_value = NULL;
-    if (nvs_get_str(nvs_handle, key, NULL, &len) == ESP_OK && len > 0 && (setting_value = malloc(len)) != NULL &&
+    if (nvs_get_str(nvs_handle, key, NULL, &len) == ESP_OK && len > 1 /* "" = unset */ &&
+        (setting_value = malloc(len)) != NULL &&
         nvs_get_str(nvs_handle, key, setting_value, &len) != ESP_OK) {
         free(setting_value);
         setting_value = NULL;
@@ -139,7 +140,7 @@ void clu_state_load(void)
     bool dirty = false;
     bool identity_changed = false;
     uint32_t old_sn = 0;
-    bool have_sn = nvs_get_u32(nvs_handle, "sn", &old_sn) == ESP_OK;
+    bool have_sn = nvs_get_u32(nvs_handle, "sn", &old_sn) == ESP_OK && old_sn; // 0 = unset
     if (want_sn) {
         g_clu.sn = want_sn;
         if (!have_sn || old_sn != g_clu.sn) {
@@ -159,7 +160,7 @@ void clu_state_load(void)
     }
 
     size_t len = sizeof g_clu.pin;
-    bool have_pin = nvs_get_str(nvs_handle, "pin", g_clu.pin, &len) == ESP_OK;
+    bool have_pin = nvs_get_str(nvs_handle, "pin", g_clu.pin, &len) == ESP_OK && g_clu.pin[0]; // "" = unset
     if (want_pin[0]) {
         if (!have_pin || strcmp(g_clu.pin, want_pin) != 0) {
             strlcpy(g_clu.pin, want_pin, sizeof g_clu.pin);

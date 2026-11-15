@@ -8,7 +8,7 @@ binaries can be used without rebuilding. Everything in namespace "cfg":
     sn (u32)                         - CLU serial number (decimal)
     pin (str)                        - CLU private key / PIN (8 characters, from the CLU sticker)
     wifi_ssid, wifi_pass             - WiFi station (boards with WiFi)
-    mqtt_uri, mqtt_user, mqtt_pass   - MQTT broker (empty URI = MQTT off)
+    mqtt_uri, mqtt_user, mqtt_pass   - MQTT broker (empty = menuconfig value)
     ota_pass                         - password for network updates (POST /ota, 8..64 bytes)
 
 Options left out are not written: the firmware then uses its compiled-in default (WiFi / MQTT),
@@ -68,7 +68,7 @@ def main():
     ap.add_argument("--pin", type=pin, help="CLU private key / PIN (8 characters)")
     ap.add_argument("--wifi-ssid", type=limited("WiFi SSID", 1, 32))
     ap.add_argument("--wifi-pass", type=limited("WiFi password", 8, 63))
-    ap.add_argument("--mqtt-uri", help="mqtt://host:1883, mqtts://host:8883, ws://..., wss://... ('' = MQTT off)")
+    ap.add_argument("--mqtt-uri", help="mqtt://host:1883, mqtts://host:8883, ws://..., wss://... ('' = menuconfig value)")
     ap.add_argument("--mqtt-user")
     ap.add_argument("--mqtt-pass")
     ap.add_argument("--ota-pass", type=limited("OTA password", 8, 64),

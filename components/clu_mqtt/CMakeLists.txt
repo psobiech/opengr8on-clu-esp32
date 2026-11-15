@@ -32,4 +32,4 @@ add_custom_command(
     DEPENDS "${MQTT_LUA_PARTS_FILE}" ${MQTT_LUA_PARTS} "${CMAKE_CURRENT_LIST_DIR}/join_lua.cmake"
     VERBATIM
 )
-target_add_binary_data(${COMPONENT_LIB} "${MQTT_LUA_GENERATED}" TEXT)
+clu_lua_embed(${COMPONENT_LIB} "${MQTT_LUA_GENERATED}")

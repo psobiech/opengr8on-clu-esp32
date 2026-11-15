@@ -864,7 +864,7 @@ static lua_State *vm_new(void)
     }
     for (int i = 0; i < s_n_exts; i++) {
         // A broken extension is logged and skipped: the CLU itself must still boot.
-        if (s_exts[i].src && (luaL_loadbufferx(L, s_exts[i].src, s_exts[i].len, s_exts[i].name, "t") != LUA_OK ||
+        if (s_exts[i].src && (luaL_loadbufferx(L, s_exts[i].src, s_exts[i].len, s_exts[i].name, "bt") != LUA_OK ||
                               lua_pcall(L, 0, 0, 0) != LUA_OK)) {
             ESP_LOGE(TAG, "%s: %s", s_exts[i].name, lua_tostring(L, -1));
             lua_pop(L, 1);

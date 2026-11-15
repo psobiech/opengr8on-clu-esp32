@@ -74,7 +74,8 @@ typedef struct {
  * objects.lua (and so can capture __clu). Call before clu_lua_start(); up to 6 extensions.
  *
  * @param fns  NULL-terminated C functions.
- * @param src  Lua source; must stay valid for the program's lifetime.
+ * @param src  Lua source or bytecode (luac_host, CONFIG_CLU_LUA_PRECOMPILE); must stay valid for the
+ *             program's lifetime.
  * @param len  Length of @p src.
  * @param name Chunk name (error messages).
  */

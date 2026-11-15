@@ -32,6 +32,16 @@ menu "Lua runtime"
             values retain about 7 significant digits; serial numbers and other integers remain
             64-bit. This setting is unavailable when CLU_LUA_32BITS is enabled.
 
+    config CLU_LUA_PRECOMPILE
+        bool "Precompile embedded Lua libraries to bytecode"
+        default n
+        help
+            Compile the Lua libraries built into the firmware (prelude, objects, mqtt, http,
+            mysensors) to stripped bytecode on the build host: about 40% (~50 KB) less flash and
+            no parsing at boot. Stripped chunks carry no line numbers or local names, so errors
+            raised inside these libraries have no file:line. Turn off when debugging them.
+            Needs a host C compiler (cc / gcc / clang). User scripts (a:\*.LUA) are unaffected.
+
     config CLU_LUA_MEM_LIMIT_KB
         int "Lua heap limit (KB)"
         default 4096

@@ -3,5 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES clu_proto clu_lua lua tfbus_uart
     PRIV_REQUIRES esp_driver_uart esp_timer nvs_flash esp_hw_support
-    EMBED_TXTFILES "mysensors.lua"
 )
+if(NOT CMAKE_BUILD_EARLY_EXPANSION)
+    clu_lua_embed(${COMPONENT_LIB} "${CMAKE_CURRENT_LIST_DIR}/mysensors.lua")
+endif()

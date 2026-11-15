@@ -182,8 +182,13 @@ check("PowerSupplyVoltage -> voltage sensor", voltage and voltage.p:find('"devic
 local timer = find(CFG .. "sensor" .. NODE .. "TMR0001/config")
 check("Timer -> remaining duration sensor", timer and timer.p:find('"device_class":"duration"', 1, true)
   and timer.p:find('"unit_of_measurement":"s"', 1, true)
+  and math.tointeger(tonumber((find("grenton/CLU100000001/TMR0001/state") or {}).p)) ~= nil
   and tonumber((find("grenton/CLU100000001/TMR0001/state") or {}).p) > 50
-  and tonumber((find("grenton/CLU100000001/TMR0001/state") or {}).p) < 60)
+  and tonumber((find("grenton/CLU100000001/TMR0001/state") or {}).p) <= 60)
+local timer_pubs = count("grenton/CLU100000001/TMR0001/state")
+run(20) -- 2 s of 100 ms scans while the timer counts
+check("running Timer: at most one state per second",
+      count("grenton/CLU100000001/TMR0001/state") - timer_pubs <= 3)
 check("Timer -> Start/Stop buttons", find(CFG .. "button" .. NODE .. "TMR0001_2/config") ~= nil
   and find(CFG .. "button" .. NODE .. "TMR0001_3/config") ~= nil)
 local sched = find(CFG .. "sensor" .. NODE .. "SCH0001/config")
@@ -455,6 +460,39 @@ connected, gen = true, 2
 run()
 check("reconnect republishes states", find("grenton/CLU100000001/ROL0001/position") ~= nil)
 check("reconnect republishes discovery", find(CFG .. "cover" .. NODE .. "ROL0001/config") ~= nil)
+
+-- ---- early scan: commands and events publish before the periodic scan -----------------
+local function step(n)
+  for _ = 1, n or 1 do
+    clock = clock + 10
+    SYSTEM.Loop()
+  end
+end
+local DOU_STATE = "grenton/CLU100000001/DOU0002/state"
+run(2) -- periodic scan just ran: the next one is 100 ms away
+pubs = {}
+DOU0002._f[0] = 0
+step(2)
+check("change without event waits for the periodic scan", find(DOU_STATE) == nil)
+step(8)
+check("periodic scan publishes it", (find(DOU_STATE) or {}).p == "OFF")
+pubs = {}
+DOU0002._f[0] = 1
+__fire("DOU0002", 0)
+step(2)
+check("event of a stateful object: state published at once", (find(DOU_STATE) or {}).p == "ON")
+pubs = {}
+DOU0002._f[0] = 0
+__fire("DOU0002", 0)
+step(1)
+check("early scans are spaced SCAN_MIN_MS apart", find(DOU_STATE) == nil)
+step(1)
+check("next early scan after SCAN_MIN_MS", (find(DOU_STATE) or {}).p == "OFF")
+run(2)
+pubs = {}
+inbox[#inbox + 1] = { "grenton/CLU100000001/DOU0002/set", "OFF" }
+step(2)
+check("command: state republished at once", (find(DOU_STATE) or {}).p == "OFF")
 
 -- ---- script API / JSON ---------------------------------------------------------------
 check("MQTT.connected", MQTT.connected() == true)

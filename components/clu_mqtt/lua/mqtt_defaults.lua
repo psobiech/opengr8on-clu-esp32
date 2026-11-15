@@ -16,7 +16,12 @@ local DEFAULTS = {
   [4] = { { kind = "switch" } },                                                    -- DOUT
   [5] = { { kind = "light" } },                                                     -- DIMM
   [6] = { { kind = "sensor", feature = 3, unit = "s", device_class = "duration",
-           fn = function(raw_value) return tonumber(raw_value) and tonumber(raw_value) / 1000 end },
+           -- Whole seconds, rounded up (a countdown reads 1 until it ends): the raw ms change on
+           -- every scan, unrounded a running timer would publish a state each scan.
+           fn = function(raw_value)
+             local ms = tonumber(raw_value)
+             return ms and math.ceil(ms / 1000)
+           end },
          { kind = "button", name = "Start timer", execute = 0 },
          { kind = "button", name = "Stop timer", execute = 1 } },                    -- Timer
   [7] = { { kind = "event" } },                                                     -- BUTTON

@@ -6,8 +6,13 @@ local overrides = {}  -- object name -> list of opts | false (hidden)
 local entities = {}   -- built list
 local by_base = {}    -- topic path under root ("DOU1234", "DOU1234_2", "system/clu/restart") -> entity
 local by_object = {}  -- object name -> entities with events
+local stateful = {}   -- object name -> true: has scanned (not sampled) states, its events trigger a scan
 local labels, clu_label = nil, nil
 local ready, dirty = false, true
+-- State scan: every cfg.scan_ms as a fallback (values that change without an event), and early
+-- (scan_soon) after an MQTT command or an event of an object with states, at most every SCAN_MIN_MS.
+local SCAN_MIN_MS = 20
+local next_scan, last_scan, scan_soon = 0, 0, false
 
 local function load_labels()
   labels = {}
@@ -59,7 +64,7 @@ local function build()
     sw_version = cfg.fw,
   }
   origin = { name = "opengr8on-clu-esp32" }
-  entities, by_base, by_object, module_devices = {}, {}, {}, {}
+  entities, by_base, by_object, stateful, module_devices = {}, {}, {}, {}, {}
 
   local function add(name, object, entity_options)
     for entity_index, options in ipairs(entity_options or {}) do
@@ -93,6 +98,7 @@ local function build()
         if options.sampled then entity.every = cfg.diag_ms end -- noisy values: sampled, not scanned
         entities[#entities + 1] = entity
         if entity.cmds then by_base[entity.base] = entity end
+        if entity.states and not entity.every then stateful[name] = true end
         if entity.events then
           local object_event_entities = by_object[name] or {}
           object_event_entities[#object_event_entities + 1] = entity
@@ -260,6 +266,7 @@ local orig_fire = OBJECT._fire
 function OBJECT:_fire(event_index)
   orig_fire(self, event_index)
   if not connected then return end
+  if stateful[self._name] then scan_soon = true end -- OnValueChange & co: publish the new state now
   local event_entities = by_object[self._name]
   if not event_entities then return end
   for _, entity in ipairs(event_entities) do
@@ -366,6 +373,7 @@ local function on_message(topic, payload)
           end
         end
       end
+      scan_soon = true
       return
     end
   end
@@ -386,9 +394,8 @@ local function on_message(topic, payload)
   -- Commands that change nothing (e.g. ON on an output that is on) would otherwise leave an
   -- optimistic HA UI out of step: republish the current state on the next scan.
   for state_key in pairs(entity.states or {}) do last[state_topic(entity, state_key)] = nil end
+  scan_soon = true
 end
-
-local next_scan = 0
 
 local function tick(now_ms)
   local is_connected, broker_generation = clu.mqtt_state()
@@ -414,8 +421,8 @@ local function tick(now_ms)
     if not received_topic then break end
     on_message(received_topic, received_payload)
   end
-  if ready and now_ms >= next_scan then
-    next_scan = now_ms + cfg.scan_ms
+  if ready and (now_ms >= next_scan or (scan_soon and now_ms - last_scan >= SCAN_MIN_MS)) then
+    next_scan, last_scan, scan_soon = now_ms + cfg.scan_ms, now_ms, false
     scan(now_ms)
   end
   flush()

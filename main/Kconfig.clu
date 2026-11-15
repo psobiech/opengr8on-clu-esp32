@@ -657,10 +657,12 @@ menu "OpenGr8on ESP32 CLU"
         config CLU_MQTT_SCAN_MS
             int "State scan interval [ms]"
             range 20 5000
-            default 100
+            default 300
             help
                 How often object values are compared with the last published state. Changes are
-                published retained; unchanged values are never resent.
+                published retained; unchanged values are never resent. An MQTT command or an event
+                of an object with states (e.g. OnValueChange) triggers a scan at once (at most every
+                20 ms): this interval only bounds the delay of values that change without an event.
 
         config CLU_MQTT_HA_DISCOVERY
             bool "Home Assistant MQTT discovery"

@@ -472,7 +472,7 @@ wykrywa CLU, pokazuje moduły, wartości na żywo i logi (telnet).
 | `CLU_MQTT_CLIENT_ID` | `opengr8on-CLU<serial>` | |
 | `CLU_MQTT_TOPIC_BASE` | `grenton` | |
 | `CLU_MQTT_KEEPALIVE` | 30 s | |
-| `CLU_MQTT_SCAN_MS` | 100 ms | interwał skanowania stanu obiektów |
+| `CLU_MQTT_SCAN_MS` | 300 ms | interwał skanowania stanu obiektów (komendy i zdarzenia obiektów wyzwalają skan od razu) |
 | `CLU_MQTT_HA_DISCOVERY` | y | discovery Home Assistant |
 | `CLU_MQTT_HA_PREFIX` | `homeassistant` | prefiks discovery |
 | `CLU_MQTT_DIAGNOSTICS` | y | encje diagnostyczne firmware |

@@ -77,6 +77,11 @@ test_udp_nobus: test_udp.c $(MAIN)/udp_server.c $(PROTO)/clu_keys.c $(STUBS) $(H
 	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
 	    $(UDP_INC) -DCONFIG_CLU_TFBUS=0 -o $@ test_udp.c $(PROTO)/clu_keys.c
 
+# CLU_SEC_DISABLE_LEGACY: legacy protocol restricted outside the setup window.
+test_udp_locked: test_udp.c $(MAIN)/udp_server.c $(PROTO)/clu_keys.c $(STUBS) $(HDRS)
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function -O1 -g $(SAN) \
+	    $(UDP_INC) -DCONFIG_CLU_SEC_DISABLE_LEGACY=1 -o $@ test_udp.c $(PROTO)/clu_keys.c
+
 # RS485 transport (tfbus_uart.c) against a fake ESP-IDF UART driver.
 test_uart: test_uart.c $(COMP)/tfbus_uart/tfbus_uart.c $(PROTO)/tfbus_frame.c $(STUBS) $(HDRS)
 	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
@@ -173,11 +178,27 @@ test_crypto: test_crypto.c $(COMP)/clu_crypto/clu_crypto.c $(PROTO)/clu_keys.c
 	    -Istubs -I$(MBEDTLS3_INC) -I$(PROTO)/include -I$(COMP)/clu_crypto/include \
 	    -o $@ $^ $(MBEDTLS3_LIB)/libmbedcrypto.a
 
+# Secure channel (components/clu_secure): Noise IK vs Python noiseprotocol vectors, replay window,
+# pins, two engines over a fake network. Same mbedtls 3.6 PSA dependency as test_crypto.
+SEC := $(COMP)/clu_secure
+test_secure: test_secure.c $(SEC)/clu_noise.c $(SEC)/clu_sec_engine.c $(SEC)/include/clu_noise.h $(SEC)/include/clu_sec_engine.h fixtures/noise_ik_vectors.h
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -O1 -g $(SAN) \
+	    -I. -I$(MBEDTLS3_INC) -I$(SEC)/include \
+	    -o $@ $(filter %.c,$^) $(MBEDTLS3_LIB)/libmbedcrypto.a
+
+# Host stand-in CLU for tools/clu_sec.py (test_sec_tool.sh, needs python3 noiseprotocol + cryptography).
+sec_peer: sec_peer.c $(SEC)/clu_noise.c $(SEC)/clu_sec_engine.c $(SEC)/include/clu_noise.h $(SEC)/include/clu_sec_engine.h
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -O1 -g $(SAN) -I$(MBEDTLS3_INC) -I$(SEC)/include \
+	    -o $@ $(filter %.c,$^) $(MBEDTLS3_LIB)/libmbedcrypto.a
+
+test-sec-tool: sec_peer
+	./test_sec_tool.sh
+
 HAVE_MBEDTLS3 := $(wildcard $(MBEDTLS3_INC)/psa/crypto.h)
 
-C_TESTS := test_proto test_drivers test_master test_udp test_udp_nobus test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_main_gate test_time_nortc test_rtc $(if $(HAVE_MBEDTLS3),test_crypto)
+C_TESTS := test_proto test_drivers test_master test_udp test_udp_nobus test_udp_locked test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_main_gate test_time_nortc test_rtc $(if $(HAVE_MBEDTLS3),test_crypto test_secure)
 
-.PHONY: test test-c clean coverage
+.PHONY: test test-c clean coverage test-sec-tool
 test: test-c test-lua
 
 test-c: $(C_TESTS)
@@ -186,6 +207,7 @@ test-c: $(C_TESTS)
 	ASAN_OPTIONS=detect_leaks=0 ./test_master 2>/dev/null
 	./test_udp 2>/dev/null
 	./test_udp_nobus 2>/dev/null
+	./test_udp_locked 2>/dev/null
 	./test_rtc 2>/dev/null
 	./test_uart 2>/dev/null
 	./test_localio
@@ -204,9 +226,10 @@ test-c: $(C_TESTS)
 	./test_main_gate 2>/dev/null
 	./test_time_nortc 2>/dev/null
 	$(if $(HAVE_MBEDTLS3),./test_crypto,@echo "skip test_crypto: no $(MBEDTLS3_INC)/psa/crypto.h")
+	$(if $(HAVE_MBEDTLS3),./test_secure,@echo "skip test_secure: no $(MBEDTLS3_INC)/psa/crypto.h")
 
 clean:
-	rm -f test_proto test_drivers test_master test_udp test_udp_nobus test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_main_gate test_time_nortc test_rtc test_crypto liblua_host.a *.o
+	rm -f test_proto test_drivers test_master test_udp test_udp_nobus test_udp_locked test_uart test_localio test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_main_gate test_time_nortc test_rtc test_crypto test_secure sec_peer liblua_host.a *.o
 	rm -rf *.gcda *.gcno coverage
 
 # Prelude (Lua object model) + MQTT/Home Assistant (clu_mqtt/mqtt.lua) tests; needs lua$(LUA) on the host. Pass OM=<path> to also load a real OM.LUA.

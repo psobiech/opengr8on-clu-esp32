@@ -495,6 +495,57 @@ menu "OpenGr8on ESP32 CLU"
             ESP32 default GPIO34 = the reset button of the Grenton GATE (input-only pin: needs the
             board's external pull-up; GPIO0 is the RMII clock there).
 
+    menu "Secure CLU channel"
+
+        config CLU_SECURE_CHANNEL
+            bool "Secure CLU-to-CLU / host channel (Noise IK over UDP)"
+            default n
+            help
+                Adds an encrypted, authenticated transport next to the Grenton UDP protocol:
+                Noise_IK_25519_AESGCM_SHA256 on UDP CLU_SEC_PORT, a per-device X25519 key (NVS
+                namespace "sec"), pinned peer keys, AES-256-GCM with replay protection.
+                Remote CLU calls (OM.LUA CLUxxx:execute/get/set) go over it when the peer CLU also
+                runs it: unknown CLUs are paired automatically while this CLU's setup window is
+                open (and the peer's, for its side); a CLU that does not answer, or cannot be
+                paired now, is used over the legacy protocol (retried after 10 minutes). A paired
+                CLU is never downgraded to legacy. Host tools pair with tools/clu_sec.py.
+                With CLU_SETUP_WINDOW_S = 0 the window is always open: any peer is paired on first
+                contact. See SECURE.md.
+
+        config CLU_SEC_PORT
+            int "UDP port"
+            depends on CLU_SECURE_CHANNEL
+            range 1 65535
+            default 1235
+
+        config CLU_SEC_MAX_PINS
+            int "Max pinned peer keys"
+            depends on CLU_SECURE_CHANNEL
+            range 1 64
+            default 16
+
+        config CLU_SEC_MAX_SESSIONS
+            int "Max concurrent sessions"
+            depends on CLU_SECURE_CHANNEL
+            range 2 32
+            default 8
+
+        config CLU_SEC_DISABLE_LEGACY
+            bool "Disable the legacy protocol outside the setup window"
+            depends on CLU_SECURE_CHANNEL && CLU_SETUP_WINDOW_S != 0
+            default n
+            help
+                Outside the setup window UDP 1234 (Grenton protocol) answers only discovery,
+                the public key request (req:upgrade:v1:pubkey) and checkAlive(); Lua requests,
+                req_reset, TFTP, diagnostics and module refresh get resp:ERROR, and clientReport
+                pushes are not sent (Object Manager's live view stops). Remote calls to CLUs go
+                over the secure channel only: unpaired or legacy CLUs (including every real
+                Grenton CLU) become unreachable from this CLU's scripts.
+                Inside the setup window (setup button, reboot) everything works as usual, so
+                Object Manager can still program and debug the CLU.
+
+    endmenu
+
     menu "Telnet log console"
 
         config CLU_TELNET

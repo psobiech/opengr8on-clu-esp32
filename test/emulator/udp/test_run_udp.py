@@ -16,6 +16,7 @@ from .run_udp import (
     MASTER_KEY,
     Device,
     Relay,
+    SecRelay,
     check_key_selection,
     decrypt,
     encrypt,
@@ -24,6 +25,7 @@ from .run_udp import (
     run_test,
     run_with_timeout,
     validate_packet_records,
+    validate_secure_records,
 )
 
 
@@ -271,6 +273,70 @@ class RelayTests(unittest.TestCase):
                 self.assertEqual(relay.errors, [])
             finally:
                 relay.close()
+
+
+class SecRelayTests(unittest.TestCase):
+    def test_flow_keeps_its_target_and_carries_traffic_both_ways(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as b_peer, \
+                socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as other:
+            b_peer.bind(("127.0.0.1", 0))
+            other.bind(("127.0.0.1", 0))
+            b_peer.settimeout(2)
+            other.settimeout(0.2)
+            relay = SecRelay(bind_port=0)
+            try:
+                relay.target_port = b_peer.getsockname()[1]
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as a_peer:
+                    a_peer.settimeout(2)
+                    a_peer.sendto(b"\x08probe", relay.listener.getsockname())
+                    data, upstream = b_peer.recvfrom(4096)
+                    self.assertEqual(data, b"\x08probe")
+                    b_peer.sendto(b"\x09answer", upstream)
+                    self.assertEqual(a_peer.recv(4096), b"\x09answer")
+                    # Retargeting the relay does not move an existing flow.
+                    relay.target_port = other.getsockname()[1]
+                    a_peer.sendto(b"\x04data", relay.listener.getsockname())
+                    self.assertEqual(b_peer.recv(4096), b"\x04data")
+                    with self.assertRaises(socket.timeout):
+                        other.recv(4096)
+                    # The far side may start traffic on the flow (request on an established session).
+                    b_peer.sendto(b"\x04request", upstream)
+                    self.assertEqual(a_peer.recv(4096), b"\x04request")
+                    relay.replay_last_data()
+                    self.assertEqual(b_peer.recv(4096), b"\x04data")
+                    relay.drop = True
+                    a_peer.sendto(b"\x04lost", relay.listener.getsockname())
+                    b_peer.settimeout(0.2)
+                    with self.assertRaises(socket.timeout):
+                        b_peer.recv(4096)
+                self.assertEqual([(r["direction"], r["type"]) for r in relay.records],
+                                 [("forward", "probe"), ("back", "probe_resp"), ("forward", "data"),
+                                  ("back", "data"), ("replayed", "data"), ("dropped", "data")])
+                self.assertEqual(relay.errors, [])
+            finally:
+                relay.close()
+
+
+class SecureRecordTests(unittest.TestCase):
+    def setUp(self):
+        self.secure = [{"direction": "forward", "type": t} for t in ("probe", "hs_init")]
+        self.secure += [{"direction": "back", "type": t} for t in ("probe_resp", "hs_resp")]
+        self.secure += [{"direction": d, "type": "data"} for d in ("forward", "back") for _ in range(6)]
+
+    def test_complete_exchange_passes(self):
+        validate_secure_records([], self.secure)
+
+    def test_legacy_traffic_between_clus_fails(self):
+        with self.assertRaisesRegex(ValueError, "legacy protocol"):
+            validate_secure_records([{"direction": "request", "plaintext": "req:x"}], self.secure)
+
+    def test_missing_handshake_fails(self):
+        with self.assertRaisesRegex(ValueError, "hs_resp"):
+            validate_secure_records([], [r for r in self.secure if r["type"] != "hs_resp"])
+
+    def test_too_few_data_packets_fail(self):
+        with self.assertRaisesRegex(ValueError, "DATA"):
+            validate_secure_records([], self.secure[:-1])
 
 
 class PacketRecordTests(unittest.TestCase):

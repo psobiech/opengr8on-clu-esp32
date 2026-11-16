@@ -42,6 +42,27 @@ Each preset's build log and emulator logs, Lua scripts, UDP packet evidence, and
 the guests use UDP control host-forward ports 19201 and 19202. The HTTP run additionally reserves
 TCP ports 19301 and 19302. The runners have independent emulator and Unix wall-clock limits.
 
+## Secure channel
+
+`run_udp.py --secure` runs the same two-guest exchange on firmware built with `CLU_SECURE_CHANNEL`
+(see `SECURE.md`). Each guest also forwards UDP 1235 (host ports 19211 / 19212); `SecRelay` on host
+port 1235 keeps one flow per guest source, bound to the target it was opened for, so either side can
+send on an established session. The check requires the CLUs to pair automatically, all six calls to go
+over 1235 with no CLU request on 1234, a replayed DATA request to be ignored, and a dropped DATA
+packet to end in the timeout error. Without `--secure` the same image falls back to legacy (its probe
+gets no answer). esp-emu routes guest replies by the gateway source port alone while numbering those
+ports per forward rule, so the runner sends one throwaway datagram to each 1235 forward first
+(`burn_gateway_port`). Under emulation the first handshake takes about 1.7 s (software X25519).
+
+```sh
+printf 'CONFIG_CLU_SECURE_CHANNEL=y\n' > /tmp/sec.defaults
+idf.py -B build-sec-emu -D SDKCONFIG=build-sec-emu/sdkconfig \
+  -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.gate-http;/tmp/sec.defaults" build merge-bin
+python3 -m test.emulator.udp.run_udp --secure --firmware build-sec-emu/merged-binary.bin \
+  --elf build-sec-emu/opengr8on_clu_esp32.elf --cfg-a build-gate-http/udp-cfg-a.bin \
+  --cfg-b build-gate-http/udp-cfg-b.bin --out-dir build-sec-emu/udp-test
+```
+
 ## Local run
 
 With ESP-IDF v6.1.1 and `esp-emu` v1.0.0 installed:

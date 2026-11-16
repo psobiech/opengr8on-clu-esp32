@@ -12,8 +12,11 @@ test/host/test_drivers
 test/host/test_master
 test/host/liblua_host.a
 test/host/test_crypto
+test/host/test_secure
+test/host/sec_peer
 test/host/test_udp
 test/host/test_udp_nobus
+test/host/test_udp_locked
 test/host/test_uart
 test/host/test_localio
 test/host/test_localio_f8

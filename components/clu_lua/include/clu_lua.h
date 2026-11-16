@@ -46,6 +46,9 @@ typedef struct {
     /** The local object is a GATE (clu_GATE_HTTP interface, OM.LUA `GATE:new(5000, ip, ...)`):
      *  class 0 serves the GATE feature indices instead of the CLU_ZWAVE_2 ones. */
     bool        gate;
+    /** The secure CLU channel is active: after SYSTEM.Init every remote CLU of OM.LUA gets a
+     *  checkAlive() over it, so pairing does not wait for the first script call. */
+    bool        secure;
     /** GATE ResetReason (26) after a chip boot: 0 power-on, 1 external, 2 software, 3 exception.
      *  A soft reset (clu_lua_reload) reports 2 (configuration reload). */
     int         reset_reason;

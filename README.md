@@ -44,12 +44,12 @@ Bez instalowania ESP-IDF. Każde wydanie na stronie
 obraz `opengr8on-clu-<płytka>-<wersja>.bin` (instalacja / aktualizacja przez USB) i sam obraz
 aplikacji `opengr8on-clu-<płytka>-<wersja>-ota.bin` ([aktualizacja przez sieć](#aktualizacja-przez-sieć-ota)):
 
-| Płytka | Pełny obraz z wydania (USB) | Układ | Sieć |
-|---|---|---|---|
-| [Waveshare ESP32-S3-RS485-CAN (sklep Kamami)](https://kamami.pl/moduly-wifi/1201081-industrial-esp32-s3-control-board-with-rs485-and-can-communication-interfaces-supports-wi-fi-blue-5902186330269.html) | `opengr8on-clu-waveshare-<wersja>.bin` | `esp32s3` | WiFi |
-| [KinCony F8 (strona produktu)](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html) | `opengr8on-clu-f8-<wersja>.bin` | `esp32s3` | Ethernet (DHCP) |
-| [KinCony KC868-A8v3 (strona produktu)](https://www.kincony.com/esp32-s3-8-channel-relay-module.html) | `opengr8on-clu-a8v3-<wersja>.bin` | `esp32s3` | Ethernet (DHCP) |
-| [ESP32-S3 N8R8 (sklep Kamami)](https://kamami.pl/esp32/1184834-esp32-s3-microcontroller-2-4ghz-wi-fi-development-board-240mhz-dual-core-processor-esp32-s3-wroom-5906623423545.html) — GATE HTTP, 8 MB flash / 8 MB PSRAM | `opengr8on-gate-http-esp32s3-<wersja>-N8R8.bin` | `esp32s3` | WiFi |
+| Płytka | Pełny obraz z wydania (USB) | Układ | Sieć |  Przetestowane | 
+|---|---|---|---|---|
+| [Waveshare ESP32-S3-RS485-CAN (sklep Kamami)](https://kamami.pl/moduly-wifi/1201081-industrial-esp32-s3-control-board-with-rs485-and-can-communication-interfaces-supports-wi-fi-blue-5902186330269.html) | `opengr8on-clu-waveshare-<wersja>.bin` | `esp32s3` | WiFi | TAK|
+| [KinCony F8 (strona produktu)](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html) | `opengr8on-clu-f8-<wersja>.bin` | `esp32s3` | Ethernet (DHCP) | Nie (w drodze)|
+| [KinCony KC868-A8v3 (strona produktu)](https://www.kincony.com/esp32-s3-8-channel-relay-module.html) | `opengr8on-clu-a8v3-<wersja>.bin` | `esp32s3` | Ethernet (DHCP) | Nie (w drodze)|
+| [ESP32-S3 N8R8 (sklep Kamami)](https://kamami.pl/esp32/1184834-esp32-s3-microcontroller-2-4ghz-wi-fi-development-board-240mhz-dual-core-processor-esp32-s3-wroom-5906623423545.html) — GATE HTTP, 8 MB flash / 8 MB PSRAM | `opengr8on-gate-http-esp32s3-<wersja>-N8R8.bin` | `esp32s3` | WiFi | W trakcie|
 
 Wariant CLU z bramką [MySensors](MYSENSORS.md) zamiast TF-Bus: obrazy CLU z końcówką `-mysensors`
 (`…-<wersja>-mysensors.bin`, `…-<wersja>-ota-mysensors.bin`).

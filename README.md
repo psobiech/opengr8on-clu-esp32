@@ -362,7 +362,7 @@ Płytki dostępne w sklepach:
 
 ## Konfiguracja
 
-Wszystko w `idf.py menuconfig` → **OpenGr8on ESP32 CLU** (na górze menu).
+Wszystko w `idf.py menuconfig` na głównym poziomie menu; opcje ESP-IDF w **Advanced (ESP-IDF)**.
 
 ### Sieć
 
@@ -463,7 +463,7 @@ wykrywa CLU, pokazuje moduły, wartości na żywo i logi (telnet).
 
 ### Włączenie
 
-`idf.py menuconfig` → **OpenGr8on ESP32 CLU** → **OpenGr8on MQTT / Home Assistant**:
+`idf.py menuconfig` → **OpenGr8on MQTT / Home Assistant**:
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|

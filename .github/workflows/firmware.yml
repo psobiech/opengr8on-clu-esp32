@@ -287,6 +287,90 @@ jobs:
             ${{ matrix.build_dir }}/http-test/result.txt
           if-no-files-found: ignore
 
+  # Real RS485 TF-Bus path (tfbus_uart on UART1, master, dimmer driver) against an emulated
+  # DIMMER_MOSFET_DIN on esp-emu's UART1 TCP bridge (test/emulator/tfbus). Uses the waveshare
+  # artifact (TF-Bus defaults) built by the firmware matrix.
+  emulator-tfbus:
+    name: idfEmulator integration (waveshare TF-Bus)
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    needs: [ firmware ]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    env:
+      ESP_EMU_VERSION: 1.0.0
+      ESP_EMU_SHA256: bbc05bcbee298ac66070cd16d688de51721c828ad4a77f382ab4d4b25e6f42b5
+      BUILD_DIR: build-waveshare-emu
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download waveshare firmware
+        uses: actions/download-artifact@v8
+        with:
+          name: opengr8on-clu-waveshare
+          path: ${{ env.BUILD_DIR }}
+
+      - name: Ensure emulator files are runner-owned
+        run: sudo chown -R "$(id -u):$(id -g)" "$BUILD_DIR"
+
+      - name: Prepare emulator firmware
+        run: cp "$BUILD_DIR/opengr8on-clu-waveshare-full.bin" "$BUILD_DIR/merged-binary.bin"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Cache Python downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ runner.arch }}-py3.12-cryptography-44.0.2-nvs-partition-gen
+          restore-keys: |
+            pip-${{ runner.os }}-${{ runner.arch }}-py3.12-
+
+      - name: Install Python test dependencies and generate the settings image
+        run: |
+          python -m pip install --disable-pip-version-check cryptography==44.0.2 esp-idf-nvs-partition-gen
+          python3 tools/mknvs.py --serial 221010157 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o "$BUILD_DIR/tfbus-cfg.bin"
+
+      - name: Cache pinned esp-emu
+        id: esp-emu-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/esp-emu-${{ env.ESP_EMU_VERSION }}-x86_64-unknown-linux-gnu
+          key: esp-emu-${{ runner.os }}-${{ runner.arch }}-${{ env.ESP_EMU_VERSION }}-${{ env.ESP_EMU_SHA256 }}
+
+      - name: Install pinned esp-emu
+        if: steps.esp-emu-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/esp-emu-${ESP_EMU_VERSION}.tar.gz"
+          url="https://github.com/espressif/esp-emulator/releases/download/v${ESP_EMU_VERSION}/esp-emu-${ESP_EMU_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -fsSL "$url" -o "$archive"
+          printf '%s  %s\n' "$ESP_EMU_SHA256" "$archive" | sha256sum --check --status
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+
+      - name: Test TF-Bus dimmer on the UART1 bridge
+        run: |
+          python3 -m test.emulator.tfbus.run_tfbus \
+            --emulator "$RUNNER_TEMP/esp-emu-${ESP_EMU_VERSION}-x86_64-unknown-linux-gnu/esp-emu" \
+            --firmware "$BUILD_DIR/merged-binary.bin" \
+            --elf "$BUILD_DIR/opengr8on_clu_esp32.elf" \
+            --cfg "$BUILD_DIR/tfbus-cfg.bin" \
+            --out-dir "$BUILD_DIR/tfbus-test"
+
+      - name: Upload emulator logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: waveshare-esp32s3-tfbus-emulator-logs
+          path: |
+            ${{ env.BUILD_DIR }}/tfbus-test/*.log
+            ${{ env.BUILD_DIR }}/tfbus-test/*.LUA
+            ${{ env.BUILD_DIR }}/tfbus-test/tfbus-frames.jsonl
+            ${{ env.BUILD_DIR }}/tfbus-test/result.txt
+          if-no-files-found: ignore
+
   # Tag v*: GitHub release with, per board and variant, the full image (what the web flasher and
   # the README commands take) and the application image for network updates (-ota.bin); MySensors
   # variant with -mysensors before the extension (opengr8on-clu-<board>-<tag>-mysensors.bin,

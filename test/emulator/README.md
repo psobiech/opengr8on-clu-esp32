@@ -22,8 +22,19 @@ other guest reaches through the emulator's `192.168.4.1` host gateway.
 Only explicitly idempotent Lua control queries retry once after a lost UDP reply; state-changing
 operations such as `http_start()` remain single-shot.
 
+The TF-Bus check boots one guest of a TF-Bus build (`waveshare` defaults: RS485 on UART1) with
+`esp-emu --uart1-tcp`, which serves UART1 as a TCP socket. `tfbus/fake_module.py` connects to it
+and answers the firmware's real `tfbus_uart` traffic as one DIMMER_MOSFET_DIN (hwType 0x1a, frames
+as in [TFBUS.md](../../TFBUS.md)). The check covers startup RESET / SEEK / DISCOVER / ADDR_ASSIGN
+and status polling. It then uploads an OM.LUA-style script declaring the module and `DIM0001`, and
+checks that Value 0.5 reaches the wire as SET_RAMP_TIME followed by SET_VALUE `[0, f4 01]`. A level
+the module reports itself (250) must become the Lua Value. A power cycle must log `OFFLINE`, then
+`rejoined` after the address is assigned again, and the CLU must re-send the last level. Every
+frame in both directions is kept in `tfbus-frames.jsonl`. The fake module connects (with retries)
+before the firmware's startup discovery, since UART1 TX is discarded while no client is connected.
+
 The checks are organized by purpose: `boot/` contains startup validation, `udp/` contains native
-CLU UDP coverage, and `http/` contains HTTP object coverage. Each scenario folder keeps its runner,
+CLU UDP coverage, `http/` contains HTTP object coverage, and `tfbus/` contains RS485 TF-Bus coverage. Each scenario folder keeps its runner,
 Lua peer script (where applicable), and focused unit tests together.
 
 ## CI behavior
@@ -87,5 +98,18 @@ python3 -m test.emulator.http.run_http \
   --cfg-a build-gate-http-low-memory/udp-cfg-a.bin \
   --cfg-b build-gate-http-low-memory/udp-cfg-b.bin \
   --psram-size 2M --out-dir build-gate-http-low-memory/http-test
+idf.py -B build-waveshare-emu -D IDF_TARGET=esp32s3 -D SDKCONFIG=build-waveshare-emu/sdkconfig build merge-bin
+python3 tools/mknvs.py --serial 221010157 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build-waveshare-emu/tfbus-cfg.bin
+python3 -m test.emulator.tfbus.run_tfbus \
+  --firmware build-waveshare-emu/merged-binary.bin \
+  --elf build-waveshare-emu/opengr8on_clu_esp32.elf \
+  --cfg build-waveshare-emu/tfbus-cfg.bin \
+  --out-dir build-waveshare-emu/tfbus-test
 python3 -m unittest discover -s test -t . -v
 ```
+
+`build-waveshare-emu` builds the `waveshare` defaults with its own `sdkconfig` inside the build
+directory, so a locally customised root `sdkconfig` does not change the bus. It is not a preset:
+every preset is a release artifact (`test/test_firmware_release.py`). In CI, the `emulator-tfbus` job
+uses the `waveshare` artifact from the firmware matrix, which is built from the same defaults. The
+UART1 bridge uses host TCP port 19401 (`--uart-port`).

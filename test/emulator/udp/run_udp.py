@@ -109,6 +109,7 @@ class Device:
         emulator_timeout: int,
         tcp_port: int | None = None,
         psram_size: str = "8M",
+        extra_emulator_args: tuple[str, ...] = (),
     ):
         self.name = name
         self.udp_port = udp_port
@@ -150,6 +151,7 @@ class Device:
             network,
             "--timeout",
             f"{emulator_timeout}s",
+            *extra_emulator_args,
         ]
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

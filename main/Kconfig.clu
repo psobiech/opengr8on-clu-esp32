@@ -1,718 +1,778 @@
-menu "OpenGr8on ESP32 CLU"
+config CLU_WIFI_REQUIRED
+    bool
+    default y if !CLU_ETH
+    select CLU_WIFI
 
-    config CLU_WIFI_REQUIRED
-        bool
-        default y if !CLU_ETH
-        select CLU_WIFI
+menuconfig CLU_WIFI
+    bool "WiFi station"
+    default n if CLU_ETH
+    default y
+    help
+        At least one interface is always enabled: without Ethernet, WiFi is forced on
+        (shown as -*-). With Ethernet on, WiFi is optional.
 
-    menuconfig CLU_WIFI
-        bool "WiFi station"
-        default n if CLU_ETH
-        default y
+if CLU_WIFI
+
+    config CLU_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+
+    config CLU_WIFI_PASSWORD
+        string "WiFi password"
+        default ""
+
+    config CLU_WIFI_BSSID
+        string "WiFi BSSID (aa:bb:cc:dd:ee:ff, empty = any AP with the SSID)"
+        default ""
         help
-            At least one interface is always enabled: without Ethernet, WiFi is forced on
-            (shown as -*-). With Ethernet on, WiFi is optional.
+            Connect only to this access point MAC. Useful with several APs sharing the SSID.
 
-    if CLU_WIFI
+    config CLU_WIFI_WPA3_ONLY
+        bool "Require WPA3 (refuse WPA2 access points)"
+        default n
+        help
+            Off: joins WPA2-PSK, WPA2/WPA3 and WPA3-SAE networks (never open or WEP/WPA).
+            On: joins only WPA3-SAE networks, which also rules out downgrade to WPA2.
 
-        config CLU_WIFI_SSID
-            string "WiFi SSID"
-            default ""
-
-        config CLU_WIFI_PASSWORD
-            string "WiFi password"
-            default ""
-
-        config CLU_WIFI_BSSID
-            string "WiFi BSSID (aa:bb:cc:dd:ee:ff, empty = any AP with the SSID)"
-            default ""
-            help
-                Connect only to this access point MAC. Useful with several APs sharing the SSID.
-
-        config CLU_WIFI_WPA3_ONLY
-            bool "Require WPA3 (refuse WPA2 access points)"
-            default n
-            help
-                Off: joins WPA2-PSK, WPA2/WPA3 and WPA3-SAE networks (never open or WEP/WPA).
-                On: joins only WPA3-SAE networks, which also rules out downgrade to WPA2.
-
-        config CLU_WIFI_MAX_TX_POWER
-            int "WiFi max TX power (0.25 dBm units, 0 = driver default)"
-            range 0 84
-            default 0
-            help
-                Lower it (e.g. 34 = 8.5 dBm) when the board sees the AP but authentication
-                always times out (reason 2): some boards' antennas misbehave at full power.
-
-    endif
-
-    config CLU_NET_DIAG_INTERVAL
-        int "Network diagnostics log interval (s, 0 = off)"
-        range 0 3600
+    config CLU_WIFI_MAX_TX_POWER
+        int "WiFi max TX power (0.25 dBm units, 0 = driver default)"
+        range 0 84
         default 0
         help
-            Every N seconds log one line: internal heap (free / minimum ever / largest block),
-            PSRAM free, interfaces up, MQTT link, and with WiFi the AP (BSSID, channel, RSSI),
-            followed by the WiFi driver's buffer statistics (esp_wifi_statis_dump). For chasing
-            link stalls: correlate with MQTT drops and the broker log.
+            Lower it (e.g. 34 = 8.5 dBm) when the board sees the AP but authentication
+            always times out (reason 2): some boards' antennas misbehave at full power.
 
-    menuconfig CLU_ETH
-        bool "Ethernet"
-        default y if IDF_TARGET_ESP32
-        help
-            Wired network: the ESP32's internal EMAC with an RMII PHY (Grenton GATE: LAN8720A), or
-            a WIZnet W5500 on SPI (any target; KinCony F8, KC868-A8v3). With Ethernet on, WiFi becomes
-            optional (both can run in parallel); with Ethernet off, WiFi is always on. Ethernet has
-            the default route when both have an address.
+endif
 
-    if CLU_ETH
+config CLU_NET_DIAG_INTERVAL
+    int "Network diagnostics log interval (s, 0 = off)"
+    range 0 3600
+    default 0
+    help
+        Every N seconds log one line: internal heap (free / minimum ever / largest block),
+        PSRAM free, interfaces up, MQTT link, and with WiFi the AP (BSSID, channel, RSSI),
+        followed by the WiFi driver's buffer statistics (esp_wifi_statis_dump). For chasing
+        link stalls: correlate with MQTT drops and the broker log.
 
-        choice CLU_ETH_IF
-            prompt "Interface"
-            default CLU_ETH_IF_EMAC if IDF_TARGET_ESP32
-            default CLU_ETH_IF_W5500
+menuconfig CLU_ETH
+    bool "Ethernet"
+    default y if IDF_TARGET_ESP32
+    help
+        Wired network: the ESP32's internal EMAC with an RMII PHY (Grenton GATE: LAN8720A), or
+        a WIZnet W5500 on SPI (any target; KinCony F8, KC868-A8v3). With Ethernet on, WiFi becomes
+        optional (both can run in parallel); with Ethernet off, WiFi is always on. Ethernet has
+        the default route when both have an address.
 
-            config CLU_ETH_IF_EMAC
-                bool "Internal EMAC + RMII PHY (Grenton GATE)"
-                depends on IDF_TARGET_ESP32
-                help
-                    Only the classic ESP32 has the EMAC.
-            config CLU_ETH_IF_W5500
-                bool "WIZnet W5500 on SPI (KinCony F8, KC868-A8v3)"
-        endchoice
+if CLU_ETH
 
-        if CLU_ETH_IF_W5500
+    choice CLU_ETH_IF
+        prompt "Interface"
+        default CLU_ETH_IF_EMAC if IDF_TARGET_ESP32
+        default CLU_ETH_IF_W5500
 
-            config CLU_ETH_SPI_SCLK_GPIO
-                int "W5500 SPI SCLK GPIO"
-                range 0 48
-                default 42
-
-            config CLU_ETH_SPI_MOSI_GPIO
-                int "W5500 SPI MOSI GPIO"
-                range 0 48
-                default 43
-
-            config CLU_ETH_SPI_MISO_GPIO
-                int "W5500 SPI MISO GPIO"
-                range 0 48
-                default 44
-
-            config CLU_ETH_SPI_CS_GPIO
-                int "W5500 SPI CS GPIO"
-                range 0 48
-                default 41
-
-            config CLU_ETH_SPI_INT_GPIO
-                int "W5500 interrupt GPIO (-1 = poll every 10 ms)"
-                range -1 48
-                default 2
-
-            config CLU_ETH_SPI_RST_GPIO
-                int "W5500 reset GPIO (-1 = none)"
-                range -1 48
-                default 1
-
-            config CLU_ETH_SPI_CLOCK_MHZ
-                int "SPI clock [MHz]"
-                range 5 80
-                default 20
-                help
-                    Defaults: KinCony F8 (SCLK 42, MOSI 43, MISO 44, CS 41, INT 2, RST 1).
-                    KC868-A8v3: SCLK 1, MOSI 2, MISO 41, CS 42, INT 43, RST 44. Both use GPIO43/44,
-                    the ESP32-S3 UART0 console pins: move the console to USB-Serial-JTAG (the board
-                    profiles sdkconfig.defaults.f8 / .a8v3 do). Raise the clock only with short traces.
-
-        endif
-
-        if CLU_ETH_IF_EMAC
-
-            choice CLU_ETH_PHY
-                prompt "PHY chip"
-                default CLU_ETH_PHY_LAN87XX
-                help
-                    Generic uses only the standard IEEE 802.3 registers (reset, autonegotiation,
-                    link / speed / duplex). It fits any compliant 10/100 PHY without its own driver,
-                    e.g. JL1101; no chip ID check, so a wrong PHY address shows up as no link.
-
-                config CLU_ETH_PHY_LAN87XX
-                    bool "LAN8720A / LAN87xx (Grenton GATE)"
-                config CLU_ETH_PHY_GENERIC
-                    bool "Generic IEEE 802.3 (JL1101 and other PHYs)"
-            endchoice
-
-            config CLU_ETH_PHY_ADDR
-                int "PHY address (-1 = auto-detect)"
-                range -1 31
-                default 0
-                help
-                    Strap address of the PHY on the MDIO bus. Grenton GATE: 0.
-
-            config CLU_ETH_MDC_GPIO
-                int "SMI MDC GPIO"
-                range 0 33
-                default 23
-
-            config CLU_ETH_MDIO_GPIO
-                int "SMI MDIO GPIO"
-                range 0 33
-                default 18
-
-            config CLU_ETH_PHY_RST_GPIO
-                int "PHY reset GPIO (-1 = none)"
-                range -1 33
-                default 2
-                help
-                    Pulsed low at start to reset the PHY. Grenton GATE: GPIO2.
-
-            choice CLU_ETH_CLK
-                prompt "RMII 50 MHz reference clock"
-                default CLU_ETH_CLK_EXT_IN_GPIO0
-                help
-                    RMII data pins are fixed on the ESP32 (TXEN 21, TXD0 19, TXD1 22, CRS_DV 27,
-                    RXD0 25, RXD1 26). On WROVER modules GPIO16/17 are taken by the PSRAM, so with
-                    PSRAM only GPIO0 is usable for the clock.
-
-                config CLU_ETH_CLK_EXT_IN_GPIO0
-                    bool "External oscillator into GPIO0 (Grenton GATE, WT32-ETH01)"
-                config CLU_ETH_CLK_OUT_GPIO0
-                    bool "ESP32 outputs the clock on GPIO0"
-                config CLU_ETH_CLK_OUT_GPIO16
-                    bool "ESP32 outputs the clock on GPIO16 (not with WROVER PSRAM)"
-                config CLU_ETH_CLK_OUT_GPIO17
-                    bool "ESP32 outputs the clock on GPIO17 (not with WROVER PSRAM)"
-            endchoice
-
-        endif
-
-    endif
-
-    config CLU_SERIAL
-        string "CLU serial number (decimal, empty = random, stored in NVS)"
-        default ""
-        help
-            Set to the serial of the CLU being emulated (e.g. 221010155) so Object Manager
-            treats this device as that CLU. Overrides the NVS value when non-empty.
-
-    config CLU_PRIVATE_KEY
-        string "CLU private key / PIN (8 chars, empty = random, stored in NVS)"
-        default ""
-        help
-            Private key from the emulated CLU's sticker. Factory UDP key is derived from it.
-
-    config CLU_IV
-        string "Factory project IV (32 hex chars, empty = random, stored in NVS)"
-        default ""
-        help
-            IV of the factory project cipher (used until OM sends req_set_key).
-            Empty: random per device. Changing it resets the keys to factory default.
-
-    choice CLU_DEVICE
-        prompt "Device type"
-        default CLU_DEVICE_ZWAVE_2
-        help
-            What Object Manager sees (hardware / firmware type and version in CONFIG.TXT,
-            CONFIG.JSON and the diagnostic pack); OM picks the device interface from it.
-
-        config CLU_DEVICE_GATE_HTTP
-            bool "GATE HTTP"
+        config CLU_ETH_IF_EMAC
+            bool "Internal EMAC + RMII PHY (Grenton GATE)"
+            depends on IDF_TARGET_ESP32
             help
-                CLU_GATE_HTTP: hwType 0x12, hwVer 2, fwType 3, fwApiVer 0x578, firmware 1.4.2-2346.
-                No TF-Bus (the RS485 bus is off). Objects: HttpRequest (121), HttpListener (120),
-                Timer. OM declares it as GATE:new(5000, ip, netmask, gateway, "", "").
-                See GATE_HTTP.md.
-
-        config CLU_DEVICE_ZWAVE_2
-            bool "CLU_ZWAVE_2"
-            help
-                hwType 0x13, hwVer 1, fwType 3, fwApiVer 0x203, firmware 5.15.24-2635. TF-Bus
-                modules on RS485, the CLU virtual objects (Timer, Calendar, Scheduler, ...).
+                Only the classic ESP32 has the EMAC.
+        config CLU_ETH_IF_W5500
+            bool "WIZnet W5500 on SPI (KinCony F8, KC868-A8v3)"
     endchoice
 
-    menu "RS485 bus (TF-Bus / MySensors)"
+    if CLU_ETH_IF_W5500
 
-        choice CLU_BUS
-            prompt "Protocol"
-            default CLU_BUS_NONE if CLU_DEVICE_GATE_HTTP
-            default CLU_TFBUS
-            help
-                What the CLU drives on its RS485 / UART pins. "None" leaves the UART and the RS485
-                pins alone (e.g. a board without a transceiver). A GATE has no bus:
-                only "None" is offered there.
-
-            config CLU_TFBUS
-                bool "TF-Bus master (Grenton RS485 modules)"
-                depends on !CLU_DEVICE_GATE_HTTP
-                help
-                    Drive Grenton TF-Bus modules over RS485: discovery, addressing, polling and the
-                    module drivers.
-
-            config CLU_MYSENSORS
-                bool "MySensors gateway (RS485 network, MY_RS485)"
-                depends on !CLU_DEVICE_GATE_HTTP
-                help
-                    Nodes built with MY_RS485 on the bus; the CLU is node 0, the gateway, and the
-                    controller: answers find parent / ping / registration / echo, hands out node
-                    ids (kept in NVS), answers I_CONFIG / I_TIME and value requests, and passes every
-                    message to the scripts (USER.LUA global MySensors, see MYSENSORS.md). No other
-                    gateway on the bus. OM sees no real TF-Bus modules.
-
-            config CLU_BUS_NONE
-                bool "None (RS485 off)"
-                help
-                    No UART / RS485 driver at all. The CLU runs only virtual objects, scripts and the
-                    network services (OM sees no modules; discovery / "Clear CLU" report an empty bus).
-        endchoice
-
-        config CLU_TFBUS_MASTER
-            bool
-            default y if CLU_TFBUS || CLU_MYSENSORS
-            help
-                TF-Bus master running: on the RS485 wire (CLU_TFBUS) or without a wire, serving only
-                modules emulated by the firmware (CLU_MYSENSORS, CLU_LOCAL_IO).
-
-        if CLU_TFBUS || CLU_MYSENSORS
-
-            config CLU_RS485_UART
-                int "UART number"
-                range 1 2
-                default 1
-                help
-                    Grenton GATE (ESP32): UART1 on TX=4, RX=3, DE=5.
-
-            config CLU_RS485_TX_GPIO
-                int "TX (DI) GPIO"
-                default 4 if IDF_TARGET_ESP32
-                default 17
-
-            config CLU_RS485_RX_GPIO
-                int "RX (RO) GPIO"
-                default 3 if IDF_TARGET_ESP32
-                default 18
-
-            config CLU_RS485_DE_GPIO
-                int "DE/RE GPIO (-1 = auto-direction transceiver)"
-                default 5 if IDF_TARGET_ESP32
-                default 21
-                help
-                    Waveshare ESP32-S3-RS485-CAN: TX=17, RX=18, DE=21 (driven as UART RTS).
-
-            # One option per protocol: a single one keeps its saved value when the protocol changes.
-            config CLU_TFBUS_BAUD
-                int "Baud rate"
-                depends on CLU_TFBUS
-                default 115200
-                help
-                    TF-Bus: 115200.
-
-            config CLU_MYSENSORS_BAUD
-                int "Baud rate"
-                depends on CLU_MYSENSORS
-                default 57600
-                help
-                    The nodes' MY_RS485_BAUD_RATE (57600 here; the MySensors library defaults to 9600).
-
-        endif
-
-        menu "MySensors gateway"
-            depends on CLU_MYSENSORS
-
-
-            config CLU_MYSENSORS_METRIC
-                bool "Metric units (I_CONFIG answers M, else I)"
-                default y
-
-            config CLU_MYSENSORS_TRACE
-                bool "Log every message at INFO"
-                default n
-                help
-                    Both directions as text lines ("< " from a node, "> " to a node). Can also be
-                    switched at runtime from a script: MySensors.trace(true). The bus state (valid
-                    frames / garbage) is logged on every change regardless.
-
-            config CLU_MYSENSORS_MODULES_MAX
-                int "Max emulated IO_MODULE_DIN_8 modules (0 = none)"
-                range 0 8
-                default 4
-                help
-                    MySensors binary sensors and outputs as TF-Bus modules in Object Manager: each
-                    module has 8 DIN (S_DOOR, S_MOTION, S_SMOKE, S_WATER_LEAK, S_SOUND, S_VIBRATION,
-                    S_MOISTURE -> V_TRIPPED) and 8 DOUT (S_BINARY, S_SPRINKLER -> V_STATUS, S_LOCK ->
-                    V_LOCK_STATUS). Modules are created on demand: a sensor takes the first free channel
-                    when it presents itself, and a new module (fresh serial) is added when all are
-                    full, up to this limit. Serials and channels are kept in NVS. Run discovery in OM
-                    after new sensors appeared and add the modules to the project.
-                    MySensors.slots() lists which sensor is on which channel.
-
-        endmenu
-
-        if CLU_TFBUS_MASTER
-
-            menuconfig CLU_LOCAL_IO
-                bool "On-board IO as a TF-Bus module (PCF8575)"
-                default n
-                help
-                    8 relay outputs and 8 digital inputs on one PCF8575 I2C expander on the controller
-                    board (KinCony F8, KC868-A8v3) appear to Object Manager as an IO_MODULE_DIN_8 module
-                    (8 DOUT + 8 DIN). The firmware answers the TF-Bus frames for it itself, so it takes
-                    part in discovery, addressing and polling like a module on the RS485 bus. Add it to
-                    the project in OM like any discovered module. Also works with CLU_MYSENSORS.
-
-            if CLU_LOCAL_IO
-
-                config CLU_LOCAL_IO_SDA_GPIO
-                    int "I2C SDA GPIO"
-                    range 0 48
-                    default 8
-
-                config CLU_LOCAL_IO_SCL_GPIO
-                    int "I2C SCL GPIO"
-                    range 0 48
-                    default 18
-                    help
-                        Shared with the RTC (CLU_RTC) when it uses the same pins (KinCony F8 / A8v3).
-
-                config CLU_LOCAL_IO_ADDR
-                    hex "PCF8575 I2C address"
-                    range 0x20 0x27
-                    default 0x24
-                    help
-                        KinCony F8: 0x24, KC868-A8v3: 0x22.
-
-                choice CLU_LOCAL_IO_OUT_PINS
-                    prompt "Relay outputs on"
-                    default CLU_LOCAL_IO_OUT_P1
-
-                    config CLU_LOCAL_IO_OUT_P1
-                        bool "P10-P17, inputs on P00-P07 (KinCony F8)"
-                    config CLU_LOCAL_IO_OUT_P0
-                        bool "P00-P07, inputs on P10-P17 (KC868-A8v3)"
-                endchoice
-
-                config CLU_LOCAL_IO_OUT_ACTIVE_LOW
-                    bool "Outputs are active low"
-                    default y
-                    help
-                        A relay is on when its PCF8575 pin is driven low. The expander powers up with all
-                        pins high, so the relays stay off until the CLU switches them.
-
-                config CLU_LOCAL_IO_IN_ACTIVE_LOW
-                    bool "Inputs are active low"
-                    default y
-                    help
-                        An input reads low when it is active (optocoupler conducting).
-
-                config CLU_LOCAL_IO_SN
-                    string "Module serial (decimal, empty = random, stored in NVS)"
-                    default ""
-                    help
-                        Like the CLU serial: a random serial is generated once and kept in NVS, so the
-                        module keeps its identity in the OM project across reboots and updates. Set it to
-                        take over the serial of a module already in the project. Overrides the NVS value
-                        when non-empty.
-
-            endif
-
-        endif
-
-    endmenu
-
-
-    menuconfig CLU_RTC
-        bool "Battery-backed RTC (I2C)"
-        default n if IDF_TARGET_ESP32
-        default y
-        help
-            Sets the clock at boot, before the scripts run, so they have the right time without
-            the network. Written back on every SNTP sync and SetDateTime. Keeps time through a
-            power cut only with a backup cell on the board. A missing chip is logged and ignored.
-
-    if CLU_RTC
-
-        choice CLU_RTC_CHIP
-            prompt "RTC chip"
-            default CLU_RTC_PCF85063
-
-            config CLU_RTC_PCF85063
-                bool "PCF85063 (Waveshare ESP32-S3-RS485-CAN)"
-            config CLU_RTC_DS3231
-                bool "DS3231 (KinCony F8, KC868-A8v3)"
-        endchoice
-
-        config CLU_RTC_SDA_GPIO
-            int "RTC I2C SDA GPIO"
+        config CLU_ETH_SPI_SCLK_GPIO
+            int "W5500 SPI SCLK GPIO"
             range 0 48
-            default 39
-            help
-                Waveshare ESP32-S3-RS485-CAN: SDA=39, SCL=38. KinCony F8 / KC868-A8v3: SDA=8,
-                SCL=18. The bus can be shared with the on-board IO expander (same pins).
+            default 42
 
-        config CLU_RTC_SCL_GPIO
-            int "RTC I2C SCL GPIO"
+        config CLU_ETH_SPI_MOSI_GPIO
+            int "W5500 SPI MOSI GPIO"
             range 0 48
-            default 38
+            default 43
+
+        config CLU_ETH_SPI_MISO_GPIO
+            int "W5500 SPI MISO GPIO"
+            range 0 48
+            default 44
+
+        config CLU_ETH_SPI_CS_GPIO
+            int "W5500 SPI CS GPIO"
+            range 0 48
+            default 41
+
+        config CLU_ETH_SPI_INT_GPIO
+            int "W5500 interrupt GPIO (-1 = poll every 10 ms)"
+            range -1 48
+            default 2
+
+        config CLU_ETH_SPI_RST_GPIO
+            int "W5500 reset GPIO (-1 = none)"
+            range -1 48
+            default 1
+
+        config CLU_ETH_SPI_CLOCK_MHZ
+            int "SPI clock [MHz]"
+            range 5 80
+            default 20
+            help
+                Defaults: KinCony F8 (SCLK 42, MOSI 43, MISO 44, CS 41, INT 2, RST 1).
+                KC868-A8v3: SCLK 1, MOSI 2, MISO 41, CS 42, INT 43, RST 44. Both use GPIO43/44,
+                the ESP32-S3 UART0 console pins: move the console to USB-Serial-JTAG (the board
+                profiles sdkconfig.defaults.f8 / .a8v3 do). Raise the clock only with short traces.
 
     endif
 
-    config CLU_SOFT_RESET
-        bool "req_reset reloads Lua instead of rebooting"
-        default y
-        help
-            On req_reset (OM after a script upload, "reset" in the CLI) close the Lua VM, forget
-            the TFBUS modules and boot MAIN.LUA again in a fresh VM, with WiFi, MQTT and the
-            UDP/TFTP servers left running. Falls back to a reboot if the script does not reach
-            SYSTEM.Loop in time or the bus does not stop. __clu.sys_restart() always reboots.
+    if CLU_ETH_IF_EMAC
 
-    config CLU_SETUP_WINDOW_S
-        int "Setup window after startup [s] (0 = always open)"
-        range 0 86400
-        default 0
-        help
-            Discovery (req_discovery_clu), re-keying (req_set_key, anything under the PIN / temp
-            key), req_set_clu_ip and opening TFTP (req_start_ftp, req_diagnostic_refresh) are
-            only accepted during this many seconds after the CLU is up following a chip boot
-            (power-on, reset button, reboot): counting starts once WiFi first has an IP, so a
-            slow WiFi connect does not use it up. Afterwards the CLU does not answer discovery and refuses the others; normal
-            operation under the project key (req:, req_reset, req_refresh_modules) is unaffected.
-            A TFTP session opened inside the window runs until req_tftp_stop or its idle timeout.
-            A discovery answered inside the window keeps it open (no time limit) until the next
-            reset: req_reset (soft or hard) or a reboot.
-            A soft reset (CLU_SOFT_RESET) does not reopen the window; the setup button does.
-            In emergency mode (MAIN.LUA failed, EMERGNCY.LUA running) the window stays open with
-            no time limit, until the CLU leaves it.
-            0 (default) disables the restriction; set e.g. 60 to enable it.
-
-    config CLU_SETUP_BUTTON_GPIO
-        int "Setup button GPIO (-1 = none)"
-        range -1 48
-        default 34 if IDF_TARGET_ESP32
-        default 0
-        depends on CLU_SETUP_WINDOW_S != 0
-        help
-            Active-low button (internal pull-up). Holding it for 100 ms reopens the setup window
-            for CLU_SETUP_WINDOW_S seconds. Default GPIO0 = the BOOT button of most ESP32-S3
-            boards: press it while the CLU runs (held during reset it enters download mode).
-            ESP32 default GPIO34 = the reset button of the Grenton GATE (input-only pin: needs the
-            board's external pull-up; GPIO0 is the RMII clock there).
-
-    menu "Telnet log console"
-
-        config CLU_TELNET
-            bool "Stream logs over telnet"
-            default y
+        choice CLU_ETH_PHY
+            prompt "PHY chip"
+            default CLU_ETH_PHY_LAN87XX
             help
-                Read-only TCP console: `telnet <clu-ip>` or `nc <clu-ip> 23` shows the ESP_LOG
-                output (also Lua print / DebugLog) live, preceded by the buffered history.
-                Ctrl-C / Ctrl-D closes the session. No authentication: restrict with
-                CLU_TELNET_ALLOW. Lines logged before the CLU identity is loaded (the boot line
-                with the PIN) are never captured.
+                Generic uses only the standard IEEE 802.3 registers (reset, autonegotiation,
+                link / speed / duplex). It fits any compliant 10/100 PHY without its own driver,
+                e.g. JL1101; no chip ID check, so a wrong PHY address shows up as no link.
 
-        config CLU_TELNET_PORT
-            int "TCP port"
-            range 1 65535
+            config CLU_ETH_PHY_LAN87XX
+                bool "LAN8720A / LAN87xx (Grenton GATE)"
+            config CLU_ETH_PHY_GENERIC
+                bool "Generic IEEE 802.3 (JL1101 and other PHYs)"
+        endchoice
+
+        config CLU_ETH_PHY_ADDR
+            int "PHY address (-1 = auto-detect)"
+            range -1 31
+            default 0
+            help
+                Strap address of the PHY on the MDIO bus. Grenton GATE: 0.
+
+        config CLU_ETH_MDC_GPIO
+            int "SMI MDC GPIO"
+            range 0 33
             default 23
-            depends on CLU_TELNET
 
-        config CLU_TELNET_MAX_CLIENTS
-            int "Concurrent clients"
-            range 1 4
+        config CLU_ETH_MDIO_GPIO
+            int "SMI MDIO GPIO"
+            range 0 33
+            default 18
+
+        config CLU_ETH_PHY_RST_GPIO
+            int "PHY reset GPIO (-1 = none)"
+            range -1 33
             default 2
-            depends on CLU_TELNET
-
-        config CLU_TELNET_HISTORY
-            int "History buffer [bytes, internal RAM]"
-            range 1024 65536
-            default 8192
-            depends on CLU_TELNET
-
-        config CLU_TELNET_ALLOW
-            string "Allowed peers (empty = any, a.b.c.d or a.b.c.d/nn)"
-            default ""
-            depends on CLU_TELNET
             help
-                Connections from other addresses are closed immediately. An invalid value
-                refuses everyone.
+                Pulsed low at start to reset the PHY. Grenton GATE: GPIO2.
 
-    endmenu
+        choice CLU_ETH_CLK
+            prompt "RMII 50 MHz reference clock"
+            default CLU_ETH_CLK_EXT_IN_GPIO0
+            help
+                RMII data pins are fixed on the ESP32 (TXEN 21, TXD0 19, TXD1 22, CRS_DV 27,
+                RXD0 25, RXD1 26). On WROVER modules GPIO16/17 are taken by the PSRAM, so with
+                PSRAM only GPIO0 is usable for the clock.
 
-    menu "GATE HTTP objects (HttpRequest / HttpListener)"
+            config CLU_ETH_CLK_EXT_IN_GPIO0
+                bool "External oscillator into GPIO0 (Grenton GATE, WT32-ETH01)"
+            config CLU_ETH_CLK_OUT_GPIO0
+                bool "ESP32 outputs the clock on GPIO0"
+            config CLU_ETH_CLK_OUT_GPIO16
+                bool "ESP32 outputs the clock on GPIO16 (not with WROVER PSRAM)"
+            config CLU_ETH_CLK_OUT_GPIO17
+                bool "ESP32 outputs the clock on GPIO17 (not with WROVER PSRAM)"
+        endchoice
 
-        config CLU_HTTP
-            bool "HttpRequest (class 121) and HttpListener (class 120)"
-            default y if CLU_DEVICE_GATE_HTTP
+    endif
+
+endif
+
+config CLU_SERIAL
+    string "CLU serial number (decimal, empty = random, stored in NVS)"
+    default ""
+    help
+        Set to the serial of the CLU being emulated (e.g. 221010155) so Object Manager
+        treats this device as that CLU. Overrides the NVS value when non-empty.
+
+config CLU_PRIVATE_KEY
+    string "CLU private key / PIN (8 chars, empty = random, stored in NVS)"
+    default ""
+    help
+        Private key from the emulated CLU's sticker. Factory UDP key is derived from it.
+
+config CLU_IV
+    string "Factory project IV (32 hex chars, empty = random, stored in NVS)"
+    default ""
+    help
+        IV of the factory project cipher (used until OM sends req_set_key).
+        Empty: random per device. Changing it resets the keys to factory default.
+
+choice CLU_DEVICE
+    prompt "Device type"
+    default CLU_DEVICE_ZWAVE_2
+    help
+        What Object Manager sees (hardware / firmware type and version in CONFIG.TXT,
+        CONFIG.JSON and the diagnostic pack); OM picks the device interface from it.
+
+    config CLU_DEVICE_GATE_HTTP
+        bool "GATE HTTP"
+        help
+            CLU_GATE_HTTP: hwType 0x12, hwVer 2, fwType 3, fwApiVer 0x578, firmware 1.4.2-2346.
+            No TF-Bus (the RS485 bus is off). Objects: HttpRequest (121), HttpListener (120),
+            Timer. OM declares it as GATE:new(5000, ip, netmask, gateway, "", "").
+            See GATE_HTTP.md.
+
+    config CLU_DEVICE_ZWAVE_2
+        bool "CLU_ZWAVE_2"
+        help
+            hwType 0x13, hwVer 1, fwType 3, fwApiVer 0x203, firmware 5.15.24-2635. TF-Bus
+            modules on RS485, the CLU virtual objects (Timer, Calendar, Scheduler, ...).
+endchoice
+
+menu "RS485 bus (TF-Bus / MySensors)"
+
+    choice CLU_BUS
+        prompt "Protocol"
+        default CLU_BUS_NONE if CLU_DEVICE_GATE_HTTP
+        default CLU_TFBUS
+        help
+            What the CLU drives on its RS485 / UART pins. "None" leaves the UART and the RS485
+            pins alone (e.g. a board without a transceiver). A GATE has no bus:
+            only "None" is offered there.
+
+        config CLU_TFBUS
+            bool "TF-Bus master (Grenton RS485 modules)"
+            depends on !CLU_DEVICE_GATE_HTTP
+            help
+                Drive Grenton TF-Bus modules over RS485: discovery, addressing, polling and the
+                module drivers.
+
+        config CLU_MYSENSORS
+            bool "MySensors gateway (RS485 network, MY_RS485)"
+            depends on !CLU_DEVICE_GATE_HTTP
+            help
+                Nodes built with MY_RS485 on the bus; the CLU is node 0, the gateway, and the
+                controller: answers find parent / ping / registration / echo, hands out node
+                ids (kept in NVS), answers I_CONFIG / I_TIME and value requests, and passes every
+                message to the scripts (USER.LUA global MySensors, see MYSENSORS.md). No other
+                gateway on the bus. OM sees no real TF-Bus modules.
+
+        config CLU_BUS_NONE
+            bool "None (RS485 off)"
+            help
+                No UART / RS485 driver at all. The CLU runs only virtual objects, scripts and the
+                network services (OM sees no modules; discovery / "Clear CLU" report an empty bus).
+    endchoice
+
+    config CLU_TFBUS_MASTER
+        bool
+        default y if CLU_TFBUS || CLU_MYSENSORS
+        help
+            TF-Bus master running: on the RS485 wire (CLU_TFBUS) or without a wire, serving only
+            modules emulated by the firmware (CLU_MYSENSORS, CLU_LOCAL_IO).
+
+    if CLU_TFBUS || CLU_MYSENSORS
+
+        config CLU_RS485_UART
+            int "UART number"
+            range 1 2
+            default 1
+            help
+                Grenton GATE (ESP32): UART1 on TX=4, RX=3, DE=5.
+
+        config CLU_RS485_TX_GPIO
+            int "TX (DI) GPIO"
+            default 4 if IDF_TARGET_ESP32
+            default 17
+
+        config CLU_RS485_RX_GPIO
+            int "RX (RO) GPIO"
+            default 3 if IDF_TARGET_ESP32
+            default 18
+
+        config CLU_RS485_DE_GPIO
+            int "DE/RE GPIO (-1 = auto-direction transceiver)"
+            default 5 if IDF_TARGET_ESP32
+            default 21
+            help
+                Waveshare ESP32-S3-RS485-CAN: TX=17, RX=18, DE=21 (driven as UART RTS).
+
+        # One option per protocol: a single one keeps its saved value when the protocol changes.
+        config CLU_TFBUS_BAUD
+            int "Baud rate"
+            depends on CLU_TFBUS
+            default 115200
+            help
+                TF-Bus: 115200.
+
+        config CLU_MYSENSORS_BAUD
+            int "Baud rate"
+            depends on CLU_MYSENSORS
+            default 57600
+            help
+                The nodes' MY_RS485_BAUD_RATE (57600 here; the MySensors library defaults to 9600).
+
+    endif
+
+    menu "MySensors gateway"
+        depends on CLU_MYSENSORS
+
+
+        config CLU_MYSENSORS_METRIC
+            bool "Metric units (I_CONFIG answers M, else I)"
+            default y
+
+        config CLU_MYSENSORS_TRACE
+            bool "Log every message at INFO"
             default n
             help
-                The GATE HTTP objects. HttpRequest sends HTTP / HTTPS requests (HTTPS checked
-                against the built-in certificate bundle) one after another; HttpListener answers
-                requests on CLU_HTTP_PORT, routed by path to the listener whose Path matches.
-                Object Manager offers them only on a GATE (CLU_DEVICE_GATE_HTTP); on a CLU they
-                work when declared by hand. No authentication: anyone on the network can call the
-                listeners. See GATE_HTTP.md.
+                Both directions as text lines ("< " from a node, "> " to a node). Can also be
+                switched at runtime from a script: MySensors.trace(true). The bus state (valid
+                frames / garbage) is logged on every change regardless.
 
-        config CLU_HTTP_PORT
-            int "HttpListener TCP port"
-            range 1 65535
-            default 80
-            depends on CLU_HTTP
+        config CLU_MYSENSORS_MODULES_MAX
+            int "Max emulated IO_MODULE_DIN_8 modules (0 = none)"
+            range 0 8
+            default 4
             help
-                80 on a real GATE. Must differ from the OTA port (CLU_OTA_PORT).
-
-        config CLU_HTTP_MAX_BODY
-            int "Largest request / response body [bytes]"
-            range 1024 262144
-            default 16384
-            depends on CLU_HTTP
-            help
-                Larger responses to HttpRequest are dropped (no OnResponse); larger requests to
-                HttpListener get 413. Bodies are held in RAM (PSRAM when the board has it).
-
-        config CLU_HTTP_LISTENER_TIMEOUT_MS
-            int "HttpListener: wait for SendResponse [ms]"
-            range 500 60000
-            default 10000
-            depends on CLU_HTTP
-            help
-                A request not answered by SendResponse within this time gets 504.
+                MySensors binary sensors and outputs as TF-Bus modules in Object Manager: each
+                module has 8 DIN (S_DOOR, S_MOTION, S_SMOKE, S_WATER_LEAK, S_SOUND, S_VIBRATION,
+                S_MOISTURE -> V_TRIPPED) and 8 DOUT (S_BINARY, S_SPRINKLER -> V_STATUS, S_LOCK ->
+                V_LOCK_STATUS). Modules are created on demand: a sensor takes the first free channel
+                when it presents itself, and a new module (fresh serial) is added when all are
+                full, up to this limit. Serials and channels are kept in NVS. Run discovery in OM
+                after new sensors appeared and add the modules to the project.
+                MySensors.slots() lists which sensor is on which channel.
 
     endmenu
 
-    menu "OpenGr8on OTA updates"
+    if CLU_TFBUS_MASTER
 
-        config CLU_OTA
-            bool "Firmware update over the network (HTTP, password)"
-            default y
-            help
-                POST the application image (release asset opengr8on-clu-<board>-<version>-ota.bin, or the
-                build's opengr8on_clu_esp32.bin; not the full image) to
-                http://<CLU IP>:<port>/ota with HTTP Basic auth (any user name, the OTA password):
-                  curl -u ota:PASSWORD --data-binary @opengr8on-clu-gate-v1.0.0-ota.bin http://CLU_IP:8080/ota
-                The image is verified (chip, SHA-256, project name) before it becomes the boot
-                image; the CLU then restarts. With bootloader rollback on, an image that restarts
-                before it gets an IP is replaced by the previous one.
-                The server only starts with a password: cfg partition ota_pass (tools/mknvs.py,
-                web flasher) over CLU_OTA_PASSWORD. Plain HTTP: the password is sent in clear text.
-
-        config CLU_OTA_PASSWORD
-            string "Password (8..64 characters, empty = off unless set in the cfg partition)"
-            default ""
-            depends on CLU_OTA
-
-        config CLU_OTA_PORT
-            int "HTTP port"
-            range 1 65535
-            default 8080
-            depends on CLU_OTA
-            help
-                http://<CLU IP>:<port>/ also serves an upload page (file + password).
-
-        config CLU_OTA_CORS_ORIGIN
-            string "Browser origin allowed to upload (CORS, empty = only the CLU's own page)"
-            default "https://psobiech.github.io"
-            depends on CLU_OTA
-            help
-                Lets the hosted web flasher call POST /ota directly. Browsers block HTTPS pages
-                from reaching plain-HTTP LAN addresses unless they support local network access
-                (Chrome asks for permission); the CLU's own page works everywhere. The password is
-                still required.
-
-    endmenu
-
-    menu "OpenGr8on MQTT / Home Assistant"
-
-        config CLU_MQTT_BROKER_URI
-            string "Broker URI (empty = MQTT off)"
-            default ""
-            help
-                mqtt://host:1883, mqtts://host:8883, ws://host/mqtt or wss://...
-                The connection is only made while the local CLU feature UseCloud (18) is 1
-                (interface default; OM.LUA sets it at boot, CLUxxx:set(18, 0) disconnects).
-                CloudConnection (19) reports whether the broker is connected.
-                mqtts/wss: the CA is read from a:\MQTT_CA.PEM (upload it with TFTP) when present,
-                otherwise the built-in certificate bundle (public CAs) is used.
-
-        config CLU_MQTT_USERNAME
-            string "Username (empty = anonymous)"
-            default ""
-
-        config CLU_MQTT_PASSWORD
-            string "Password"
-            default ""
-
-        config CLU_MQTT_CLIENT_ID
-            string "Client ID (empty = opengr8on-CLU<serial>)"
-            default ""
-
-        config CLU_MQTT_TOPIC_BASE
-            string "Topic base"
-            default "grenton"
-            help
-                Topics live under <base>/CLU<serial>/: status (online/offline, retained LWT),
-                <object>/state, <object>/set, <object>/position, <object>/position/set, <object>/event.
-
-        config CLU_MQTT_KEEPALIVE
-            int "Keepalive [s]"
-            range 5 600
-            default 30
-
-        config CLU_MQTT_SCAN_MS
-            int "State scan interval [ms]"
-            range 20 5000
-            default 300
-            help
-                How often object values are compared with the last published state. Changes are
-                published retained; unchanged values are never resent. An MQTT command or an event
-                of an object with states (e.g. OnValueChange) triggers a scan at once (at most every
-                20 ms): this interval only bounds the delay of values that change without an event.
-
-        config CLU_MQTT_HA_DISCOVERY
-            bool "Home Assistant MQTT discovery"
-            default y
-            help
-                Publishes retained discovery configs for the objects declared in OM.LUA (outputs,
-                inputs, buttons, roller shutters, panel sensors) on connect and whenever Home
-                Assistant announces "online" on <prefix>/status. Entities removed from OM.LUA get
-                their config cleared. USER.LUA can override: MQTT.expose(obj, kind | opts),
-                MQTT.hide(obj).
-
-        config CLU_MQTT_HA_PREFIX
-            string "Home Assistant discovery prefix"
-            default "homeassistant"
-            depends on CLU_MQTT_HA_DISCOVERY
-
-        config CLU_MQTT_DIAGNOSTICS
-            bool "Publish CLU / ESP32 internals (diagnostic entities)"
-            default y
-            help
-                Local CLU object: boot time, CLU state, firmware, OnTimeChange events.
-                Firmware: free heap / minimum free heap / free PSRAM, Lua memory, WiFi RSSI, IP,
-                reset reason, TFBUS modules online / total / missed polls, a "Restart" button
-                (<root>/system_restart/set, payload PRESS) and a connectivity sensor per TFBUS
-                module. In Home Assistant they show under "Diagnostic".
-
-        config CLU_MQTT_DIAG_INTERVAL
-            int "Internals sample interval [s]"
-            range 5 3600
-            default 30
-            depends on CLU_MQTT_DIAGNOSTICS
-            help
-                Heap, RSSI etc. change all the time: they are sampled (and published when changed)
-                at this interval instead of every state scan.
-
-        config CLU_MQTT_OBJECT_API
-            bool "Raw object API (get/set any feature, call any method)"
+        menuconfig CLU_LOCAL_IO
+            bool "On-board IO as a TF-Bus module (PCF8575)"
             default n
             help
-                Generic access to every object declared in OM.LUA (including the local CLU),
-                payloads are JSON values:
-                  <root>/<OBJ>/feature/<idx>/get  (any payload) -> <root>/<OBJ>/feature/<idx>
-                  <root>/<OBJ>/feature/<idx>/set  42 | "text" | true | plain text
-                                                  -> <root>/<OBJ>/feature/<idx> (read back)
-                  <root>/<OBJ>/execute/<idx>      [] | [arg, ...] | single value
-                                                  -> <root>/<OBJ>/execute/<idx>/result
-                Results: {"ok":true,"value":...} or {"ok":false,"error":"..."}.
-                Nothing is ever evaluated as Lua and remote-CLU proxies are refused, but anyone
-                who can publish to the broker controls every object: use broker ACLs/credentials.
+                8 relay outputs and 8 digital inputs on one PCF8575 I2C expander on the controller
+                board (KinCony F8, KC868-A8v3) appear to Object Manager as an IO_MODULE_DIN_8 module
+                (8 DOUT + 8 DIN). The firmware answers the TF-Bus frames for it itself, so it takes
+                part in discovery, addressing and polling like a module on the RS485 bus. Add it to
+                the project in OM like any discovered module. Also works with CLU_MYSENSORS.
 
-    endmenu
+        if CLU_LOCAL_IO
+
+            config CLU_LOCAL_IO_SDA_GPIO
+                int "I2C SDA GPIO"
+                range 0 48
+                default 8
+
+            config CLU_LOCAL_IO_SCL_GPIO
+                int "I2C SCL GPIO"
+                range 0 48
+                default 18
+                help
+                    Shared with the RTC (CLU_RTC) when it uses the same pins (KinCony F8 / A8v3).
+
+            config CLU_LOCAL_IO_ADDR
+                hex "PCF8575 I2C address"
+                range 0x20 0x27
+                default 0x24
+                help
+                    KinCony F8: 0x24, KC868-A8v3: 0x22.
+
+            choice CLU_LOCAL_IO_OUT_PINS
+                prompt "Relay outputs on"
+                default CLU_LOCAL_IO_OUT_P1
+
+                config CLU_LOCAL_IO_OUT_P1
+                    bool "P10-P17, inputs on P00-P07 (KinCony F8)"
+                config CLU_LOCAL_IO_OUT_P0
+                    bool "P00-P07, inputs on P10-P17 (KC868-A8v3)"
+            endchoice
+
+            config CLU_LOCAL_IO_OUT_ACTIVE_LOW
+                bool "Outputs are active low"
+                default y
+                help
+                    A relay is on when its PCF8575 pin is driven low. The expander powers up with all
+                    pins high, so the relays stay off until the CLU switches them.
+
+            config CLU_LOCAL_IO_IN_ACTIVE_LOW
+                bool "Inputs are active low"
+                default y
+                help
+                    An input reads low when it is active (optocoupler conducting).
+
+            config CLU_LOCAL_IO_SN
+                string "Module serial (decimal, empty = random, stored in NVS)"
+                default ""
+                help
+                    Like the CLU serial: a random serial is generated once and kept in NVS, so the
+                    module keeps its identity in the OM project across reboots and updates. Set it to
+                    take over the serial of a module already in the project. Overrides the NVS value
+                    when non-empty.
+
+        endif
+
+    endif
 
 endmenu
+
+
+menuconfig CLU_RTC
+    bool "Battery-backed RTC (I2C)"
+    default n if IDF_TARGET_ESP32
+    default y
+    help
+        Sets the clock at boot, before the scripts run, so they have the right time without
+        the network. Written back on every SNTP sync and SetDateTime. Keeps time through a
+        power cut only with a backup cell on the board. A missing chip is logged and ignored.
+
+if CLU_RTC
+
+    choice CLU_RTC_CHIP
+        prompt "RTC chip"
+        default CLU_RTC_PCF85063
+
+        config CLU_RTC_PCF85063
+            bool "PCF85063 (Waveshare ESP32-S3-RS485-CAN)"
+        config CLU_RTC_DS3231
+            bool "DS3231 (KinCony F8, KC868-A8v3)"
+    endchoice
+
+    config CLU_RTC_SDA_GPIO
+        int "RTC I2C SDA GPIO"
+        range 0 48
+        default 39
+        help
+            Waveshare ESP32-S3-RS485-CAN: SDA=39, SCL=38. KinCony F8 / KC868-A8v3: SDA=8,
+            SCL=18. The bus can be shared with the on-board IO expander (same pins).
+
+    config CLU_RTC_SCL_GPIO
+        int "RTC I2C SCL GPIO"
+        range 0 48
+        default 38
+
+endif
+
+config CLU_SOFT_RESET
+    bool "req_reset reloads Lua instead of rebooting"
+    default y
+    help
+        On req_reset (OM after a script upload, "reset" in the CLI) close the Lua VM, forget
+        the TFBUS modules and boot MAIN.LUA again in a fresh VM, with WiFi, MQTT and the
+        UDP/TFTP servers left running. Falls back to a reboot if the script does not reach
+        SYSTEM.Loop in time or the bus does not stop. __clu.sys_restart() always reboots.
+
+config CLU_SETUP_WINDOW_S
+    int "Setup window after startup [s] (0 = always open)"
+    range 0 86400
+    default 0
+    help
+        Discovery (req_discovery_clu), re-keying (req_set_key, anything under the PIN / temp
+        key), req_set_clu_ip and opening TFTP (req_start_ftp, req_diagnostic_refresh) are
+        only accepted during this many seconds after the CLU is up following a chip boot
+        (power-on, reset button, reboot): counting starts once WiFi first has an IP, so a
+        slow WiFi connect does not use it up. Afterwards the CLU does not answer discovery and refuses the others; normal
+        operation under the project key (req:, req_reset, req_refresh_modules) is unaffected.
+        A TFTP session opened inside the window runs until req_tftp_stop or its idle timeout.
+        A discovery answered inside the window keeps it open (no time limit) until the next
+        reset: req_reset (soft or hard) or a reboot.
+        A soft reset (CLU_SOFT_RESET) does not reopen the window; the setup button does.
+        In emergency mode (MAIN.LUA failed, EMERGNCY.LUA running) the window stays open with
+        no time limit, until the CLU leaves it.
+        0 (default) disables the restriction; set e.g. 60 to enable it.
+
+config CLU_SETUP_BUTTON_GPIO
+    int "Setup button GPIO (-1 = none)"
+    range -1 48
+    default 34 if IDF_TARGET_ESP32
+    default 0
+    depends on CLU_SETUP_WINDOW_S != 0
+    help
+        Active-low button (internal pull-up). Holding it for 100 ms reopens the setup window
+        for CLU_SETUP_WINDOW_S seconds. Default GPIO0 = the BOOT button of most ESP32-S3
+        boards: press it while the CLU runs (held during reset it enters download mode).
+        ESP32 default GPIO34 = the reset button of the Grenton GATE (input-only pin: needs the
+        board's external pull-up; GPIO0 is the RMII clock there).
+
+menu "Lua"
+
+    choice CLU_LUA_VERSION
+        prompt "Lua version"
+        default CLU_LUA_5_3
+        help
+            Real CLU firmware embeds Lua 5.3, and OM.LUA / user scripts are written for it.
+            Lua 5.5 is faster and leaner, but rejects scripts that use `global` as a name or
+            assign to a for-loop variable, and has no bit32 library.
+
+        config CLU_LUA_5_3
+            bool "Lua 5.3.6 (same as real CLU)"
+        config CLU_LUA_5_5
+            bool "Lua 5.5.1 (experimental)"
+    endchoice
+
+    config CLU_LUA_32BITS
+        bool "Use 32-bit Lua integers and floats"
+        default n
+        help
+            Build Lua with 32-bit integers and single-precision floats instead of 64-bit integers
+            and doubles. Serial numbers at or above 2^31 become negative, millis exceeds the
+            signed integer range after about 24.9 days, and floats retain only about 7 significant
+            digits.
+
+    config CLU_LUA_FLOAT
+        bool "Use single-precision Lua numbers"
+        depends on !CLU_LUA_32BITS
+        default y
+        help
+            Use 32-bit floats for Lua numbers while keeping 64-bit Lua integers. Floating-point
+            values retain about 7 significant digits; serial numbers and other integers remain
+            64-bit. This setting is unavailable when CLU_LUA_32BITS is enabled.
+
+    config CLU_LUA_PRECOMPILE
+        bool "Precompile embedded Lua libraries to bytecode"
+        default n
+        help
+            Compile the Lua libraries built into the firmware (prelude, objects, mqtt, http,
+            mysensors) to stripped bytecode on the build host: about 40% (~50 KB) less flash and
+            no parsing at boot. Stripped chunks carry no line numbers or local names, so errors
+            raised inside these libraries have no file:line. Turn off when debugging them.
+            Needs a host C compiler (cc / gcc / clang). User scripts (a:\*.LUA) are unaffected.
+
+    config CLU_LUA_MEM_LIMIT_KB
+        int "Lua heap limit (KB)"
+        default 4096
+        range 256 7680
+        help
+            Total memory one Lua state may hold (PSRAM + internal RAM). Allocations above it
+            fail with a Lua "not enough memory" error after an emergency GC, instead of starving
+            WiFi / lwIP of RAM.
+
+    config CLU_LUA_INTERNAL_RESERVE_KB
+        int "Internal RAM kept free for the system (KB)"
+        default 64
+        range 16 256
+        help
+            When PSRAM is full, Lua falls back to internal RAM only while at least this much
+            internal RAM stays free.
+
+endmenu
+
+menu "Telnet log console"
+
+    config CLU_TELNET
+        bool "Stream logs over telnet"
+        default y
+        help
+            Read-only TCP console: `telnet <clu-ip>` or `nc <clu-ip> 23` shows the ESP_LOG
+            output (also Lua print / DebugLog) live, preceded by the buffered history.
+            Ctrl-C / Ctrl-D closes the session. No authentication: restrict with
+            CLU_TELNET_ALLOW. Lines logged before the CLU identity is loaded (the boot line
+            with the PIN) are never captured.
+
+    config CLU_TELNET_PORT
+        int "TCP port"
+        range 1 65535
+        default 23
+        depends on CLU_TELNET
+
+    config CLU_TELNET_MAX_CLIENTS
+        int "Concurrent clients"
+        range 1 4
+        default 2
+        depends on CLU_TELNET
+
+    config CLU_TELNET_HISTORY
+        int "History buffer [bytes, internal RAM]"
+        range 1024 65536
+        default 8192
+        depends on CLU_TELNET
+
+    config CLU_TELNET_ALLOW
+        string "Allowed peers (empty = any, a.b.c.d or a.b.c.d/nn)"
+        default ""
+        depends on CLU_TELNET
+        help
+            Connections from other addresses are closed immediately. An invalid value
+            refuses everyone.
+
+endmenu
+
+menu "GATE HTTP objects (HttpRequest / HttpListener)"
+
+    config CLU_HTTP
+        bool "HttpRequest (class 121) and HttpListener (class 120)"
+        default y if CLU_DEVICE_GATE_HTTP
+        default n
+        help
+            The GATE HTTP objects. HttpRequest sends HTTP / HTTPS requests (HTTPS checked
+            against the built-in certificate bundle) one after another; HttpListener answers
+            requests on CLU_HTTP_PORT, routed by path to the listener whose Path matches.
+            Object Manager offers them only on a GATE (CLU_DEVICE_GATE_HTTP); on a CLU they
+            work when declared by hand. No authentication: anyone on the network can call the
+            listeners. See GATE_HTTP.md.
+
+    config CLU_HTTP_PORT
+        int "HttpListener TCP port"
+        range 1 65535
+        default 80
+        depends on CLU_HTTP
+        help
+            80 on a real GATE. Must differ from the OTA port (CLU_OTA_PORT).
+
+    config CLU_HTTP_MAX_BODY
+        int "Largest request / response body [bytes]"
+        range 1024 262144
+        default 16384
+        depends on CLU_HTTP
+        help
+            Larger responses to HttpRequest are dropped (no OnResponse); larger requests to
+            HttpListener get 413. Bodies are held in RAM (PSRAM when the board has it).
+
+    config CLU_HTTP_LISTENER_TIMEOUT_MS
+        int "HttpListener: wait for SendResponse [ms]"
+        range 500 60000
+        default 10000
+        depends on CLU_HTTP
+        help
+            A request not answered by SendResponse within this time gets 504.
+
+endmenu
+
+menu "OpenGr8on OTA updates"
+
+    config CLU_OTA
+        bool "Firmware update over the network (HTTP, password)"
+        default y
+        help
+            POST the application image (release asset opengr8on-clu-<board>-<version>-ota.bin, or the
+            build's opengr8on_clu_esp32.bin; not the full image) to
+            http://<CLU IP>:<port>/ota with HTTP Basic auth (any user name, the OTA password):
+              curl -u ota:PASSWORD --data-binary @opengr8on-clu-gate-v1.0.0-ota.bin http://CLU_IP:8080/ota
+            The image is verified (chip, SHA-256, project name) before it becomes the boot
+            image; the CLU then restarts. With bootloader rollback on, an image that restarts
+            before it gets an IP is replaced by the previous one.
+            The server only starts with a password: cfg partition ota_pass (tools/mknvs.py,
+            web flasher) over CLU_OTA_PASSWORD. Plain HTTP: the password is sent in clear text.
+
+    config CLU_OTA_PASSWORD
+        string "Password (8..64 characters, empty = off unless set in the cfg partition)"
+        default ""
+        depends on CLU_OTA
+
+    config CLU_OTA_PORT
+        int "HTTP port"
+        range 1 65535
+        default 8080
+        depends on CLU_OTA
+        help
+            http://<CLU IP>:<port>/ also serves an upload page (file + password).
+
+    config CLU_OTA_CORS_ORIGIN
+        string "Browser origin allowed to upload (CORS, empty = only the CLU's own page)"
+        default "https://psobiech.github.io"
+        depends on CLU_OTA
+        help
+            Lets the hosted web flasher call POST /ota directly. Browsers block HTTPS pages
+            from reaching plain-HTTP LAN addresses unless they support local network access
+            (Chrome asks for permission); the CLU's own page works everywhere. The password is
+            still required.
+
+endmenu
+
+menu "OpenGr8on MQTT / Home Assistant"
+
+    config CLU_MQTT_BROKER_URI
+        string "Broker URI (empty = MQTT off)"
+        default ""
+        help
+            mqtt://host:1883, mqtts://host:8883, ws://host/mqtt or wss://...
+            The connection is only made while the local CLU feature UseCloud (18) is 1
+            (interface default; OM.LUA sets it at boot, CLUxxx:set(18, 0) disconnects).
+            CloudConnection (19) reports whether the broker is connected.
+            mqtts/wss: the CA is read from a:\MQTT_CA.PEM (upload it with TFTP) when present,
+            otherwise the built-in certificate bundle (public CAs) is used.
+
+    config CLU_MQTT_USERNAME
+        string "Username (empty = anonymous)"
+        default ""
+
+    config CLU_MQTT_PASSWORD
+        string "Password"
+        default ""
+
+    config CLU_MQTT_CLIENT_ID
+        string "Client ID (empty = opengr8on-CLU<serial>)"
+        default ""
+
+    config CLU_MQTT_TOPIC_BASE
+        string "Topic base"
+        default "grenton"
+        help
+            Topics live under <base>/CLU<serial>/: status (online/offline, retained LWT),
+            <object>/state, <object>/set, <object>/position, <object>/position/set, <object>/event.
+
+    config CLU_MQTT_KEEPALIVE
+        int "Keepalive [s]"
+        range 5 600
+        default 30
+
+    config CLU_MQTT_SCAN_MS
+        int "State scan interval [ms]"
+        range 20 5000
+        default 300
+        help
+            How often object values are compared with the last published state. Changes are
+            published retained; unchanged values are never resent. An MQTT command or an event
+            of an object with states (e.g. OnValueChange) triggers a scan at once (at most every
+            20 ms): this interval only bounds the delay of values that change without an event.
+
+    config CLU_MQTT_HA_DISCOVERY
+        bool "Home Assistant MQTT discovery"
+        default y
+        help
+            Publishes retained discovery configs for the objects declared in OM.LUA (outputs,
+            inputs, buttons, roller shutters, panel sensors) on connect and whenever Home
+            Assistant announces "online" on <prefix>/status. Entities removed from OM.LUA get
+            their config cleared. USER.LUA can override: MQTT.expose(obj, kind | opts),
+            MQTT.hide(obj).
+
+    config CLU_MQTT_HA_PREFIX
+        string "Home Assistant discovery prefix"
+        default "homeassistant"
+        depends on CLU_MQTT_HA_DISCOVERY
+
+    config CLU_MQTT_DIAGNOSTICS
+        bool "Publish CLU / ESP32 internals (diagnostic entities)"
+        default y
+        help
+            Local CLU object: boot time, CLU state, firmware, OnTimeChange events.
+            Firmware: free heap / minimum free heap / free PSRAM, Lua memory, WiFi RSSI, IP,
+            reset reason, TFBUS modules online / total / missed polls, a "Restart" button
+            (<root>/system_restart/set, payload PRESS) and a connectivity sensor per TFBUS
+            module. In Home Assistant they show under "Diagnostic".
+
+    config CLU_MQTT_DIAG_INTERVAL
+        int "Internals sample interval [s]"
+        range 5 3600
+        default 30
+        depends on CLU_MQTT_DIAGNOSTICS
+        help
+            Heap, RSSI etc. change all the time: they are sampled (and published when changed)
+            at this interval instead of every state scan.
+
+    config CLU_MQTT_OBJECT_API
+        bool "Raw object API (get/set any feature, call any method)"
+        default n
+        help
+            Generic access to every object declared in OM.LUA (including the local CLU),
+            payloads are JSON values:
+              <root>/<OBJ>/feature/<idx>/get  (any payload) -> <root>/<OBJ>/feature/<idx>
+              <root>/<OBJ>/feature/<idx>/set  42 | "text" | true | plain text
+                                              -> <root>/<OBJ>/feature/<idx> (read back)
+              <root>/<OBJ>/execute/<idx>      [] | [arg, ...] | single value
+                                              -> <root>/<OBJ>/execute/<idx>/result
+            Results: {"ok":true,"value":...} or {"ok":false,"error":"..."}.
+            Nothing is ever evaluated as Lua and remote-CLU proxies are refused, but anyone
+            who can publish to the broker controls every object: use broker ACLs/credentials.
+
+endmenu
+

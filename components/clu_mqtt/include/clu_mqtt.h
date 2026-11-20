@@ -2,7 +2,7 @@
  * @file clu_mqtt.h
  * @brief MQTT link + Home Assistant discovery (mqtt.lua).
  *
- * Broker settings come from menuconfig ("OpenGr8on ESP32 CLU" → "OpenGr8on MQTT / Home Assistant");
+ * Broker settings come from menuconfig ("OpenGr8on MQTT / Home Assistant");
  * the local CLU feature UseCloud (18) switches the connection on/off and CloudConnection (19)
  * reports it.
  *

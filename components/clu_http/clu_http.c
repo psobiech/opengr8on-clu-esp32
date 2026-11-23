@@ -126,7 +126,7 @@ static bool is_aborted(uint32_t id)
     return aborted;
 }
 
-/** @brief Hand @p m to the Lua task; freed if the queue stays full. */
+/** @brief Hand @p message to the Lua task; freed if the queue stays full. */
 static bool post(msg_t *message)
 {
     if (xQueueSend(s_msgs, &message, pdMS_TO_TICKS(100)) != pdTRUE) {
@@ -143,7 +143,7 @@ static bool post(msg_t *message)
 // ---------------------------------------------------------------------------
 /** @brief Growing buffer. */
 typedef struct {
-    char *p;
+    char *data;
     size_t len, cap, max;
     bool overflow;
 } buf_t;
@@ -159,17 +159,17 @@ static void buf_add(buf_t *buffer, const char *source, size_t source_length)
         while (cap < buffer->len + source_length + 1) {
             cap *= 2;
         }
-        char *resized_data = realloc(buffer->p, cap);
+        char *resized_data = realloc(buffer->data, cap);
         if (!resized_data) {
             buffer->overflow = true;
             return;
         }
-        buffer->p = resized_data;
+        buffer->data = resized_data;
         buffer->cap = cap;
     }
-    memcpy(buffer->p + buffer->len, source, source_length);
+    memcpy(buffer->data + buffer->len, source, source_length);
     buffer->len += source_length;
-    buffer->p[buffer->len] = 0;
+    buffer->data[buffer->len] = 0;
 }
 
 typedef struct {
@@ -257,13 +257,13 @@ static void run_job(job_t *job)
         esp_http_client_cleanup(http_client);
     }
     if (message->status >= 0) {
-        message->headers = acc.hdr.p;
-        message->body = acc.body.p;
+        message->headers = acc.hdr.data;
+        message->body = acc.body.data;
         message->body_len = acc.body.len;
-        acc.hdr.p = acc.body.p = NULL;
+        acc.hdr.data = acc.body.data = NULL;
     }
-    free(acc.hdr.p);
-    free(acc.body.p);
+    free(acc.hdr.data);
+    free(acc.body.data);
     if (is_aborted(job->id)) {
         msg_free(message);
         return;
@@ -318,7 +318,7 @@ static void reply(int socket_fd, int status, const char *headers, const char *bo
     }
 }
 
-/** @brief Read one request from @p s, hand it to Lua, send the answer. */
+/** @brief Read one request from @p socket_fd, hand it to Lua, send the answer. */
 static void serve(int socket_fd, const char *peer)
 {
     struct timeval socket_timeout = {.tv_sec = RECV_TIMEOUT};

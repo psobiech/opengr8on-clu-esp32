@@ -25,9 +25,9 @@ typedef void (*light_timer_fn_t)(tfbus_module_t *module, void *owner);
  * A fire already queued when the timer is restarted / cancelled is dropped (generation check).
  */
 typedef struct {
-    tfbus_module_t *m;
+    tfbus_module_t *module;
     void *owner;
-    light_timer_fn_t fn;
+    light_timer_fn_t callback;
     volatile uint32_t gen;
     int64_t due_us;   /**< Deadline [esp_timer us], 0 = not running (driver lock). */
     esp_timer_handle_t timer;
@@ -37,7 +37,7 @@ typedef struct {
  * @brief Start (or restart) the timer.
  * @param timer_state Zero-initialised timer before first use.
  * @param module The module that owns the timer.
- * @param owner Passed to @p fn.
+ * @param owner Passed to @p expiry_callback.
  * @param expiry_callback Callback run when the timer expires.
  * @param ms    Delay [ms].
  */

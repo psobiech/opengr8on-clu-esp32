@@ -26,12 +26,12 @@ void clu_random(uint8_t *out, size_t len)
 /**
  * @brief One-shot AES-128-CBC (no padding) with a temporary PSA key.
  *
- * @param c   Key and IV.
- * @param enc true = encrypt, false = decrypt.
- * @param in  Input (multiple of 16 bytes).
- * @param len Input length.
- * @param out Output buffer.
- * @param cap Capacity of @p out.
+ * @param cipher Key and IV.
+ * @param enc    true = encrypt, false = decrypt.
+ * @param in     Input (multiple of 16 bytes).
+ * @param len    Input length.
+ * @param out    Output buffer.
+ * @param cap    Capacity of @p out.
  * @return Output length, or -1 on PSA error.
  */
 static int aes_cbc(const clu_cipher_t *cipher, bool enc, const uint8_t *in, size_t len,

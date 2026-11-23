@@ -30,7 +30,7 @@ static const char *TAG = "telnet";
 /** @brief Connected client. */
 typedef struct {
     int fd;
-    uint64_t rd;   // absolute ring position sent so far
+    uint64_t sent_position; // absolute ring position sent so far
     uint8_t iac;   // telnet command parser state (see client_read)
     char ip[16];
 } client_t;
@@ -131,7 +131,7 @@ static void client_close(client_t *client, const char *why)
 }
 
 /**
- * @brief Accept a connection on @p ls: check the allow list and free slots, start from the buffered history.
+ * @brief Accept a connection on @p listen_socket: check the allow list and free slots, start from the buffered history.
  */
 static void client_accept(int listen_socket)
 {
@@ -179,7 +179,7 @@ static void client_accept(int listen_socket)
         if (read_position < head) read_position++;
     }
     taskEXIT_CRITICAL(&s_lock);
-    available_client->rd = read_position;
+    available_client->sent_position = read_position;
     ESP_LOGI(TAG, "client %s connected", ip);
 }
 
@@ -189,7 +189,7 @@ static void client_flush(client_t *client)
     static uint8_t buf[CHUNK];
     for (;;) {
         uint64_t lost;
-        size_t bytes_copied = ring_get(&client->rd, buf, sizeof buf, &lost);
+        size_t bytes_copied = ring_get(&client->sent_position, buf, sizeof buf, &lost);
         if (lost) {
             char note[48];
             int notice_length = snprintf(note, sizeof note, "\r\n[... %llu bytes dropped]\r\n",

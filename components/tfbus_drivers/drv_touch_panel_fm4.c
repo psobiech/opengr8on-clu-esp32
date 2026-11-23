@@ -46,7 +46,7 @@ typedef struct {
     bool buzzer;
 } tp4_t;
 
-/** @brief Driver state of @p m, allocated (with sensor defaults) on first use. */
+/** @brief Driver state of @p module, allocated (with sensor defaults) on first use. */
 static tp4_t *ctx(tfbus_module_t *module)
 {
     if (!module->drv_ctx) {

@@ -28,8 +28,8 @@ OUT = os.path.join(HERE, "coverage")
 def mqtt_parts():
     manifest = os.path.join(ROOT, "components", "clu_mqtt", "lua", "parts.txt")
     parts, offset = [], 0
-    with open(manifest) as fh:
-        for name in fh:
+    with open(manifest) as manifest_file:
+        for name in manifest_file:
             name = name.strip()
             if not name:
                 continue
@@ -48,12 +48,12 @@ MQTT_BUNDLE = "components/clu_mqtt/mqtt.lua"
 
 
 def rel(path, cwd):
-    p = os.path.normpath(os.path.join(cwd, path))
-    return os.path.relpath(p, ROOT)
+    absolute_path = os.path.normpath(os.path.join(cwd, path))
+    return os.path.relpath(absolute_path, ROOT)
 
 
-def firmware_source(r):
-    return (r.startswith("components/") or r.startswith("main/")) and not r.startswith("components/lua/")
+def firmware_source(relative_path):
+    return (relative_path.startswith("components/") or relative_path.startswith("main/")) and not relative_path.startswith("components/lua/")
 
 
 def c_coverage():
@@ -70,30 +70,30 @@ def c_coverage():
     subprocess.run(["gcov", "-b", "-j", "-o", HERE] + gcdas, cwd=tmp, check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for path in glob.glob(os.path.join(tmp, "*.gcov.json.gz")):
-        with gzip.open(path) as fh:
-            data = json.load(fh)
+        with gzip.open(path) as gcov_file:
+            data = json.load(gcov_file)
         cwd = data.get("current_working_directory", HERE)
         for f in data["files"]:
-            r = rel(f["file"], cwd)
-            if not firmware_source(r):
+            source_path = rel(f["file"], cwd)
+            if not firmware_source(source_path):
                 continue
             for ln in f["lines"]:
-                n = ln["line_number"]
-                lines[r][n] = lines[r].get(n, 0) + ln["count"]
+                line_number = ln["line_number"]
+                lines[source_path][line_number] = lines[source_path].get(line_number, 0) + ln["count"]
                 for i, b in enumerate(ln.get("branches", [])):
-                    branches[r][(n, i)] = branches[r].get((n, i), 0) + b["count"]
+                    branches[source_path][(line_number, i)] = branches[source_path].get((line_number, i), 0) + b["count"]
             for fn in f.get("functions", []):
                 name = fn.get("demangled_name", fn["name"])
-                funcs[r][name] = funcs[r].get(name, 0) + fn["execution_count"]
+                funcs[source_path][name] = funcs[source_path].get(name, 0) + fn["execution_count"]
     res = {}
     for r in lines:
-        L, B, F = lines[r], branches[r], funcs[r]
+        line_counts, branch_counts, function_counts = lines[r], branches[r], funcs[r]
         res[r] = {
-            "lines": [sum(v > 0 for v in L.values()), len(L)],
-            "branches": [sum(v > 0 for v in B.values()), len(B)],
-            "functions": [sum(v > 0 for v in F.values()), len(F)],
-            "uncovered_lines": sorted(n for n, v in L.items() if v == 0),
-            "uncalled": sorted(n for n, v in F.items() if v == 0),
+            "lines": [sum(v > 0 for v in line_counts.values()), len(line_counts)],
+            "branches": [sum(v > 0 for v in branch_counts.values()), len(branch_counts)],
+            "functions": [sum(v > 0 for v in function_counts.values()), len(function_counts)],
+            "uncovered_lines": sorted(n for n, v in line_counts.items() if v == 0),
+            "uncalled": sorted(n for n, v in function_counts.items() if v == 0),
         }
     return res
 
@@ -102,8 +102,8 @@ def lua_coverage(luac):
     hits_file = os.path.join(OUT, "lua.hits")
     hits = defaultdict(set)
     if os.path.exists(hits_file):
-        with open(hits_file) as fh:
-            for row in fh:
+        with open(hits_file) as hits_rows:
+            for row in hits_rows:
                 src, ln = row.rstrip("\n").split("\t")
                 hits[rel(src, HERE)].add(int(ln))
     res = {}
@@ -125,15 +125,15 @@ def lua_coverage(luac):
 def untested_sources(tested):
     found = []
     for pat in ("components/*/*.c", "main/*.c"):
-        for p in glob.glob(os.path.join(ROOT, pat)):
-            r = os.path.relpath(p, ROOT)
-            if firmware_source(r) and r not in tested:
-                found.append(r)
+        for path in glob.glob(os.path.join(ROOT, pat)):
+            relative_path = os.path.relpath(path, ROOT)
+            if firmware_source(relative_path) and relative_path not in tested:
+                found.append(relative_path)
     return sorted(found)
 
 
-def pct(a, b):
-    return 100.0 * a / b if b else 100.0
+def pct(covered, total):
+    return 100.0 * covered / total if total else 100.0
 
 
 def ranges(nums):
@@ -152,62 +152,62 @@ def ranges(nums):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--luac", default="luac5.3")
-    ap.add_argument("--fail-under", type=float, help="minimum total line coverage (%%)")
-    ap.add_argument("-v", "--verbose", action="store_true", help="list uncovered lines")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--luac", default="luac5.3")
+    parser.add_argument("--fail-under", type=float, help="minimum total line coverage (%%)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="list uncovered lines")
+    args = parser.parse_args()
     os.makedirs(OUT, exist_ok=True)
 
-    c = c_coverage()
+    c_results = c_coverage()
     lua = lua_coverage(args.luac)
-    untested = untested_sources(c)
+    untested = untested_sources(c_results)
 
     tot = {"c_lines": [0, 0], "c_branches": [0, 0], "lua_lines": [0, 0]}
     rows = []
-    for r in sorted(c):
-        d = c[r]
-        tot["c_lines"] = [a + b for a, b in zip(tot["c_lines"], d["lines"])]
-        tot["c_branches"] = [a + b for a, b in zip(tot["c_branches"], d["branches"])]
-        rows.append((r, d["lines"], d["branches"], d["functions"]))
+    for r in sorted(c_results):
+        file_coverage = c_results[r]
+        tot["c_lines"] = [a + b for a, b in zip(tot["c_lines"], file_coverage["lines"])]
+        tot["c_branches"] = [a + b for a, b in zip(tot["c_branches"], file_coverage["branches"])]
+        rows.append((r, file_coverage["lines"], file_coverage["branches"], file_coverage["functions"]))
     for r in LUA_SOURCES:
-        d = lua[r]
-        tot["lua_lines"] = [a + b for a, b in zip(tot["lua_lines"], d["lines"])]
-        rows.append((r, d["lines"], None, None))
+        file_coverage = lua[r]
+        tot["lua_lines"] = [a + b for a, b in zip(tot["lua_lines"], file_coverage["lines"])]
+        rows.append((r, file_coverage["lines"], None, None))
     all_lines = [tot["c_lines"][0] + tot["lua_lines"][0], tot["c_lines"][1] + tot["lua_lines"][1]]
 
-    def cell(v):
-        return f"{pct(*v):.1f}% ({v[0]}/{v[1]})" if v else "-"
+    def cell(counts):
+        return f"{pct(*counts):.1f}% ({counts[0]}/{counts[1]})" if counts else "-"
 
-    w = max(len(r[0]) for r in rows)
-    print(f"{'file':{w}}  {'lines':>18}  {'branches':>18}  {'functions':>18}")
+    name_width = max(len(r[0]) for r in rows)
+    print(f"{'file':{name_width}}  {'lines':>18}  {'branches':>18}  {'functions':>18}")
     for r, ln, br, fn in rows:
-        print(f"{r:{w}}  {cell(ln):>18}  {cell(br):>18}  {cell(fn):>18}")
+        print(f"{r:{name_width}}  {cell(ln):>18}  {cell(br):>18}  {cell(fn):>18}")
         if args.verbose:
-            d = c.get(r) or lua.get(r)
-            if d["uncovered_lines"]:
-                print(f"    uncovered: {ranges(d['uncovered_lines'])}")
-            if d.get("uncalled"):
-                print(f"    uncalled:  {', '.join(d['uncalled'])}")
-    print(f"{'C total':{w}}  {cell(tot['c_lines']):>18}  {cell(tot['c_branches']):>18}")
-    print(f"{'Lua total':{w}}  {cell(tot['lua_lines']):>18}")
-    print(f"{'TOTAL':{w}}  {cell(all_lines):>18}")
+            file_coverage = c_results.get(r) or lua.get(r)
+            if file_coverage["uncovered_lines"]:
+                print(f"    uncovered: {ranges(file_coverage['uncovered_lines'])}")
+            if file_coverage.get("uncalled"):
+                print(f"    uncalled:  {', '.join(file_coverage['uncalled'])}")
+    print(f"{'C total':{name_width}}  {cell(tot['c_lines']):>18}  {cell(tot['c_branches']):>18}")
+    print(f"{'Lua total':{name_width}}  {cell(tot['lua_lines']):>18}")
+    print(f"{'TOTAL':{name_width}}  {cell(all_lines):>18}")
     if untested:
         print("\nNo host test compiles: " + ", ".join(untested))
 
-    md = ["| File | Lines | Branches | Functions |", "|---|---:|---:|---:|"]
+    markdown_rows = ["| File | Lines | Branches | Functions |", "|---|---:|---:|---:|"]
     for r, ln, br, fn in rows:
-        md.append(f"| `{r}` | {cell(ln)} | {cell(br)} | {cell(fn)} |")
-    md.append(f"| **C total** | **{cell(tot['c_lines'])}** | **{cell(tot['c_branches'])}** | |")
-    md.append(f"| **Lua total** | **{cell(tot['lua_lines'])}** | | |")
-    md.append(f"| **Total** | **{cell(all_lines)}** | | |")
+        markdown_rows.append(f"| `{r}` | {cell(ln)} | {cell(br)} | {cell(fn)} |")
+    markdown_rows.append(f"| **C total** | **{cell(tot['c_lines'])}** | **{cell(tot['c_branches'])}** | |")
+    markdown_rows.append(f"| **Lua total** | **{cell(tot['lua_lines'])}** | | |")
+    markdown_rows.append(f"| **Total** | **{cell(all_lines)}** | | |")
     if untested:
-        md.append("\nNot compiled by any host test: " + ", ".join(f"`{u}`" for u in untested))
-    with open(os.path.join(OUT, "summary.md"), "w") as fh:
-        fh.write("\n".join(md) + "\n")
-    with open(os.path.join(OUT, "coverage.json"), "w") as fh:
-        json.dump({"c": c, "lua": lua, "untested": untested, "totals": {**tot, "lines": all_lines}},
-                  fh, indent=1)
+        markdown_rows.append("\nNot compiled by any host test: " + ", ".join(f"`{u}`" for u in untested))
+    with open(os.path.join(OUT, "summary.md"), "w") as output_file:
+        output_file.write("\n".join(markdown_rows) + "\n")
+    with open(os.path.join(OUT, "coverage.json"), "w") as output_file:
+        json.dump({"c": c_results, "lua": lua, "untested": untested, "totals": {**tot, "lines": all_lines}},
+                  output_file, indent=1)
 
     if args.fail_under is not None and pct(*all_lines) < args.fail_under:
         print(f"\nFAIL: total line coverage {pct(*all_lines):.1f}% < {args.fail_under}%")

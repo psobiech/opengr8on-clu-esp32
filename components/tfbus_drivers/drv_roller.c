@@ -67,8 +67,8 @@ typedef struct roller roller_t;
 
 /** @brief Per-channel stop timer (timed moves). */
 typedef struct {
-    roller_t *r;
-    int ch;
+    roller_t *roller;
+    int channel;
     volatile uint32_t gen; // bumped on every move/stop: a fire queued before is stale
     int64_t due_us;        // stop deadline [esp_timer us], 0 = none (driver lock)
     esp_timer_handle_t timer;
@@ -76,7 +76,7 @@ typedef struct {
 
 /** @brief Driver state per module (drv_ctx). */
 struct roller {
-    tfbus_module_t *m;
+    tfbus_module_t *module;
     const roller_cfg_t *cfg;
     char name[CH][24];
     uint32_t max_ms[CH], up_ms[CH], down_ms[CH], offset_ms[CH];
@@ -89,7 +89,7 @@ struct roller {
     chan_timer_t stop_timer[CH];
 };
 
-/** @brief Driver state of @p m, allocated on first use. */
+/** @brief Driver state of @p module, allocated on first use. */
 static roller_t *ctx(tfbus_module_t *module)
 {
     if (!module->drv_ctx) {
@@ -97,7 +97,7 @@ static roller_t *ctx(tfbus_module_t *module)
         if (!roller_state) {
             abort(); // out of memory while loading OM.LUA: reboot instead of a NULL dereference
         }
-        roller_state->m = module;
+        roller_state->module = module;
         roller_state->cfg = module->drv->cfg;
         roller_state->active_ch = -1;
         for (int i = 0; i < CH; i++) {
@@ -140,7 +140,7 @@ static uint32_t down_time(roller_t *roller_state, int channel_index)
 /** @brief Queue the startup init sequence of one channel (ROLLER_SH_DIN_3). */
 static void init_channel(roller_t *roller_state, int channel_index)
 {
-    tfbus_module_t *module = roller_state->m;
+    tfbus_module_t *module = roller_state->module;
     int wire_channel = channel_index + 1;
     uint8_t parameter_data[4];
     drv_queue_record(module, 0x04, 0x00, (uint8_t[]){0x16, (uint8_t)wire_channel, 0}, 3); // CHANNEL_INIT
@@ -161,7 +161,7 @@ static void init_channel(roller_t *roller_state, int channel_index)
  */
 static void reconfigure_channel(roller_t *roller_state, int channel_index)
 {
-    tfbus_module_t *module = roller_state->m;
+    tfbus_module_t *module = roller_state->module;
     int wire_channel = channel_index + 1;
     uint8_t up_map_record[2] = {(uint8_t)(2 * wire_channel - 1), 0}, down_map_record[2] = {(uint8_t)(2 * wire_channel), 0};
     tfbus_tlv_t map[2] = {{.type = 0x0b, .meta = 0, .len = 2, .data = up_map_record},
@@ -206,7 +206,7 @@ static void cmd_stop(roller_t *roller_state, int channel_index)
     roller_state->stop_timer[channel_index].gen++;
     roller_state->stop_timer[channel_index].due_us = 0;
     esp_timer_stop(roller_state->stop_timer[channel_index].timer);
-    drv_queue_record(roller_state->m, 0x09, 0x01, (uint8_t[]){(uint8_t)(3 << (2 * channel_index))}, 1);
+    drv_queue_record(roller_state->module, 0x09, 0x01, (uint8_t[]){(uint8_t)(3 << (2 * channel_index))}, 1);
 }
 
 /**
@@ -218,7 +218,7 @@ static void stop_timer_fire(tfbus_module_t *module, void *arg, uint32_t gen)
 {
     chan_timer_t *timer_callback_state = arg;
     if (gen == timer_callback_state->gen && timer_callback_state->due_us) {
-        cmd_stop(timer_callback_state->r, timer_callback_state->ch);
+        cmd_stop(timer_callback_state->roller, timer_callback_state->channel);
     }
 }
 
@@ -238,7 +238,7 @@ static void overdue(tfbus_module_t *module)
 static void stop_timer_cb(void *arg)
 {
     chan_timer_t *timer_callback_state = arg;
-    tfbus_master_defer(stop_timer_fire, timer_callback_state->r->m, timer_callback_state, timer_callback_state->gen);
+    tfbus_master_defer(stop_timer_fire, timer_callback_state->roller->module, timer_callback_state, timer_callback_state->gen);
 }
 
 /** @brief tfbus_driver_t::deinit: stop and delete the stop timers. */
@@ -265,7 +265,7 @@ static void cmd_move(roller_t *roller_state, int channel_index, int dir, uint32_
     roller_state->active_ch = channel_index;
     roller_state->last_dir[channel_index] = dir;
     uint8_t bit = (uint8_t)(1 << (2 * channel_index + (dir == ST_DOWN ? 1 : 0)));
-    drv_queue_record(roller_state->m, 0x08, 0x01, &bit, 1);
+    drv_queue_record(roller_state->module, 0x08, 0x01, &bit, 1);
     roller_state->stop_timer[channel_index].gen++;
     roller_state->stop_timer[channel_index].due_us = 0;
     esp_timer_stop(roller_state->stop_timer[channel_index].timer);
@@ -285,7 +285,7 @@ static void cmd_position(roller_t *roller_state, int channel_index, int pct)
     }
     pct = pct < 0 ? 0 : pct > 100 ? 100 : pct;
     roller_state->active_ch = channel_index;
-    drv_queue_record(roller_state->m, 0x16, 0x00, (uint8_t[]){0, (uint8_t)(channel_index + 1), (uint8_t)pct}, 3);
+    drv_queue_record(roller_state->module, 0x16, 0x00, (uint8_t[]){0, (uint8_t)(channel_index + 1), (uint8_t)pct}, 3);
 }
 
 /** @brief tfbus_driver_t::io_new: remember the Lua name of a ROLLER_SHUTTER channel and create its stop timer. */
@@ -299,8 +299,8 @@ static void io_new(tfbus_module_t *module, int cls, int channel_index, const cha
     if (roller_state->stop_timer[channel_index].timer) {
         return; // channel declared again: keep the existing timer (no leak)
     }
-    roller_state->stop_timer[channel_index].r = roller_state;
-    roller_state->stop_timer[channel_index].ch = channel_index;
+    roller_state->stop_timer[channel_index].roller = roller_state;
+    roller_state->stop_timer[channel_index].channel = channel_index;
     const esp_timer_create_args_t timer_args = {.callback = stop_timer_cb, .arg = &roller_state->stop_timer[channel_index], .name = "rol"};
     if (esp_timer_create(&timer_args, &roller_state->stop_timer[channel_index].timer) != ESP_OK) {
         roller_state->stop_timer[channel_index].timer = NULL;

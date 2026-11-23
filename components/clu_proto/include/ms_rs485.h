@@ -56,19 +56,19 @@ typedef struct {
 typedef struct {
     uint8_t self;                  /**< Own address (frames from it / for others are skipped). */
     uint8_t hdr[6];
-    uint8_t phase, pos, cs, calc, cmd;
+    uint8_t phase, pos, checksum, calc, cmd;
     ms_rs485_frame_t f;
 } ms_rs485_rx_t;
 
 /** @brief Reset the receiver for address @p self. */
-void ms_rs485_rx_init(ms_rs485_rx_t *rx, uint8_t self);
+void ms_rs485_rx_init(ms_rs485_rx_t *parser, uint8_t self);
 
 /**
  * @brief Feed one byte.
  * @return 1: a valid frame for us is in @p out; -1: a frame for us was broken (no ETX / EOT, bad
  *         checksum); 0: nothing yet.
  */
-int ms_rs485_rx_push(ms_rs485_rx_t *rx, uint8_t byte, ms_rs485_frame_t *out);
+int ms_rs485_rx_push(ms_rs485_rx_t *parser, uint8_t byte, ms_rs485_frame_t *out);
 
 /**
  * @brief Build a frame.
@@ -80,7 +80,7 @@ size_t ms_rs485_encode(uint8_t to, uint8_t from, const uint8_t *data, size_t len
 typedef struct {
     uint8_t last, sender, destination;
     uint8_t req_echo, is_echo, ptype;
-    ms_msg_t m;                    /**< node = sender, ack = is_echo, payload as text. */
+    ms_msg_t message;              /**< node = sender, ack = is_echo, payload as text. */
 } ms_bin_t;
 
 /**

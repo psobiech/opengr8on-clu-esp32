@@ -9,23 +9,23 @@
 #include "tfbus_frame.h"
 
 /** @brief Module -> CLU frame AA 00 len payload XOR (len = payload + 1); 0 if it does not fit. */
-static int reply(uint8_t *rx, size_t cap, const uint8_t *reply_payload, size_t payload_length)
+static int reply(uint8_t *reply_buffer, size_t reply_capacity, const uint8_t *reply_payload, size_t payload_length)
 {
-    if (payload_length + 4 > cap) {
+    if (payload_length + 4 > reply_capacity) {
         return 0;
     }
-    rx[0] = TFBUS_START;
-    rx[1] = TFBUS_CLU_ADDR;
-    rx[2] = (uint8_t)(payload_length + 1);
+    reply_buffer[0] = TFBUS_START;
+    reply_buffer[1] = TFBUS_CLU_ADDR;
+    reply_buffer[2] = (uint8_t)(payload_length + 1);
     if (payload_length) {
-        memcpy(rx + 3, reply_payload, payload_length);
+        memcpy(reply_buffer + 3, reply_payload, payload_length);
     }
-    rx[3 + payload_length] = tfbus_xor(rx, 3 + payload_length);
+    reply_buffer[3 + payload_length] = tfbus_xor(reply_buffer, 3 + payload_length);
     return (int)(4 + payload_length);
 }
 
-static int broadcast(tfbus_vmod_t *modules, int module_count, uint8_t type, const uint8_t *command_payload, size_t plen, uint8_t *rx,
-                     size_t rxcap)
+static int broadcast(tfbus_vmod_t *modules, int module_count, uint8_t type, const uint8_t *command_payload, size_t plen, uint8_t *reply_buffer,
+                     size_t reply_capacity)
 {
     switch (type) {
     case TFBUS_T_RESET:
@@ -39,7 +39,7 @@ static int broadcast(tfbus_vmod_t *modules, int module_count, uint8_t type, cons
                 uint32_t serial_number = modules[i].sn;
                 const uint8_t discovery_payload[7] = {(uint8_t)serial_number, (uint8_t)(serial_number >> 8), (uint8_t)(serial_number >> 16), (uint8_t)(serial_number >> 24),
                                       modules[i].ops->hw_type, modules[i].ops->fw_type, modules[i].ops->fw_api_ver};
-                return reply(rx, rxcap, discovery_payload, sizeof discovery_payload);
+                return reply(reply_buffer, reply_capacity, discovery_payload, sizeof discovery_payload);
             }
         }
         return 0; // all addressed: the next DISCOVER is for the wire
@@ -49,7 +49,7 @@ static int broadcast(tfbus_vmod_t *modules, int module_count, uint8_t type, cons
             for (int i = 0; i < module_count; i++) {
                 if (modules[i].sn == serial_number) {
                     modules[i].addr = command_payload[4];
-                    return reply(rx, rxcap, NULL, 0);
+                    return reply(reply_buffer, reply_capacity, NULL, 0);
                 }
             }
         }
@@ -59,16 +59,16 @@ static int broadcast(tfbus_vmod_t *modules, int module_count, uint8_t type, cons
     }
 }
 
-int tfbus_vmod_frame(tfbus_vmod_t *modules, int module_count, const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap)
+int tfbus_vmod_frame(tfbus_vmod_t *modules, int module_count, const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity)
 {
-    if (!modules || module_count <= 0 || txlen < 4 || tx[0] != TFBUS_START || tfbus_xor(tx, txlen) != 0) {
+    if (!modules || module_count <= 0 || request_length < 4 || request_frame[0] != TFBUS_START || tfbus_xor(request_frame, request_length) != 0) {
         return 0;
     }
-    uint8_t dest = tx[1], type = tx[2];
-    const uint8_t *command_payload = tx + 3;
-    size_t plen = txlen - 4;
+    uint8_t dest = request_frame[1], type = request_frame[2];
+    const uint8_t *command_payload = request_frame + 3;
+    size_t plen = request_length - 4;
     if (dest == TFBUS_BROADCAST) {
-        return broadcast(modules, module_count, type, command_payload, plen, rx, rxcap);
+        return broadcast(modules, module_count, type, command_payload, plen, reply_buffer, reply_capacity);
     }
     tfbus_vmod_t *mod = NULL;
     for (int i = 0; i < module_count && !mod; i++) {
@@ -86,15 +86,15 @@ int tfbus_vmod_frame(tfbus_vmod_t *modules, int module_count, const uint8_t *tx,
     case TFBUS_T_STATUS_POLL: {
         uint8_t status_payload[TFBUS_MAX_PAYLOAD];
         int len = mod->ops->status(mod, status_payload, sizeof status_payload);
-        return len < 0 ? -1 : reply(rx, rxcap, status_payload, (size_t)len);
+        return len < 0 ? -1 : reply(reply_buffer, reply_capacity, status_payload, (size_t)len);
     }
     case TFBUS_T_VERSION_QUERY:
-        return reply(rx, rxcap, mod->ops->version, sizeof mod->ops->version);
+        return reply(reply_buffer, reply_capacity, mod->ops->version, sizeof mod->ops->version);
     default:
         if (mod->ops->command && !mod->ops->command(mod, type, command_payload, plen)) {
             return -1;
         }
-        return reply(rx, rxcap, NULL, 0);
+        return reply(reply_buffer, reply_capacity, NULL, 0);
     }
 }
 

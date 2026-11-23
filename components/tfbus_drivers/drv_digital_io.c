@@ -52,8 +52,8 @@ typedef struct io8 io8_t;
 
 /** @brief Timed output: reverts the channel to `revert_to` when the timer expires. */
 typedef struct {
-    tfbus_module_t *m;
-    int ch;
+    tfbus_module_t *module;
+    int channel;
     bool revert_to; // output state when the timer expires
     volatile uint32_t gen; // bumped on every start/cancel: a fire queued before is stale
     int64_t due_us;        // revert deadline [esp_timer us], 0 = none (driver lock)
@@ -76,7 +76,7 @@ struct io8 {
     dout_timer_t timed[CH];      // Switch/SwitchOn/SwitchOff(time)
 };
 
-/** @brief Driver state of @p m, allocated on first use. */
+/** @brief Driver state of @p module, allocated on first use. */
 static io8_t *ctx(tfbus_module_t *module)
 {
     if (!module->drv_ctx) {
@@ -106,7 +106,7 @@ static void timed_fire(tfbus_module_t *module, void *arg, uint32_t gen)
     dout_timer_t *timer_context = arg;
     if (gen == timer_context->gen && timer_context->due_us) {
         timer_context->due_us = 0;
-        set_output(module, timer_context->ch, timer_context->revert_to);
+        set_output(module, timer_context->channel, timer_context->revert_to);
     }
 }
 
@@ -116,7 +116,7 @@ static void timed_fire(tfbus_module_t *module, void *arg, uint32_t gen)
 static void timed_cb(void *arg)
 {
     dout_timer_t *timer_context = arg;
-    tfbus_master_defer(timed_fire, timer_context->m, timer_context, timer_context->gen);
+    tfbus_master_defer(timed_fire, timer_context->module, timer_context, timer_context->gen);
 }
 
 /** @brief Cancel a channel's timed output (a fire already queued becomes stale). */
@@ -138,7 +138,7 @@ static void overdue(tfbus_module_t *module)
         dout_timer_t *timer_context = &io_state->timed[ch];
         if (timer_context->due_us && now >= timer_context->due_us) {
             timer_context->due_us = 0;
-            set_output(module, timer_context->ch, timer_context->revert_to);
+            set_output(module, timer_context->channel, timer_context->revert_to);
         }
     }
 }
@@ -161,8 +161,8 @@ static void timed_start(tfbus_module_t *module, io8_t *io_state, int channel, bo
 {
     dout_timer_t *timer_context = &io_state->timed[channel];
     if (!timer_context->timer) {
-        timer_context->m = module;
-        timer_context->ch = channel;
+        timer_context->module = module;
+        timer_context->channel = channel;
         const esp_timer_create_args_t timer_args = {.callback = timed_cb, .arg = timer_context, .name = "dout"};
         if (esp_timer_create(&timer_args, &timer_context->timer) != ESP_OK) {
             return;

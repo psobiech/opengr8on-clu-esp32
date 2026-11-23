@@ -440,10 +440,10 @@ void udp_server_send_report(const char *addr, int port, const char *body)
  * @brief `req:<ip>:<session>:<script>`: evaluate the script in the Lua runtime and answer
  * `resp:<ip>:<session>:<value>`.
  *
- * @param s          Plaintext request (modified in place).
- * @param used       Key the request decrypted with (the answer uses it).
- * @param privileged Request came under the project/temp key; otherwise only checkAlive() is allowed.
- * @param from       Sender.
+ * @param request_text Plaintext request (modified in place).
+ * @param used         Key the request decrypted with (the answer uses it).
+ * @param privileged   Request came under the project/temp key; otherwise only checkAlive() is allowed.
+ * @param from         Sender.
  */
 static void on_lua(char *request_text, const clu_cipher_t *used, bool privileged,
                    const struct sockaddr_in *from)

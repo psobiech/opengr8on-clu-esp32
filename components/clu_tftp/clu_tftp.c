@@ -215,7 +215,7 @@ static void serve_rrq(const struct sockaddr_in *peer, const char *path, bool net
         flen = raw_len;
     }
 
-    uint8_t pkt[PKT_MAX], rx[PKT_MAX];
+    uint8_t pkt[PKT_MAX], received_packet[PKT_MAX];
     uint16_t block = 1;
     size_t off = 0;
     for (;;) {
@@ -229,9 +229,9 @@ static void serve_rrq(const struct sockaddr_in *peer, const char *path, bool net
             sendto(sock, pkt, packet_length, 0, (const struct sockaddr *)peer, sizeof *peer);
             int received_length;
             int64_t until = deadline_in(TIMEOUT_MS); // duplicate ACKs do not extend it either
-            while ((received_length = recv_from_peer(sock, rx, sizeof rx, peer, until)) >= 4) {
-                uint16_t opcode = (uint16_t)(rx[0] << 8 | rx[1]);
-                uint16_t acknowledged_block = (uint16_t)(rx[2] << 8 | rx[3]);
+            while ((received_length = recv_from_peer(sock, received_packet, sizeof received_packet, peer, until)) >= 4) {
+                uint16_t opcode = (uint16_t)(received_packet[0] << 8 | received_packet[1]);
+                uint16_t acknowledged_block = (uint16_t)(received_packet[2] << 8 | received_packet[3]);
                 if (opcode == TFTP_ERROR) {
                     ESP_LOGW(TAG, "RRQ %s aborted by peer", path);
                     goto out;

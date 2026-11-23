@@ -13,7 +13,7 @@ static void timer_fire(tfbus_module_t *module, void *arg, uint32_t gen)
     light_timer_t *timer_state = arg;
     if (gen == timer_state->gen && timer_state->due_us) {
         timer_state->due_us = 0;
-        timer_state->fn(module, timer_state->owner);
+        timer_state->callback(module, timer_state->owner);
     }
 }
 
@@ -21,7 +21,7 @@ static void timer_fire(tfbus_module_t *module, void *arg, uint32_t gen)
 static void timer_cb(void *arg)
 {
     light_timer_t *timer_state = arg;
-    tfbus_master_defer(timer_fire, timer_state->m, timer_state, timer_state->gen);
+    tfbus_master_defer(timer_fire, timer_state->module, timer_state, timer_state->gen);
 }
 
 void light_timer_start(light_timer_t *timer_state, tfbus_module_t *module, void *owner, light_timer_fn_t expiry_callback,
@@ -33,9 +33,9 @@ void light_timer_start(light_timer_t *timer_state, tfbus_module_t *module, void 
             return;
         }
     }
-    timer_state->m = module;
+    timer_state->module = module;
     timer_state->owner = owner;
-    timer_state->fn = expiry_callback;
+    timer_state->callback = expiry_callback;
     esp_timer_stop(timer_state->timer);
     timer_state->gen++;
     timer_state->due_us = esp_timer_get_time() + (int64_t)ms * 1000;
@@ -66,7 +66,7 @@ void light_timer_overdue(light_timer_t *timer_state)
 {
     if (timer_state->due_us && esp_timer_get_time() >= timer_state->due_us) {
         timer_state->due_us = 0; // a deferred call still queued finds it done
-        timer_state->fn(timer_state->m, timer_state->owner);
+        timer_state->callback(timer_state->module, timer_state->owner);
     }
 }
 

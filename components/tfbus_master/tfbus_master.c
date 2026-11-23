@@ -55,8 +55,8 @@ typedef struct {
 
 /** @brief Deferred driver call (tfbus_master_defer()). */
 typedef struct {
-    tfbus_defer_fn_t fn;
-    tfbus_module_t *m;
+    tfbus_defer_fn_t callback;
+    tfbus_module_t *module;
     void *arg;
     uint32_t tag;
 } defer_t;
@@ -333,7 +333,7 @@ esp_err_t tfbus_master_queue(const uint8_t *frame, size_t len)
 
 bool tfbus_master_defer(tfbus_defer_fn_t deferred_callback, tfbus_module_t *module, void *arg, uint32_t tag)
 {
-    defer_t deferred_call = {.fn = deferred_callback, .m = module, .arg = arg, .tag = tag};
+    defer_t deferred_call = {.callback = deferred_callback, .module = module, .arg = arg, .tag = tag};
     if (!s_defer || xQueueSend(s_defer, &deferred_call, 0) != pdTRUE) {
         s_defer_lost = true; // recovered by deadline: run_deferred() -> tfbus_driver_t::overdue
         ESP_LOGW(TAG, "defer queue full, call dropped (timers recovered by deadline)");
@@ -352,10 +352,10 @@ static void run_deferred(void)
     }
     defer_t deferred_call;
     while (xQueueReceive(s_defer, &deferred_call, 0) == pdTRUE) {
-        if (!live(deferred_call.m)) {
+        if (!live(deferred_call.module)) {
             continue; // module dropped by a refresh
         }
-        deferred_call.fn(deferred_call.m, deferred_call.arg, deferred_call.tag);
+        deferred_call.callback(deferred_call.module, deferred_call.arg, deferred_call.tag);
     }
     if (s_defer_lost) {
         s_defer_lost = false; // before the scan: a drop during it triggers another one
@@ -440,9 +440,9 @@ void tfbus_obj_store(lua_State *L, int obj, int idx, lua_Number numeric_value)
 
 /**
  * @brief Resolve the hosting module of an IO object; NULL for virtual objects.
- * @param L   Lua state.
- * @param obj Stack index of the object table.
- * @param ch  Out: channel on the module.
+ * @param L             Lua state.
+ * @param obj           Stack index of the object table.
+ * @param channel_index Out: channel on the module.
  */
 static tfbus_module_t *io_module(lua_State *L, int obj, int *channel_index)
 {
@@ -480,8 +480,8 @@ static void io_on_new(lua_State *L, int obj)
  * -> obj at index 2, args from 3; the error is re-raised after unlocking.
  */
 typedef struct {
-    tfbus_module_t *m;
-    int cls, ch, idx, nargs;
+    tfbus_module_t *module;
+    int cls, channel, idx, nargs;
     bool execute;
     int ret; // io_set: handled; io_execute: results pushed (-1 unknown)
 } io_call_t;
@@ -493,10 +493,10 @@ static int io_call_p(lua_State *L)
 {
     io_call_t *call_context = lua_touserdata(L, 1);
     if (call_context->execute) {
-        call_context->ret = call_context->m->drv->io_execute(call_context->m, L, 2, call_context->cls, call_context->ch, call_context->idx, 3, call_context->nargs);
+        call_context->ret = call_context->module->drv->io_execute(call_context->module, L, 2, call_context->cls, call_context->channel, call_context->idx, 3, call_context->nargs);
         return call_context->ret > 0 ? call_context->ret : 0;
     }
-    call_context->ret = call_context->m->drv->io_set(call_context->m, L, 2, call_context->cls, call_context->ch, call_context->idx, 3);
+    call_context->ret = call_context->module->drv->io_set(call_context->module, L, 2, call_context->cls, call_context->channel, call_context->idx, 3);
     return 0;
 }
 
@@ -529,7 +529,7 @@ static bool io_set(lua_State *L, int obj, int idx, int val)
     if (!module || !module->drv->io_set) {
         return false;
     }
-    io_call_t call_context = {.m = module, .cls = clu_obj_class(L, obj), .ch = channel_index, .idx = idx, .nargs = 1};
+    io_call_t call_context = {.module = module, .cls = clu_obj_class(L, obj), .channel = channel_index, .idx = idx, .nargs = 1};
     int top = lua_gettop(L);
     io_call(L, &call_context, obj, val);
     lua_settop(L, top);
@@ -544,7 +544,7 @@ static int io_execute(lua_State *L, int obj, int idx, int first, int nargs)
     if (!module || !module->drv->io_execute) {
         return -1;
     }
-    io_call_t call_context = {.m = module, .cls = clu_obj_class(L, obj), .ch = channel_index, .idx = idx, .nargs = nargs,
+    io_call_t call_context = {.module = module, .cls = clu_obj_class(L, obj), .channel = channel_index, .idx = idx, .nargs = nargs,
                    .execute = true};
     int top = lua_gettop(L);
     io_call(L, &call_context, obj, first);
@@ -570,14 +570,14 @@ static bool is_ack(const uint8_t *response_frame, int response_length)
  */
 static void send_cmd(const cmd_t *queued_command)
 {
-    uint8_t rx[TFBUS_MAX_FRAME];
+    uint8_t reply_frame[TFBUS_MAX_FRAME];
     if (queued_command->frame[1] == TFBUS_BROADCAST && queued_command->frame[2] != TFBUS_T_ADDR_ASSIGN &&
         queued_command->frame[2] != TFBUS_T_SEEK) {
         tfbus_uart_send(queued_command->frame, queued_command->len);
         return;
     }
     for (int t = 0; t < CMD_TRIES; t++) {
-        int response_length = tfbus_uart_transact(queued_command->frame, queued_command->len, rx, sizeof rx, ACK_TIMEOUT_MS);
+        int response_length = tfbus_uart_transact(queued_command->frame, queued_command->len, reply_frame, sizeof reply_frame, ACK_TIMEOUT_MS);
         if (response_length > 0) {
             return; // ACK (or any reply)
         }
@@ -625,12 +625,12 @@ static void set_online(tfbus_module_t *module, bool on)
 /** @brief ADDR_ASSIGN the module's SN to its address; true if ACKed (up to CMD_TRIES). */
 static bool assign(tfbus_module_t *module)
 {
-    uint8_t assign_frame[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
+    uint8_t assign_frame[TFBUS_MAX_FRAME], reply_frame[TFBUS_MAX_FRAME];
     size_t frame_length = tfbus_addr_assign(assign_frame, sizeof assign_frame, module->sn, module->addr);
     module->assigned = false;
     for (int t = 0; t < CMD_TRIES && !module->assigned; t++) {
-        int response_length = tfbus_uart_transact(assign_frame, frame_length, rx, sizeof rx, ACK_TIMEOUT_MS);
-        module->assigned = is_ack(rx, response_length);
+        int response_length = tfbus_uart_transact(assign_frame, frame_length, reply_frame, sizeof reply_frame, ACK_TIMEOUT_MS);
+        module->assigned = is_ack(reply_frame, response_length);
     }
     return module->assigned;
 }
@@ -666,19 +666,19 @@ static tfbus_device_t *dev_get(uint32_t serial_number)
  */
 static bool scan(void)
 {
-    uint8_t discovery_frame[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
+    uint8_t discovery_frame[TFBUS_MAX_FRAME], reply_frame[TFBUS_MAX_FRAME];
     size_t frame_length = tfbus_discover(discovery_frame, sizeof discovery_frame);
     int garbled = 0;
     bool added = false;
     for (int found = 0; found < TFBUS_MAX_MODULES;) {
-        int response_length = tfbus_uart_transact(discovery_frame, frame_length, rx, sizeof rx, DISCOVER_TIMEOUT_MS);
+        int response_length = tfbus_uart_transact(discovery_frame, frame_length, reply_frame, sizeof reply_frame, DISCOVER_TIMEOUT_MS);
         const uint8_t *response_payload;
         size_t plen;
         tfbus_ident_t id;
         if (response_length <= 0) {
             break;
         }
-        if (!tfbus_parse_response(rx, (size_t)response_length, &response_payload, &plen)) {
+        if (!tfbus_parse_response(reply_frame, (size_t)response_length, &response_payload, &plen)) {
             if (++garbled > DISCOVER_RETRIES) { // several modules answering at once
                 ESP_LOGW(TAG, "DISCOVER: garbled replies, giving up");
                 break;
@@ -758,12 +758,12 @@ static void version_query(tfbus_device_t *device, uint8_t addr)
     if (device->hw_type == 0x03 && device->fw_api_ver && device->fw_api_ver < 5) {
         return;
     }
-    uint8_t version_query_frame[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
+    uint8_t version_query_frame[TFBUS_MAX_FRAME], reply_frame[TFBUS_MAX_FRAME];
     size_t frame_length = tfbus_version_query(version_query_frame, sizeof version_query_frame, addr);
-    int response_length = tfbus_uart_transact(version_query_frame, frame_length, rx, sizeof rx, ACK_TIMEOUT_MS);
+    int response_length = tfbus_uart_transact(version_query_frame, frame_length, reply_frame, sizeof reply_frame, ACK_TIMEOUT_MS);
     const uint8_t *response_payload;
     size_t plen;
-    if (response_length > 0 && tfbus_parse_response(rx, (size_t)response_length, &response_payload, &plen) && plen >= 3) {
+    if (response_length > 0 && tfbus_parse_response(reply_frame, (size_t)response_length, &response_payload, &plen) && plen >= 3) {
         xSemaphoreTake(s_lock, portMAX_DELAY);
         device->fw_api_ver = response_payload[0];
         memcpy(device->ver, response_payload, 3);
@@ -798,7 +798,7 @@ static int dev_cmp(const void *left_device, const void *right_device)
  */
 static void discover(bool refresh)
 {
-    uint8_t request_frame[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
+    uint8_t request_frame[TFBUS_MAX_FRAME], reply_frame[TFBUS_MAX_FRAME];
     size_t frame_length;
 
     if (refresh && s_refresh_cb) {
@@ -811,7 +811,7 @@ static void discover(bool refresh)
 
     if (!refresh) {
         frame_length = tfbus_seek(request_frame, sizeof request_frame);
-        int response_length = tfbus_uart_transact(request_frame, frame_length, rx, sizeof rx, ACK_TIMEOUT_MS * 5);
+        int response_length = tfbus_uart_transact(request_frame, frame_length, reply_frame, sizeof reply_frame, ACK_TIMEOUT_MS * 5);
         ESP_LOGI(TAG, "SEEK %s", response_length > 0 ? "acked" : "no reply");
         (void)response_length; // log-only
     }
@@ -939,12 +939,12 @@ static void rejoin(tfbus_module_t *module)
  */
 static void poll_module(tfbus_module_t *module)
 {
-    uint8_t status_poll_frame[TFBUS_MAX_FRAME], rx[TFBUS_MAX_FRAME];
+    uint8_t status_poll_frame[TFBUS_MAX_FRAME], reply_frame[TFBUS_MAX_FRAME];
     size_t frame_length = tfbus_status_poll(status_poll_frame, sizeof status_poll_frame, module->addr);
-    int response_length = tfbus_uart_transact(status_poll_frame, frame_length, rx, sizeof rx, POLL_TIMEOUT_MS);
+    int response_length = tfbus_uart_transact(status_poll_frame, frame_length, reply_frame, sizeof reply_frame, POLL_TIMEOUT_MS);
     const uint8_t *response_payload;
     size_t plen;
-    if (response_length <= 0 || !tfbus_parse_response(rx, (size_t)response_length, &response_payload, &plen)) {
+    if (response_length <= 0 || !tfbus_parse_response(reply_frame, (size_t)response_length, &response_payload, &plen)) {
         module->fails_total++;
         if (module->fails < 255) {
             module->fails++;

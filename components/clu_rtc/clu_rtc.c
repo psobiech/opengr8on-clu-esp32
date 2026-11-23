@@ -17,7 +17,7 @@ static const char *TAG = "clu_rtc";
 static clu_rtc_chip_t s_type; // chip of s_dev
 static i2c_master_dev_handle_t s_dev;
 
-/** @brief Read @p n registers from @p reg. */
+/** @brief Read @p register_count registers from @p reg. */
 static bool rd(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t *out, size_t register_count)
 {
     return i2c_master_transmit_receive(dev, &reg, 1, out, register_count, I2C_TIMEOUT) == ESP_OK;

@@ -529,11 +529,11 @@ static void gw_frame(const ms_rs485_frame_t *frame, int64_t now)
         return;
     }
     s_win.frames++;
-    trace_line("<", &decoded_message.m, frame->to == MS_BROADCAST ? " (broadcast)" : "");
-    const uint8_t cmd = decoded_message.m.cmd, type = decoded_message.m.type;
+    trace_line("<", &decoded_message.message, frame->to == MS_BROADCAST ? " (broadcast)" : "");
+    const uint8_t cmd = decoded_message.message.cmd, type = decoded_message.message.type;
     if (frame->to == MS_BROADCAST) {
         if (cmd != MS_C_INTERNAL) {
-            handle(&decoded_message.m, now);
+            handle(&decoded_message.message, now);
         } else if (type == MS_I_FIND_PARENT_REQUEST) {
             gw_answer(decoded_message.sender, MS_I_FIND_PARENT_RESPONSE, 0); // distance to the gateway: 0
         }
@@ -563,7 +563,7 @@ static void gw_frame(const ms_rs485_frame_t *frame, int64_t now)
             break;
         }
     }
-    handle(&decoded_message.m, now);
+    handle(&decoded_message.message, now);
 }
 
 /** @brief Bytes from the bus through the frame receiver. */
@@ -894,7 +894,7 @@ static int l_status(lua_State *L)
     char version[sizeof s_gw_version];
     xSemaphoreTake(s_mx, portMAX_DELAY);
     strlcpy(version, s_gw_version, sizeof version);
-    lua_Integer rx = s_rx, tx = s_tx, dropped = s_dropped, bad = s_bad, bytes = s_rx_bytes;
+    lua_Integer received_count = s_rx, sent_count = s_tx, dropped = s_dropped, bad = s_bad, bytes = s_rx_bytes;
     link_t link = s_link;
     xSemaphoreGive(s_mx);
     lua_newtable(L);
@@ -902,9 +902,9 @@ static int l_status(lua_State *L)
     lua_setfield(L, -2, "connected");
     lua_pushstring(L, version);
     lua_setfield(L, -2, "version");
-    lua_pushinteger(L, rx);
+    lua_pushinteger(L, received_count);
     lua_setfield(L, -2, "rx");
-    lua_pushinteger(L, tx);
+    lua_pushinteger(L, sent_count);
     lua_setfield(L, -2, "tx");
     lua_pushinteger(L, dropped);
     lua_setfield(L, -2, "dropped");

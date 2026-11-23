@@ -7,7 +7,7 @@ const STORE = "opengr8on-flasher-lang";
 
 const RELEASES = "https://github.com/psobiech/opengr8on-clu-esp32/releases";
 
-const T = {
+const TRANSLATIONS = {
   pl: {
     title: "Flasher opengr8on CLU",
     intro: "Instalacja i aktualizacja firmware ESP32 CLU oraz zapis jego ustawień przez USB w Chrome lub Edge na komputerze, a aktualizacja także przez sieć. Ustawienia (także hasła) nie są nigdzie wysyłane; przy aktualizacji przez sieć hasło OTA idzie tylko do CLU.",
@@ -200,15 +200,15 @@ const T = {
 let lang = DEFAULT_LANG;
 try {
   const saved = localStorage.getItem(STORE);
-  if (saved && T[saved]) lang = saved;
+  if (saved && TRANSLATIONS[saved]) lang = saved;
 } catch { /* storage unavailable */ }
 
 export const getLang = () => lang;
 
 /** Translate @p key, substituting {name} from @p vars. Unknown keys come back as is. */
 export function t(key, vars = {}) {
-  const s = T[lang][key] ?? T.en[key] ?? key;
-  return s.replace(/\{(\w+)\}/g, (_, k) => (k in vars ? String(vars[k]) : `{${k}}`));
+  const text = TRANSLATIONS[lang][key] ?? TRANSLATIONS.en[key] ?? key;
+  return text.replace(/\{(\w+)\}/g, (_, name) => (name in vars ? String(vars[name]) : `{${name}}`));
 }
 
 /** Apply the language to the document (static texts, <html lang>, <title>). */
@@ -220,11 +220,11 @@ export function apply(root = document) {
   document.title = t("title");
 }
 
-export function setLang(l) {
-  if (!T[l]) return;
-  lang = l;
+export function setLang(language) {
+  if (!TRANSLATIONS[language]) return;
+  lang = language;
   try {
-    localStorage.setItem(STORE, l);
+    localStorage.setItem(STORE, language);
   } catch { /* storage unavailable */ }
   apply();
 }

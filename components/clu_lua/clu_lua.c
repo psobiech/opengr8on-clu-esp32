@@ -899,7 +899,7 @@ static lua_State *vm_new(void)
     return L;
 }
 
-/** @brief True if @p p exists. */
+/** @brief True if @p file_path exists. */
 static bool file_exists(const char *file_path)
 {
     struct stat file_status;

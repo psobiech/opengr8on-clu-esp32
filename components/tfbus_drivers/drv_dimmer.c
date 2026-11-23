@@ -80,7 +80,7 @@ typedef struct {
     unsigned saved;        // last_on level in NVS (0-1000), ~0u = none
 } dimm_t;
 
-/** @brief Driver state of @p m, allocated on first use. */
+/** @brief Driver state of @p module, allocated on first use. */
 static dimm_t *ctx(tfbus_module_t *module)
 {
     if (!module->drv_ctx) {
@@ -125,7 +125,7 @@ static void save_last(tfbus_module_t *module, void *owner)
     nvs_close(nvs_handle);
 }
 
-/** @brief Remember @p v as the last value the output was on with (Mode LastValue). */
+/** @brief Remember @p requested_value as the last value the output was on with (Mode LastValue). */
 static void set_last(tfbus_module_t *module, dimm_t *dimmer_state, float requested_value)
 {
     if (requested_value != dimmer_state->last_on) {
@@ -134,7 +134,7 @@ static void set_last(tfbus_module_t *module, dimm_t *dimmer_state, float request
     }
 }
 
-/** @brief Fire the value events for a change @p old -> @p nv. */
+/** @brief Fire the value events for a change @p old -> @p new_value. */
 static void events(const dimm_t *dimmer_state, float old, float new_value)
 {
     if (!dimmer_state->name[0] || old == new_value) {
@@ -168,7 +168,7 @@ static void send_level(tfbus_module_t *module, dimm_t *dimmer_state, uint32_t ra
 }
 
 /**
- * @brief Drive the output to @p v (already clamped) and report it.
+ * @brief Drive the output to @p new_level (already clamped) and report it.
  * @param L   Lua state when called from a Lua hook (Value stored on the object at @p obj),
  *            NULL from the bus task (Value posted).
  */

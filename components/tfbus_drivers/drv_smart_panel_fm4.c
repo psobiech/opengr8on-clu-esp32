@@ -92,7 +92,7 @@ typedef struct {
 
 static void led(tfbus_module_t *module, int button_index, uint8_t cmd);
 
-/** @brief Driver state of @p m, allocated (with sensor / register defaults) on first use. */
+/** @brief Driver state of @p module, allocated (with sensor / register defaults) on first use. */
 static sp4_t *ctx(tfbus_module_t *module)
 {
     if (!module->drv_ctx) {
@@ -192,8 +192,8 @@ static void init(tfbus_module_t *module)
         for (uint8_t s = 1; s <= SLOTS; s++) {
             send_page(module, p, 0x04, s);
             send_page(module, p, 0x03, s);
-            uint8_t b = (uint8_t)((p - 1) * SLOTS + s - 1);
-            tfbus_cmd_queue(module, 0x1a, (uint8_t[]){b, 0x02, 0x00}, 3); // slot -> PANEL_BUTTON b
+            uint8_t button_index = (uint8_t)((p - 1) * SLOTS + s - 1);
+            tfbus_cmd_queue(module, 0x1a, (uint8_t[]){button_index, 0x02, 0x00}, 3); // slot -> PANEL_BUTTON button_index
             send_page(module, p, 0x06, s);
         }
     }
@@ -253,11 +253,11 @@ static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int c
     sp4_t *panel_state = ctx(module);
     if (cls == CLS_PANEL) {
         if (idx >= 4 && idx <= 7) {
-            int i = idx - 4;
+            int icon_index = idx - 4;
             const char *sensor_config = lua_type(L, val) == LUA_TSTRING ? lua_tostring(L, val) : "";
-            strlcpy(panel_state->icon[i], sensor_config, sizeof panel_state->icon[i]);
+            strlcpy(panel_state->icon[icon_index], sensor_config, sizeof panel_state->icon[icon_index]);
             if (panel_state->initialized) {
-                send_icon(module, i);
+                send_icon(module, icon_index);
             }
         }
         for (size_t i = 0; i < NREGS; i++) {
@@ -300,7 +300,7 @@ static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int c
 }
 
 /**
- * @brief LED_CMD [mask_lo mask_hi cmd] for button @p b.
+ * @brief LED_CMD [mask_lo mask_hi cmd] for button @p button_index.
  *
  * Captures only show buttons 1-8 (mask_hi 0); mask_hi for buttons 9-16 is an assumption (the
  * RP2350 emulator reads a 16-bit mask).

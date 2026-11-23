@@ -106,9 +106,9 @@ static void net_diag(void *arg)
 {
     char wifi[64] = "";
 #if CONFIG_CLU_WIFI
-    wifi_ap_record_t ap;
-    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
-        snprintf(wifi, sizeof wifi, " | ap " MACSTR " ch %d rssi %d", MAC2STR(ap.bssid), ap.primary, ap.rssi);
+    wifi_ap_record_t access_point;
+    if (esp_wifi_sta_get_ap_info(&access_point) == ESP_OK) {
+        snprintf(wifi, sizeof wifi, " | ap " MACSTR " ch %d rssi %d", MAC2STR(access_point.bssid), access_point.primary, access_point.rssi);
     } else {
         strlcpy(wifi, " | ap none", sizeof wifi);
     }

@@ -35,10 +35,10 @@ bool tfbus_uart_add_local(tfbus_uart_local_fn_t local_endpoint)
 }
 
 /** @brief Offer a frame to the local endpoints in turn: the first that owns it answers. */
-static int local(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap)
+static int local(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity)
 {
     for (int i = 0; i < s_nlocal; i++) {
-        int reply_length = s_local[i](tx, txlen, rx, rxcap);
+        int reply_length = s_local[i](request_frame, request_length, reply_buffer, reply_capacity);
         if (reply_length != 0) {
             return reply_length;
         }
@@ -74,7 +74,7 @@ esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg)
 }
 
 /** @brief Put a frame on the wire. */
-static esp_err_t wire_send(const uint8_t *tx, size_t txlen)
+static esp_err_t wire_send(const uint8_t *request_frame, size_t request_length)
 {
     if (s_nowire) {
         return ESP_OK; // nobody out there
@@ -83,27 +83,27 @@ static esp_err_t wire_send(const uint8_t *tx, size_t txlen)
         return ESP_ERR_INVALID_STATE;
     }
     uart_flush_input(s_uart);
-    if (uart_write_bytes(s_uart, tx, txlen) != (int)txlen) {
+    if (uart_write_bytes(s_uart, request_frame, request_length) != (int)request_length) {
         return ESP_FAIL;
     }
     return uart_wait_tx_done(s_uart, pdMS_TO_TICKS(20));
 }
 
-esp_err_t tfbus_uart_send(const uint8_t *tx, size_t txlen)
+esp_err_t tfbus_uart_send(const uint8_t *request_frame, size_t request_length)
 {
     for (int i = 0; i < s_nlocal; i++) {
-        uint8_t rx[TFBUS_MAX_FRAME];
-        s_local[i](tx, txlen, rx, sizeof rx); // e.g. RESET broadcast: local modules hear it too
+        uint8_t reply_buffer[TFBUS_MAX_FRAME];
+        s_local[i](request_frame, request_length, reply_buffer, sizeof reply_buffer); // e.g. RESET broadcast: local modules hear it too
     }
-    return wire_send(tx, txlen);
+    return wire_send(request_frame, request_length);
 }
 
 /** @brief Reply collector state for tfbus_uart_transact(). */
 typedef struct {
-    const uint8_t *tx;
-    size_t txlen;
-    uint8_t *rx;
-    size_t rxcap;
+    const uint8_t *request_frame;
+    size_t request_length;
+    uint8_t *reply_buffer;
+    size_t reply_capacity;
     int got;
 } collect_t;
 
@@ -120,31 +120,31 @@ static void on_frame(const uint8_t *frame, size_t len, void *ctx)
         return;
     }
     // Some transceivers echo our own TX (RE tied low) — skip it.
-    if (len == collector->txlen && memcmp(frame, collector->tx, len) == 0) {
+    if (len == collector->request_length && memcmp(frame, collector->request_frame, len) == 0) {
         return;
     }
-    if (frame[1] != TFBUS_CLU_ADDR || len > collector->rxcap) {
+    if (frame[1] != TFBUS_CLU_ADDR || len > collector->reply_capacity) {
         return;
     }
-    memcpy(collector->rx, frame, len);
+    memcpy(collector->reply_buffer, frame, len);
     collector->got = (int)len;
 }
 
-int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap, int timeout_ms)
+int tfbus_uart_transact(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity, int timeout_ms)
 {
-    int local_reply_length = local(tx, txlen, rx, rxcap);
+    int local_reply_length = local(request_frame, request_length, reply_buffer, reply_capacity);
     if (local_reply_length != 0) {
         return local_reply_length > 0 ? local_reply_length : 0;
     }
     if (s_nowire) {
         return 0; // no module on a wire answers
     }
-    if (wire_send(tx, txlen) != ESP_OK) {
+    if (wire_send(request_frame, request_length) != ESP_OK) {
         return -1;
     }
     tfbus_rx_t parser;
     tfbus_rx_init(&parser);
-    collect_t collector = {.tx = tx, .txlen = txlen, .rx = rx, .rxcap = rxcap};
+    collect_t collector = {.request_frame = request_frame, .request_length = request_length, .reply_buffer = reply_buffer, .reply_capacity = reply_capacity};
     int64_t deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     uint8_t chunk[64];
     uint8_t raw[24];
@@ -179,12 +179,12 @@ int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxc
         tfbus_rx_push(&parser, chunk, (size_t)bytes_read, on_frame, &collector);
     }
     // Discovery diagnostics: a broadcast got bytes back that do not parse (collision / turnaround).
-    if (collector.got == 0 && total > 0 && txlen >= 3 && tx[1] == TFBUS_BROADCAST) {
+    if (collector.got == 0 && total > 0 && request_length >= 3 && request_frame[1] == TFBUS_BROADCAST) {
         char hex[3 * sizeof raw + 1] = "";
         for (size_t i = 0; i < nraw; i++) {
             snprintf(hex + 3 * i, 4, "%02x ", raw[i]);
         }
-        ESP_LOGW(TAG, "bcast type 0x%02x: no reply parsed, %u byte(s) received: %s", tx[2],
+        ESP_LOGW(TAG, "bcast type 0x%02x: no reply parsed, %u byte(s) received: %s", request_frame[2],
                  (unsigned)total, hex);
     }
     return collector.got;

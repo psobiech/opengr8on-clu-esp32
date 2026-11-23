@@ -14,22 +14,22 @@ function fakeApp(segLens, hash) {
   for (const l of segLens) len += 8 + l;
   len = (len + 16) & ~15;
   if (hash) len += 32;
-  const b = new Uint8Array(len).fill(0x5a);
-  const dv = new DataView(b.buffer);
-  b[0] = 0xe9;
-  b[1] = segLens.length;
-  b[12] = 9; // chip id: ESP32-S3
-  b[23] = hash ? 1 : 0;
-  let p = 24;
+  const image = new Uint8Array(len).fill(0x5a);
+  const dataView = new DataView(image.buffer);
+  image[0] = 0xe9;
+  image[1] = segLens.length;
+  image[12] = 9; // chip id: ESP32-S3
+  image[23] = hash ? 1 : 0;
+  let position = 24;
   for (const l of segLens) {
-    dv.setUint32(p, 0x3c000000, true);
-    dv.setUint32(p + 4, l, true);
-    p += 8 + l;
+    dataView.setUint32(position, 0x3c000000, true);
+    dataView.setUint32(position + 4, l, true);
+    position += 8 + l;
   }
-  return b;
+  return image;
 }
 
-const eq = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+const eq = (actual, expected) => actual.length === expected.length && actual.every((byte, index) => byte === expected[index]);
 
 // sizes around the 16-byte checksum alignment: 24 + 8 + l + 1 ending exactly on / just past a block
 for (const [segs, hash] of [[[7], true], [[8], true], [[23], false], [[100, 4, 4096], true], [[0x10000], false]]) {
@@ -57,17 +57,17 @@ check("full image: first app partition, exact image length", eq(appImage(full, p
 check("app-only file: taken as is (trailing bytes dropped)",
       eq(appImage(new Uint8Array([...app, 1, 2, 3]), []), app));
 let msg = "";
-try { appImage(full, [{ type: 1, subtype: 2, offset: 0x9000 }]); } catch (e) { msg = e.message; }
+try { appImage(full, [{ type: 1, subtype: 2, offset: 0x9000 }]); } catch (error) { msg = error.message; }
 check("no app partition: err_no_app", msg === "err_no_app");
 msg = "";
-try { appImage(new Uint8Array(full.length).fill(0xff), parts); } catch (e) { msg = e.message; }
+try { appImage(new Uint8Array(full.length).fill(0xff), parts); } catch (error) { msg = error.message; }
 check("erased app partition: err_no_app", msg === "err_no_app");
 
 check("address: IP -> default port", cluBase("192.168.1.50") === "http://192.168.1.50:8080");
 check("address: port, URL form, spaces, trailing slash",
       cluBase(" http://clu.lan:8081/ ") === "http://clu.lan:8081" && cluBase("10.0.0.2:80") === "http://10.0.0.2:80");
 check("address: rejected (empty, https, path, bad port, IPv6)",
-      [ "", "https://1.2.3.4", "1.2.3.4/ota", "1.2.3.4:0", "1.2.3.4:70000", "[::1]", "a b" ].every((s) => cluBase(s) === null));
+      [ "", "https://1.2.3.4", "1.2.3.4/ota", "1.2.3.4:0", "1.2.3.4:70000", "[::1]", "a b" ].every((address) => cluBase(address) === null));
 
 check("auth: Basic ota:password", basicAuth("secret123") === "Basic b3RhOnNlY3JldDEyMw==");
 check("auth: UTF-8 password", atob(basicAuth("zażółć1!").slice(6)) ===

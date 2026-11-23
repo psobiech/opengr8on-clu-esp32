@@ -88,7 +88,7 @@ static bool sample(void)
     return true;
 }
 
-/** @brief Module @p m: byte i of the 16-bit IO words. */
+/** @brief Module @p module: byte i of the 16-bit IO words. */
 static int index_of(const tfbus_vmod_t *module)
 {
     return (int)(intptr_t)module->ctx;
@@ -125,7 +125,7 @@ static bool din8_command(tfbus_vmod_t *module, uint8_t type, const uint8_t *payl
     return true;
 }
 
-int localio_frame(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap)
+int localio_frame(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity)
 {
-    return s_hw ? tfbus_vmod_frame(s_mod, s_nmod, tx, txlen, rx, rxcap) : 0;
+    return s_hw ? tfbus_vmod_frame(s_mod, s_nmod, request_frame, request_length, reply_buffer, reply_capacity) : 0;
 }

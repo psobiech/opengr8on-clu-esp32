@@ -46,9 +46,9 @@ void localio_setup(const uint32_t *serial_numbers, int module_count, const local
 
 /**
  * @brief Handle one CLU -> module frame (::tfbus_uart_local_fn_t). Bus task only.
- * @return Reply length in @p rx, 0 if not for a local module, < 0 if handled without a reply.
+ * @return Reply length in @p reply_buffer, 0 if not for a local module, < 0 if handled without a reply.
  */
-int localio_frame(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap);
+int localio_frame(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity);
 
 /**
  * @brief Board glue (Kconfig CLU_LOCAL_IO): serial from NVS / menuconfig, one PCF8575 on

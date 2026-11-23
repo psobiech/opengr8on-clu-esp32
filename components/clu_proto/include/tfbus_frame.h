@@ -143,18 +143,18 @@ typedef struct {
 } tfbus_rx_t;
 
 /** @brief Reset the RX parser. */
-void tfbus_rx_init(tfbus_rx_t *rx);
+void tfbus_rx_init(tfbus_rx_t *parser);
 
 /**
  * @brief Push received bytes into the RX parser.
  *
- * @param rx   Parser state.
+ * @param parser Parser state.
  * @param data Received bytes.
  * @param len  Number of bytes.
  * @param frame_callback Called as frame_callback(frame, len, ctx) for each complete frame.
  * @param ctx            User context for @p frame_callback.
  */
-void tfbus_rx_push(tfbus_rx_t *rx, const uint8_t *data, size_t len,
+void tfbus_rx_push(tfbus_rx_t *parser, const uint8_t *data, size_t len,
                    void (*frame_callback)(const uint8_t *frame, size_t len, void *ctx), void *ctx);
 
 #ifdef __cplusplus

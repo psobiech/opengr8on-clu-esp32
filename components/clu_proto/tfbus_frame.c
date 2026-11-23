@@ -171,16 +171,16 @@ int tfbus_parse_tlv(const uint8_t *tlv_payload, size_t plen, tfbus_tlv_t *recs, 
     return record_count < (int)max ? record_count : (int)max;
 }
 
-void tfbus_rx_init(tfbus_rx_t *rx)
+void tfbus_rx_init(tfbus_rx_t *parser)
 {
-    rx->len = 0;
+    parser->len = 0;
 }
 
 /**
  * @brief Expected length of a CLU -> module frame from its type byte.
  *
- * @param b   Buffered bytes starting at TFBUS_START (at least 3).
- * @param len Number of buffered bytes.
+ * @param buffered_frame Buffered bytes starting at TFBUS_START (at least 3).
+ * @param len            Number of buffered bytes.
  * @return Frame length, or -1 if unknown (caller falls back to the length byte).
  */
 static int typed_len(const uint8_t *buffered_frame, size_t len)
@@ -209,34 +209,34 @@ static int typed_len(const uint8_t *buffered_frame, size_t len)
     }
 }
 
-/** @brief Remove the first @p n bytes from the RX buffer. */
-static void drop(tfbus_rx_t *rx, size_t bytes_to_drop)
+/** @brief Remove the first @p bytes_to_drop bytes from the RX buffer. */
+static void drop(tfbus_rx_t *parser, size_t bytes_to_drop)
 {
-    memmove(rx->buf, rx->buf + bytes_to_drop, rx->len - bytes_to_drop);
-    rx->len -= bytes_to_drop;
+    memmove(parser->buf, parser->buf + bytes_to_drop, parser->len - bytes_to_drop);
+    parser->len -= bytes_to_drop;
 }
 
-void tfbus_rx_push(tfbus_rx_t *rx, const uint8_t *data, size_t len,
+void tfbus_rx_push(tfbus_rx_t *parser, const uint8_t *data, size_t len,
                    void (*frame_callback)(const uint8_t *frame, size_t len, void *ctx), void *ctx)
 {
     while (len) {
-        size_t room = sizeof rx->buf - rx->len;
+        size_t room = sizeof parser->buf - parser->len;
         size_t bytes_copied = len < room ? len : room;
-        memcpy(rx->buf + rx->len, data, bytes_copied);
-        rx->len += bytes_copied;
+        memcpy(parser->buf + parser->len, data, bytes_copied);
+        parser->len += bytes_copied;
         data += bytes_copied;
         len -= bytes_copied;
 
-        while (rx->len >= 4) {
-            if (rx->buf[0] != TFBUS_START) {
-                const uint8_t *next_frame_start = memchr(rx->buf + 1, TFBUS_START, rx->len - 1);
-                drop(rx, next_frame_start ? (size_t)(next_frame_start - rx->buf) : rx->len);
+        while (parser->len >= 4) {
+            if (parser->buf[0] != TFBUS_START) {
+                const uint8_t *next_frame_start = memchr(parser->buf + 1, TFBUS_START, parser->len - 1);
+                drop(parser, next_frame_start ? (size_t)(next_frame_start - parser->buf) : parser->len);
                 continue;
             }
             int cand[2];
             int candidate_count = 0;
-            int typed_length = typed_len(rx->buf, rx->len);
-            int raw_length = 3 + rx->buf[2] < 4 ? 4 : 3 + rx->buf[2];
+            int typed_length = typed_len(parser->buf, parser->len);
+            int raw_length = 3 + parser->buf[2] < 4 ? 4 : 3 + parser->buf[2];
             if (typed_length > 0) {
                 cand[candidate_count++] = typed_length;
             }
@@ -250,13 +250,13 @@ void tfbus_rx_push(tfbus_rx_t *rx, const uint8_t *data, size_t len,
                 if (candidate_frame_length > TFBUS_MAX_FRAME) {
                     continue;
                 }
-                if (rx->len < candidate_frame_length) {
+                if (parser->len < candidate_frame_length) {
                     need_more = true;
                     break;
                 }
-                if (tfbus_xor(rx->buf, candidate_frame_length - 1) == rx->buf[candidate_frame_length - 1]) {
-                    frame_callback(rx->buf, candidate_frame_length, ctx);
-                    drop(rx, candidate_frame_length);
+                if (tfbus_xor(parser->buf, candidate_frame_length - 1) == parser->buf[candidate_frame_length - 1]) {
+                    frame_callback(parser->buf, candidate_frame_length, ctx);
+                    drop(parser, candidate_frame_length);
                     delivered = true;
                     break;
                 }
@@ -265,11 +265,11 @@ void tfbus_rx_push(tfbus_rx_t *rx, const uint8_t *data, size_t len,
                 break;
             }
             if (!delivered) {
-                drop(rx, 1);
+                drop(parser, 1);
             }
         }
-        if (rx->len == sizeof rx->buf) {
-            drop(rx, 1); // garbage filled buffer: resync
+        if (parser->len == sizeof parser->buf) {
+            drop(parser, 1); // garbage filled buffer: resync
         }
     }
 }

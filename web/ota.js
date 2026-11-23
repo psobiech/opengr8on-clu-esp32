@@ -15,17 +15,17 @@ export const DEFAULT_PORT = 8080;
  */
 export function appImageLength(bytes, off = 0) {
   if (off + HEADER_LEN > bytes.length || bytes[off] !== IMAGE_MAGIC) return -1;
-  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const dataView = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const segs = bytes[off + 1];
   if (segs < 1 || segs > 16) return -1; // ESP_IMAGE_MAX_SEGMENTS
-  let p = off + HEADER_LEN;
+  let position = off + HEADER_LEN;
   for (let i = 0; i < segs; i++) {
-    if (p + SEG_HEADER_LEN > bytes.length) return -1;
-    p += SEG_HEADER_LEN + dv.getUint32(p + 4, true);
+    if (position + SEG_HEADER_LEN > bytes.length) return -1;
+    position += SEG_HEADER_LEN + dataView.getUint32(position + 4, true);
   }
-  p = (p + 16) & ~15; // checksum byte ends the 16-byte block (esptool align_file_position + 1)
-  if (bytes[off + 23] === 1) p += HASH_LEN;
-  return p <= bytes.length ? p - off : -1;
+  position = (position + 16) & ~15; // checksum byte ends the 16-byte block (esptool align_file_position + 1)
+  if (bytes[off + 23] === 1) position += HASH_LEN;
+  return position <= bytes.length ? position - off : -1;
 }
 
 /**
@@ -38,7 +38,7 @@ export function appImageLength(bytes, off = 0) {
 export function appImage(bytes, parts) {
   // full image: the first app partition (ota_0, else factory); app-only file: offset 0
   const app = parts.length
-    ? parts.filter((p) => p.type === 0x00).sort((a, b) => a.offset - b.offset)[0]
+    ? parts.filter((partition) => partition.type === 0x00).sort((left, right) => left.offset - right.offset)[0]
     : { offset: 0 };
   const len = app ? appImageLength(bytes, app.offset) : -1;
   if (len < 0) throw new Error("err_no_app");
@@ -51,18 +51,18 @@ export function appImage(bytes, parts) {
  * @returns {string|null} "http://host:port", null when not a host name / IPv4 (+ port)
  */
 export function cluBase(input) {
-  const s = String(input).trim().replace(/^http:\/\//i, "").replace(/\/+$/, "");
-  const m = /^([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)(?::(\d{1,5}))?$/.exec(s);
-  if (!m) return null;
-  const port = m[2] ? Number(m[2]) : DEFAULT_PORT;
+  const address = String(input).trim().replace(/^http:\/\//i, "").replace(/\/+$/, "");
+  const match = /^([A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?)(?::(\d{1,5}))?$/.exec(address);
+  if (!match) return null;
+  const port = match[2] ? Number(match[2]) : DEFAULT_PORT;
   if (port < 1 || port > 65535) return null;
-  return `http://${m[1]}:${port}`;
+  return `http://${match[1]}:${port}`;
 }
 
 /** "Basic base64(ota:password)", UTF-8 (the CLU ignores the user name). */
 export function basicAuth(password) {
-  const b = new TextEncoder().encode(`ota:${password}`);
-  let s = "";
-  for (const c of b) s += String.fromCharCode(c);
-  return `Basic ${btoa(s)}`;
+  const encoded = new TextEncoder().encode(`ota:${password}`);
+  let binary = "";
+  for (const c of encoded) binary += String.fromCharCode(c);
+  return `Basic ${btoa(binary)}`;
 }

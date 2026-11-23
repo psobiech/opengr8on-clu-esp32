@@ -70,9 +70,9 @@ enum { PE_CHANGE = 0, PE_LOWER = 1, PE_RISE = 2, PE_OUT = 3, PE_IN = 6 };
 
 /** @brief Colour state. */
 typedef struct {
-    int16_t h;             // hue 0..360 [whole degrees]
-    float s, v;            // saturation / value 0..1
-    uint8_t c[4];          // R, G, B, W 0..255 (before correction)
+    int16_t hue;           // hue 0..360 [whole degrees]
+    float saturation, value; // saturation / value 0..1
+    uint8_t rgbw[4];       // R, G, B, W 0..255 (before correction)
 } color_t;
 
 /** @brief Driver state per module (drv_ctx). */
@@ -89,14 +89,14 @@ typedef struct {
     light_hold_t hold;     // shared by all Hold* methods
 
     // PowerSupplyVoltage
-    int32_t u, u_event;    // last value, value at the last change event [10 mV]
+    int32_t voltage, u_event; // last value, value at the last change event [10 mV]
     int32_t u_sens, u_min, u_max; // [10 mV]
     bool u_have, u_out;
 
     ledch_t *lch;          // LED_CHANNEL / LED_CCT objects (drv_ledch.c)
 } rgbw_t;
 
-/** @brief Driver state of @p m, allocated on first use. */
+/** @brief Driver state of @p module, allocated on first use. */
 static rgbw_t *ctx(tfbus_module_t *module)
 {
     if (!module->drv_ctx) {
@@ -131,49 +131,49 @@ static uint8_t to255(float normalized_value)
 /** @brief R/G/B from H/S/V (W untouched). */
 static void hsv_to_rgb(color_t *color)
 {
-    float hue_sector = (float)(color->h % 360) / 60.0f, saturation = color->s, value = color->v;
+    float hue_sector = (float)(color->hue % 360) / 60.0f, saturation = color->saturation, value = color->value;
     int sector_index = (int)hue_sector;
     float sector_fraction = hue_sector - sector_index, low_component = value * (1.0f - saturation), falling_component = value * (1.0f - saturation * sector_fraction), rising_component = value * (1.0f - saturation * (1.0f - sector_fraction));
     float rgb[6][3] = {{value, rising_component, low_component}, {falling_component, value, low_component}, {low_component, value, rising_component}, {low_component, falling_component, value}, {rising_component, low_component, value}, {value, low_component, falling_component}};
     for (int j = 0; j < 3; j++) {
-        color->c[j] = to255(rgb[sector_index % 6][j]);
+        color->rgbw[j] = to255(rgb[sector_index % 6][j]);
     }
 }
 
 /** @brief H/S/V from R/G/B (Hue whole degrees, S/V two decimals); hue kept where undefined. */
 static void rgb_to_hsv(color_t *color)
 {
-    float red_component = color->c[0] / 255.0f, green_component = color->c[1] / 255.0f, blue_component = color->c[2] / 255.0f;
+    float red_component = color->rgbw[0] / 255.0f, green_component = color->rgbw[1] / 255.0f, blue_component = color->rgbw[2] / 255.0f;
     float maximum = fmaxf(red_component, fmaxf(green_component, blue_component)), minimum = fminf(red_component, fminf(green_component, blue_component)), chroma = maximum - minimum;
-    color->v = trunc2(maximum);
-    color->s = maximum == 0 ? 0.0f : trunc2(chroma / maximum);
+    color->value = trunc2(maximum);
+    color->saturation = maximum == 0 ? 0.0f : trunc2(chroma / maximum);
     if (chroma == 0) {
         return; // black / grey: keep hue
     }
     // Keep the CLU's float behavior: (255, 127, 63) gives 19.99999 -> 19, not 20.
     float hue_degrees = maximum == red_component ? fmodf((green_component - blue_component) / chroma, 6.0f) : maximum == green_component ? (blue_component - red_component) / chroma + 2.0f : (red_component - green_component) / chroma + 4.0f;
     hue_degrees *= 60.0f;
-    color->h = (int16_t)floorf(hue_degrees < 0 ? hue_degrees + 360 : hue_degrees);
+    color->hue = (int16_t)floorf(hue_degrees < 0 ? hue_degrees + 360 : hue_degrees);
 }
 
 /** @brief Set Value / Hue / Saturation (already in range) and recompute R/G/B. */
 static void set_hsv(color_t *color, int hue_degrees, float saturation, float value)
 {
-    color->h = (int16_t)hue_degrees;
-    color->s = saturation;
-    color->v = value;
+    color->hue = (int16_t)hue_degrees;
+    color->saturation = saturation;
+    color->value = value;
     hsv_to_rgb(color);
 }
 
 static bool lit(const color_t *color)
 {
-    return color->c[0] || color->c[1] || color->c[2] || color->c[3];
+    return color->rgbw[0] || color->rgbw[1] || color->rgbw[2] || color->rgbw[3];
 }
 
 /** @brief "#RRGGBB" of the R/G/B components. */
 static void rgb_str(const color_t *color, char out[8])
 {
-    snprintf(out, 8, "#%02X%02X%02X", color->c[0], color->c[1], color->c[2]);
+    snprintf(out, 8, "#%02X%02X%02X", color->rgbw[0], color->rgbw[1], color->rgbw[2]);
 }
 
 // ---------------------------------------------------------------- output
@@ -199,7 +199,7 @@ static void send_values(tfbus_module_t *module, const rgbw_t *rgbw_state)
     tfbus_tlv_t tlv_records[4];
     for (int i = 0; i < 4; i++) {
         value_records[i][0] = (uint8_t)i;
-        value_records[i][1] = rgbw_state->col.c[i];
+        value_records[i][1] = rgbw_state->col.rgbw[i];
         tlv_records[i] = (tfbus_tlv_t){.type = 0x05, .meta = 0x10, .len = 2, .data = value_records[i]};
     }
     drv_queue_records(module, tlv_records, 4);
@@ -216,7 +216,7 @@ static void publish(const rgbw_t *rgbw_state, lua_State *L, int obj)
 {
     static const int idx[] = {F_VALUE, F_HUE, F_SAT, F_RED, F_GREEN, F_BLUE, F_WHITE};
     const color_t *color = &rgbw_state->col;
-    float val[] = {color->v, (float)color->h, color->s, color->c[0], color->c[1], color->c[2], color->c[3]};
+    float val[] = {color->value, (float)color->hue, color->saturation, color->rgbw[0], color->rgbw[1], color->rgbw[2], color->rgbw[3]};
     char hex[8];
     rgb_str(color, hex);
     if (L) {
@@ -239,12 +239,12 @@ static void publish(const rgbw_t *rgbw_state, lua_State *L, int obj)
 static void events(const rgbw_t *rgbw_state, const color_t *old)
 {
     const color_t *current_color = &rgbw_state->col;
-    if (!rgbw_state->name[0] || !memcmp(old->c, current_color->c, sizeof current_color->c)) {
+    if (!rgbw_state->name[0] || !memcmp(old->rgbw, current_color->rgbw, sizeof current_color->rgbw)) {
         return;
     }
     clu_lua_post_event(rgbw_state->name, EV_CHANGE);
-    if (current_color->v != old->v) {
-        clu_lua_post_event(rgbw_state->name, current_color->v > old->v ? EV_RISE : EV_LOWER);
+    if (current_color->value != old->value) {
+        clu_lua_post_event(rgbw_state->name, current_color->value > old->value ? EV_RISE : EV_LOWER);
     }
     if (!lit(old) && lit(current_color)) {
         clu_lua_post_event(rgbw_state->name, EV_ON);
@@ -256,7 +256,7 @@ static void events(const rgbw_t *rgbw_state, const color_t *old)
 /** @brief No SET_RAMP_TIME before the values (timed switch expiry). */
 #define NO_RAMP UINT32_MAX
 
-/** @brief Drive the module to @p k and report it (see publish() for @p L / @p obj). */
+/** @brief Drive the module to @p target_color and report it (see publish() for @p L / @p obj). */
 static void apply(tfbus_module_t *module, rgbw_t *rgbw_state, lua_State *L, int obj, const color_t *target_color, uint32_t ramp)
 {
     color_t old = rgbw_state->col;
@@ -379,7 +379,7 @@ static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int c
     return false; // store generically
 }
 
-/** @brief Parse "#RRGGBB" / "RRGGBB" into k->c[0..2]; false if malformed. */
+/** @brief Parse "#RRGGBB" / "RRGGBB" into color->rgbw[0..2]; false if malformed. */
 static bool parse_rgb(const char *rgb_text, color_t *color)
 {
     if (*rgb_text == '#') {
@@ -389,9 +389,9 @@ static bool parse_rgb(const char *rgb_text, color_t *color)
         return false;
     }
     unsigned long rgb_value = strtoul(rgb_text, NULL, 16);
-    color->c[0] = (uint8_t)(rgb_value >> 16);
-    color->c[1] = (uint8_t)(rgb_value >> 8);
-    color->c[2] = (uint8_t)rgb_value;
+    color->rgbw[0] = (uint8_t)(rgb_value >> 16);
+    color->rgbw[1] = (uint8_t)(rgb_value >> 8);
+    color->rgbw[2] = (uint8_t)rgb_value;
     return true;
 }
 
@@ -402,20 +402,20 @@ static void hold(tfbus_module_t *module, rgbw_t *rgbw_state, lua_State *L, int o
     int64_t now = esp_timer_get_time();
     uint32_t ramp = sweep;
     if (idx == X_HOLD) {
-        int dir = light_hold_dir(&rgbw_state->hold, now, target_color.v, rgbw_state->min, rgbw_state->max);
+        int dir = light_hold_dir(&rgbw_state->hold, now, target_color.value, rgbw_state->min, rgbw_state->max);
         float value_step = sweep ? (float)(100u * LIGHT_HOLD_STEP_MS / sweep) / 100.0f : 1; // trunc to 0.01
-        set_hsv(&target_color, target_color.h, target_color.s, trunc2(light_clamp(target_color.v + dir * value_step, rgbw_state->min, rgbw_state->max)));
+        set_hsv(&target_color, target_color.hue, target_color.saturation, trunc2(light_clamp(target_color.value + dir * value_step, rgbw_state->min, rgbw_state->max)));
     } else if (idx == X_HOLD_HUE) {
-        int dir = light_hold_dir(&rgbw_state->hold, now, target_color.h, -1, 361); // no ends: wraps
-        int hue_value = target_color.h + dir * (sweep ? (int)(360u * LIGHT_HOLD_STEP_MS / sweep) : 60);
-        set_hsv(&target_color, hue_value < 0 ? 359 : hue_value > 359 ? 0 : hue_value, target_color.s, target_color.v);
+        int dir = light_hold_dir(&rgbw_state->hold, now, target_color.hue, -1, 361); // no ends: wraps
+        int hue_value = target_color.hue + dir * (sweep ? (int)(360u * LIGHT_HOLD_STEP_MS / sweep) : 60);
+        set_hsv(&target_color, hue_value < 0 ? 359 : hue_value > 359 ? 0 : hue_value, target_color.saturation, target_color.value);
         ramp = 0; // captured: HoldHue sends ramp 0
     } else {
         int channel_index = idx == X_HOLD_WHITE ? 3 : idx - X_HOLD_RED; // 0 R, 1 G, 2 B, 3 W
-        int dir = light_hold_dir(&rgbw_state->hold, now, target_color.c[channel_index], 0, 255);
+        int dir = light_hold_dir(&rgbw_state->hold, now, target_color.rgbw[channel_index], 0, 255);
         int value_step = sweep ? (int)((255u * LIGHT_HOLD_STEP_MS + sweep / 2) / sweep) : 255; // rounded
-        int channel_value = target_color.c[channel_index] + dir * value_step;
-        target_color.c[channel_index] = (uint8_t)(channel_value < 0 ? 0 : channel_value > 255 ? 255 : channel_value);
+        int channel_value = target_color.rgbw[channel_index] + dir * value_step;
+        target_color.rgbw[channel_index] = (uint8_t)(channel_value < 0 ? 0 : channel_value > 255 ? 255 : channel_value);
         if (channel_index < 3) {
             rgb_to_hsv(&target_color);
         }
@@ -442,25 +442,25 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
         if ((requested_value < rgbw_state->min || requested_value > rgbw_state->max) && rgbw_state->name[0]) {
             clu_lua_post_event(rgbw_state->name, EV_RANGE);
         }
-        set_hsv(&target_color, target_color.h, target_color.s, light_clamp(requested_value, rgbw_state->min, rgbw_state->max));
+        set_hsv(&target_color, target_color.hue, target_color.saturation, light_clamp(requested_value, rgbw_state->min, rgbw_state->max));
         break;
     }
     case X_HUE: {
         float requested_hue = luaL_checknumber(L, first);
-        set_hsv(&target_color, requested_hue >= 0 ? (int)light_clamp(requested_hue, 0, 360) : 0, target_color.s, target_color.v); // NaN -> 0
+        set_hsv(&target_color, requested_hue >= 0 ? (int)light_clamp(requested_hue, 0, 360) : 0, target_color.saturation, target_color.value); // NaN -> 0
         break;
     }
     case X_SAT:
-        set_hsv(&target_color, target_color.h, light_clamp(luaL_checknumber(L, first), 0, 1), target_color.v);
+        set_hsv(&target_color, target_color.hue, light_clamp(luaL_checknumber(L, first), 0, 1), target_color.value);
         break;
     case X_RED:
     case X_GREEN:
     case X_BLUE:
-        target_color.c[idx - X_RED] = (uint8_t)light_clamp(luaL_checknumber(L, first), 0, 255);
+        target_color.rgbw[idx - X_RED] = (uint8_t)light_clamp(luaL_checknumber(L, first), 0, 255);
         rgb_to_hsv(&target_color);
         break;
     case X_WHITE:
-        target_color.c[3] = (uint8_t)light_clamp(luaL_checknumber(L, first), 0, 255);
+        target_color.rgbw[3] = (uint8_t)light_clamp(luaL_checknumber(L, first), 0, 255);
         break;
     case X_RGB:
         if (!parse_rgb(luaL_checkstring(L, first), &target_color)) {
@@ -483,12 +483,12 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
         float ms = light_arg(L, first, nargs, 0, 0);
         ramp = light_ramp_arg(L, first, nargs, 1, rgbw_state->ramp);
         bool on = idx == X_ON || (idx == X_SWITCH && !lit(&rgbw_state->col));
-        set_hsv(&target_color, target_color.h, target_color.s, on ? rgbw_state->max : 0);
+        set_hsv(&target_color, target_color.hue, target_color.saturation, on ? rgbw_state->max : 0);
         if (!on) {
-            target_color.c[3] = 0; // SwitchOff: W too; SwitchOn leaves W as it is
+            target_color.rgbw[3] = 0; // SwitchOff: W too; SwitchOn leaves W as it is
         }
         light_timer_cancel(&rgbw_state->timed);
-        if (ms > 0 && memcmp(target_color.c, rgbw_state->col.c, sizeof target_color.c)) {
+        if (ms > 0 && memcmp(target_color.rgbw, rgbw_state->col.rgbw, sizeof target_color.rgbw)) {
             rgbw_state->revert_to = rgbw_state->col;
             light_timer_start(&rgbw_state->timed, module, rgbw_state, revert, (uint32_t)ms);
         }
@@ -511,7 +511,7 @@ static void psu_update(rgbw_t *rgbw_state, int32_t supply_voltage)
     const char *object_name = rgbw_state->psu;
     bool first = !rgbw_state->u_have;
     rgbw_state->u_have = true;
-    rgbw_state->u = supply_voltage;
+    rgbw_state->voltage = supply_voltage;
     bool out = supply_voltage < rgbw_state->u_min || supply_voltage > rgbw_state->u_max;
     bool change = first || abs(supply_voltage - rgbw_state->u_event) >= rgbw_state->u_sens;
     if (object_name[0] && (change || out != rgbw_state->u_out)) {

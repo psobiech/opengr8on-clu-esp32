@@ -242,9 +242,9 @@ static int sent(const char *want)
         ms_bin_t b;
         if (ms_bin_decode(s_bin + i + 6, len, &b)) {
             char line[MS_LINE_CAP];
-            b.m.node = b.destination;
-            b.m.ack = b.req_echo;
-            if (ms_format(&b.m, line, sizeof line) > 0) {
+            b.message.node = b.destination;
+            b.message.ack = b.req_echo;
+            if (ms_format(&b.message, line, sizeof line) > 0) {
                 strncat(got, line, sizeof got - strlen(got) - 1);
             }
         }
@@ -679,7 +679,7 @@ static void test_rs485_proto(void)
     }
     check("rs485: node without an id (to = from = 255, 3x SOH) accepted",
           r == 1 && got.to == 255 && got.from == 255 && got.len == 7 && ms_bin_decode(got.data, got.len, &b0) &&
-              b0.m.cmd == MS_C_INTERNAL && b0.m.type == MS_I_FIND_PARENT_REQUEST && b0.sender == 255);
+              b0.message.cmd == MS_C_INTERNAL && b0.message.type == MS_I_FIND_PARENT_REQUEST && b0.sender == 255);
     gl = ms_rs485_encode(0, 7, d, 3, g, sizeof g);
     g[gl - 2] ^= 1;
     for (size_t i = 0; i < gl; i++) {
@@ -722,21 +722,21 @@ static void test_rs485_proto(void)
     for (size_t k = 0; k < sizeof pt / sizeof *pt; k++) {
         uint8_t m[MS_BIN_HEADER + 6] = {12, 12, 0, (uint8_t)(2 | pt[k].len << 3), (uint8_t)(1 | pt[k].ptype << 5), 0, 1};
         memcpy(m + MS_BIN_HEADER, pt[k].data, pt[k].len);
-        if (!ms_bin_decode(m, MS_BIN_HEADER + pt[k].len, &b) || strcmp(b.m.payload, pt[k].text)) {
-            printf("  ptype %u: [%s] want [%s]\n", pt[k].ptype, b.m.payload, pt[k].text);
+        if (!ms_bin_decode(m, MS_BIN_HEADER + pt[k].len, &b) || strcmp(b.message.payload, pt[k].text)) {
+            printf("  ptype %u: [%s] want [%s]\n", pt[k].ptype, b.message.payload, pt[k].text);
             ok = 0;
         }
     }
     check("bin: every payload type rendered like getString()", ok);
     const uint8_t hdr[] = {3, 12, 0, (uint8_t)(2 | 3 << 3), (uint8_t)(3 | 1 << 3 | 1 << 4), 24, 7};
     check("bin: header fields", ms_bin_decode(hdr, sizeof hdr, &b) && b.last == 3 && b.sender == 12 && b.destination == 0 &&
-                                    b.req_echo && b.is_echo && b.m.cmd == 3 && b.m.type == 24 && b.m.child == 7 &&
-                                    b.m.node == 12 && b.m.ack == 1 && !b.m.payload[0]);
+                                    b.req_echo && b.is_echo && b.message.cmd == 3 && b.message.type == 24 && b.message.child == 7 &&
+                                    b.message.node == 12 && b.message.ack == 1 && !b.message.payload[0]);
     const uint8_t bad_ver[] = {0, 1, 0, 1, 1, 0, 0}, bad_cmd[] = {0, 1, 0, 2, 7, 0, 0};
     const uint8_t long_len[] = {0, 1, 0, (uint8_t)(2 | 31 << 3), 1, 0, 0, 'a', 'b'};
     check("bin: too short / version != 2 / command > 4 rejected", !ms_bin_decode(hdr, 6, &b) && !ms_bin_decode(bad_ver, 7, &b) &&
                                                                      !ms_bin_decode(bad_cmd, 7, &b));
-    check("bin: length beyond the frame cut to the frame", ms_bin_decode(long_len, sizeof long_len, &b) && !strcmp(b.m.payload, "ab"));
+    check("bin: length beyond the frame cut to the frame", ms_bin_decode(long_len, sizeof long_len, &b) && !strcmp(b.message.payload, "ab"));
 
     // controller -> MyMessage
     uint8_t o[64];
@@ -812,13 +812,13 @@ static void test_gateway(void)
     check("gateway: nothing sent while the bus is busy", s_bin_len == 0 && s_gwq_n == 1);
     tick(1010);
     check("gateway: find parent -> I_FIND_PARENT_RESPONSE 0 to the node",
-          sent_frames(12, &b, &to) == 1 && to == 12 && b.sender == 0 && b.m.cmd == MS_C_INTERNAL &&
-              b.m.type == MS_I_FIND_PARENT_RESPONSE && !strcmp(b.m.payload, "0") && lua_queued() == 0);
+          sent_frames(12, &b, &to) == 1 && to == 12 && b.sender == 0 && b.message.cmd == MS_C_INTERNAL &&
+              b.message.type == MS_I_FIND_PARENT_RESPONSE && !strcmp(b.message.payload, "0") && lua_queued() == 0);
     const uint8_t fpar[] = {1, 1, 1, 0xff, 0xff, 0x58, 7, 2, 0xff, 0xff, 0xff, 2, 3, 7, 0xff, 3, 0x65, 4};
     gw_bytes(fpar, sizeof fpar, 1500);
     tick(1600);
     check("gateway: captured find parent of a node without an id -> answer broadcast to 255",
-          sent_frames(200, &b, &to) == 1 && to == 255 && b.destination == 255 && b.m.type == MS_I_FIND_PARENT_RESPONSE);
+          sent_frames(200, &b, &to) == 1 && to == 255 && b.destination == 255 && b.message.type == MS_I_FIND_PARENT_RESPONSE);
     node_frame(255, 12, 255, MS_C_INTERNAL, MS_I_DISCOVER_REQUEST_FOR_TEST, MS_P_BYTE, &zero, 1, false);
     tick(2000);
     check("gateway: other internal broadcasts are for the nodes", sent_frames(12, &b, &to) == 0 && lua_queued() == 0);
@@ -827,20 +827,20 @@ static void test_gateway(void)
     node_frame(0, 255, 7, MS_C_INTERNAL, MS_I_ID_REQUEST, MS_P_STRING, "", 0, false);
     tick(3000);
     check("gateway: I_ID_REQUEST answered by the controller, broadcast with the new id and the token",
-          sent_frames(200, &b, &to) == 1 && to == 255 && b.m.type == MS_I_ID_RESPONSE && b.m.child == 7 &&
-              atoi(b.m.payload) >= 1);
+          sent_frames(200, &b, &to) == 1 && to == 255 && b.message.type == MS_I_ID_RESPONSE && b.message.child == 7 &&
+              atoi(b.message.payload) >= 1);
     lua_flush();
 
     // ping, registration: the gateway's own answers
     uint8_t one = 1;
     node_frame(0, 12, 255, MS_C_INTERNAL, MS_I_PING, MS_P_BYTE, &one, 1, false);
     tick(4000);
-    check("gateway: I_PING -> I_PONG 1", sent_frames(12, &b, &to) == 1 && b.m.type == MS_I_PONG && !strcmp(b.m.payload, "1"));
+    check("gateway: I_PING -> I_PONG 1", sent_frames(12, &b, &to) == 1 && b.message.type == MS_I_PONG && !strcmp(b.message.payload, "1"));
     uint8_t ver = 2;
     node_frame(0, 12, 255, MS_C_INTERNAL, MS_I_REGISTRATION_REQUEST, MS_P_BYTE, &ver, 1, false);
     tick(5000);
     check("gateway: registration approved, not passed on",
-          sent_frames(12, &b, &to) == 1 && b.m.type == MS_I_REGISTRATION_RESPONSE && !strcmp(b.m.payload, "1") &&
+          sent_frames(12, &b, &to) == 1 && b.message.type == MS_I_REGISTRATION_RESPONSE && !strcmp(b.message.payload, "1") &&
               lua_queued() == 0);
     node_frame(0, 12, 255, MS_C_INTERNAL, MS_I_PONG, MS_P_BYTE, &one, 1, false);
     node_frame(0, 12, 255, MS_C_INTERNAL, MS_I_SIGNAL_REPORT_REVERSE, MS_P_BYTE, &one, 1, false);
@@ -854,11 +854,11 @@ static void test_gateway(void)
     tick(7000);
     check("gateway: C_SET with echo request: echo back to the node, value kept, scripts see it",
           sent_frames(12, &b, &to) == 1 && b.is_echo && !b.req_echo && b.sender == 0 && b.destination == 12 &&
-              b.m.cmd == MS_C_SET && value_find(12, 1, 2) && !strcmp(value_find(12, 1, 2)->payload, "1") && lua_queued() == 2);
+              b.message.cmd == MS_C_SET && value_find(12, 1, 2) && !strcmp(value_find(12, 1, 2)->payload, "1") && lua_queued() == 2);
     lua_flush();
     node_frame(0, 12, 255, MS_C_INTERNAL, MS_I_CONFIG, MS_P_STRING, "", 0, false);
     tick(8000);
-    check("gateway: I_CONFIG -> M", sent_frames(12, &b, &to) == 1 && b.m.type == MS_I_CONFIG && !strcmp(b.m.payload, "M"));
+    check("gateway: I_CONFIG -> M", sent_frames(12, &b, &to) == 1 && b.message.type == MS_I_CONFIG && !strcmp(b.message.payload, "M"));
     node_frame(0, 12, 1, MS_C_SET, 2, MS_P_BYTE, &on, 1, false);
     s_bin_len = 0;
     uint8_t echo_flags = (uint8_t)(1 | 1 << 4 | MS_P_BYTE << 5); // an echo from the node: no echo back
@@ -885,7 +885,7 @@ static void test_gateway(void)
     tick(10000);
     s_trace = false;
     check("gateway: C_SET to the node as P_STRING; to the gateway itself: not sent",
-          sent_frames(12, &b, &to) == 1 && to == 12 && b.m.cmd == MS_C_SET && b.ptype == MS_P_STRING && !strcmp(b.m.payload, "0"));
+          sent_frames(12, &b, &to) == 1 && to == 12 && b.message.cmd == MS_C_SET && b.ptype == MS_P_STRING && !strcmp(b.message.payload, "0"));
 
     // broken frames, garbage, link check
     unsigned bad = s_bad;

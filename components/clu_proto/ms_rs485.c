@@ -16,64 +16,64 @@
 #define PROTOCOL_VERSION 2
 #define MAX_PAYLOAD 25
 
-void ms_rs485_rx_init(ms_rs485_rx_t *rx, uint8_t self)
+void ms_rs485_rx_init(ms_rs485_rx_t *parser, uint8_t self)
 {
-    memset(rx, 0, sizeof *rx);
-    rx->self = self;
+    memset(parser, 0, sizeof *parser);
+    parser->self = self;
 }
 
-int ms_rs485_rx_push(ms_rs485_rx_t *rx, uint8_t received_byte, ms_rs485_frame_t *out)
+int ms_rs485_rx_push(ms_rs485_rx_t *parser, uint8_t received_byte, ms_rs485_frame_t *out)
 {
-    switch (rx->phase) {
+    switch (parser->phase) {
     case 0: // header window: SOH to from cmd len STX
-        memmove(rx->hdr, rx->hdr + 1, 5);
-        rx->hdr[5] = received_byte;
+        memmove(parser->hdr, parser->hdr + 1, 5);
+        parser->hdr[5] = received_byte;
         // to == from is skipped like MyTransportRS485 does, except a node without an id (255)
         // broadcasting: its I_FIND_PARENT_REQUEST / I_ID_REQUEST must reach the gateway
-        if (rx->hdr[0] != SOH || rx->hdr[5] != STX ||
-            (rx->hdr[1] == rx->hdr[2] && rx->hdr[1] != MS_BROADCAST)) {
+        if (parser->hdr[0] != SOH || parser->hdr[5] != STX ||
+            (parser->hdr[1] == parser->hdr[2] && parser->hdr[1] != MS_BROADCAST)) {
             return 0;
         }
-        rx->f.to = rx->hdr[1];
-        rx->f.from = rx->hdr[2];
-        rx->cmd = rx->hdr[3];
-        rx->f.len = rx->hdr[4];
-        rx->calc = (uint8_t)(rx->hdr[1] + rx->hdr[2] + rx->hdr[3] + rx->hdr[4]);
-        memset(rx->hdr, 0, sizeof rx->hdr);
-        if (rx->f.len >= MS_RS485_MAX_DATA || rx->f.from == rx->self ||
-            (rx->f.to != rx->self && rx->f.to != MS_BROADCAST)) {
+        parser->f.to = parser->hdr[1];
+        parser->f.from = parser->hdr[2];
+        parser->cmd = parser->hdr[3];
+        parser->f.len = parser->hdr[4];
+        parser->calc = (uint8_t)(parser->hdr[1] + parser->hdr[2] + parser->hdr[3] + parser->hdr[4]);
+        memset(parser->hdr, 0, sizeof parser->hdr);
+        if (parser->f.len >= MS_RS485_MAX_DATA || parser->f.from == parser->self ||
+            (parser->f.to != parser->self && parser->f.to != MS_BROADCAST)) {
             return 0; // too long, ours, or for another node
         }
-        rx->pos = 0;
-        rx->phase = rx->f.len ? 1 : 2;
+        parser->pos = 0;
+        parser->phase = parser->f.len ? 1 : 2;
         return 0;
     case 1:
-        rx->f.data[rx->pos++] = received_byte;
-        rx->calc = (uint8_t)(rx->calc + received_byte);
-        if (rx->pos == rx->f.len) {
-            rx->phase = 2;
+        parser->f.data[parser->pos++] = received_byte;
+        parser->calc = (uint8_t)(parser->calc + received_byte);
+        if (parser->pos == parser->f.len) {
+            parser->phase = 2;
         }
         return 0;
     case 2:
         if (received_byte != ETX) {
-            rx->phase = 0;
+            parser->phase = 0;
             return -1;
         }
-        rx->phase = 3;
+        parser->phase = 3;
         return 0;
     case 3:
-        rx->cs = received_byte;
-        rx->phase = 4;
+        parser->checksum = received_byte;
+        parser->phase = 4;
         return 0;
     default:
-        rx->phase = 0;
-        if (received_byte != EOT || rx->cs != rx->calc) {
+        parser->phase = 0;
+        if (received_byte != EOT || parser->checksum != parser->calc) {
             return -1;
         }
-        if (rx->cmd != SYS_PACK) {
+        if (parser->cmd != SYS_PACK) {
             return 0; // valid, but not a MySensors packet
         }
-        *out = rx->f;
+        *out = parser->f;
         return 1;
     }
 }
@@ -122,20 +122,20 @@ bool ms_bin_decode(const uint8_t *encoded_message, size_t len, ms_bin_t *decoded
     if (MS_BIN_HEADER + (size_t)plen > len) {
         plen = (uint8_t)(len - MS_BIN_HEADER); // short frame: what is there
     }
-    decoded_message->m.cmd = encoded_message[4] & 0x07;
+    decoded_message->message.cmd = encoded_message[4] & 0x07;
     decoded_message->req_echo = (encoded_message[4] >> 3) & 1;
     decoded_message->is_echo = (encoded_message[4] >> 4) & 1;
     decoded_message->ptype = encoded_message[4] >> 5;
-    decoded_message->m.type = encoded_message[5];
-    decoded_message->m.child = encoded_message[6];
-    decoded_message->m.node = decoded_message->sender;
-    decoded_message->m.ack = decoded_message->is_echo;
-    if (decoded_message->m.cmd > MS_C_STREAM) {
+    decoded_message->message.type = encoded_message[5];
+    decoded_message->message.child = encoded_message[6];
+    decoded_message->message.node = decoded_message->sender;
+    decoded_message->message.ack = decoded_message->is_echo;
+    if (decoded_message->message.cmd > MS_C_STREAM) {
         return false;
     }
     const uint8_t *payload_bytes = encoded_message + MS_BIN_HEADER;
-    char *payload_text = decoded_message->m.payload;
-    size_t cap = sizeof decoded_message->m.payload;
+    char *payload_text = decoded_message->message.payload;
+    size_t cap = sizeof decoded_message->message.payload;
     uint8_t pad[8] = {0}; // numeric types shorter than declared read as 0
     memcpy(pad, payload_bytes, plen < sizeof pad ? plen : sizeof pad);
     switch (decoded_message->ptype) {

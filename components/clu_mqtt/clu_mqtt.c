@@ -69,7 +69,7 @@ static TaskHandle_t s_net_task;  // runs apply() for clu_mqtt_set_online(): stop
 
 /** @brief Broker URI / credentials: clu_mqtt_cfg_t (cfg partition settings) when set, else menuconfig. */
 /** @brief Setting from clu_mqtt_cfg_t, or the menuconfig value when NULL / "". */
-static const char *setting(const char *v, const char *kconfig) { return v && v[0] ? v : kconfig; }
+static const char *setting(const char *value, const char *kconfig) { return value && value[0] ? value : kconfig; }
 static const char *broker_uri(void) { return setting(s_cfg.broker_uri, CONFIG_CLU_MQTT_BROKER_URI); }
 static const char *username(void) { return setting(s_cfg.username, CONFIG_CLU_MQTT_USERNAME); }
 static const char *password(void) { return setting(s_cfg.password, CONFIG_CLU_MQTT_PASSWORD); }

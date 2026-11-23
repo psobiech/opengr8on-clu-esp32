@@ -37,79 +37,79 @@ CFG_OFFSET = 0x12000  # partition "cfg" in partitions.csv / partitions_4mb.csv
 CFG_SIZE = 0x3000
 
 
-def serial(v):
+def serial(text):
     try:
-        n = int(v, 10)
+        serial_number = int(text, 10)
     except ValueError:
         raise argparse.ArgumentTypeError("serial must be a decimal number")
-    if not 0 < n <= 0xFFFFFFFF:
+    if not 0 < serial_number <= 0xFFFFFFFF:
         raise argparse.ArgumentTypeError("serial must be 1..4294967295")
-    return n
+    return serial_number
 
 
-def pin(v):
-    if len(v) != 8 or not v.isascii() or not v.isprintable():
+def pin(text):
+    if len(text) != 8 or not text.isascii() or not text.isprintable():
         raise argparse.ArgumentTypeError("PIN / private key must be exactly 8 printable ASCII characters")
-    return v
+    return text
 
 
-def limited(name, lo, hi):
-    def check(v):
-        if not lo <= len(v.encode()) <= hi:
-            raise argparse.ArgumentTypeError(f"{name} must be {lo}..{hi} bytes")
-        return v
+def limited(name, min_bytes, max_bytes):
+    def check(text):
+        if not min_bytes <= len(text.encode()) <= max_bytes:
+            raise argparse.ArgumentTypeError(f"{name} must be {min_bytes}..{max_bytes} bytes")
+        return text
     return check
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
-                                 epilog="See the README section on flashing prebuilt firmware.")
-    ap.add_argument("--serial", type=serial, help="CLU serial number (decimal)")
-    ap.add_argument("--pin", type=pin, help="CLU private key / PIN (8 characters)")
-    ap.add_argument("--wifi-ssid", type=limited("WiFi SSID", 1, 32))
-    ap.add_argument("--wifi-pass", type=limited("WiFi password", 8, 63))
-    ap.add_argument("--mqtt-uri", help="mqtt://host:1883, mqtts://host:8883, ws://..., wss://... ('' = menuconfig value)")
-    ap.add_argument("--mqtt-user")
-    ap.add_argument("--mqtt-pass")
-    ap.add_argument("--ota-pass", type=limited("OTA password", 8, 64),
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
+                                     epilog="See the README section on flashing prebuilt firmware.")
+    parser.add_argument("--serial", type=serial, help="CLU serial number (decimal)")
+    parser.add_argument("--pin", type=pin, help="CLU private key / PIN (8 characters)")
+    parser.add_argument("--wifi-ssid", type=limited("WiFi SSID", 1, 32))
+    parser.add_argument("--wifi-pass", type=limited("WiFi password", 8, 63))
+    parser.add_argument("--mqtt-uri", help="mqtt://host:1883, mqtts://host:8883, ws://..., wss://... ('' = menuconfig value)")
+    parser.add_argument("--mqtt-user")
+    parser.add_argument("--mqtt-pass")
+    parser.add_argument("--ota-pass", type=limited("OTA password", 8, 64),
                     help="enables firmware updates over HTTP (POST /ota) with this password")
-    ap.add_argument("-o", "--output", default="cfg.bin", help="output image (default: cfg.bin)")
-    ap.add_argument("--csv", help="also write the generator CSV here (contains the secrets in clear text)")
-    a = ap.parse_args()
+    parser.add_argument("-o", "--output", default="cfg.bin", help="output image (default: cfg.bin)")
+    parser.add_argument("--csv", help="also write the generator CSV here (contains the secrets in clear text)")
+    args = parser.parse_args()
 
     cfg = []
-    if a.serial is not None:
-        cfg.append(["sn", "data", "u32", str(a.serial)])
-    if a.pin is not None:
-        cfg.append(["pin", "data", "string", a.pin])
+    if args.serial is not None:
+        cfg.append(["sn", "data", "u32", str(args.serial)])
+    if args.pin is not None:
+        cfg.append(["pin", "data", "string", args.pin])
     cfg += [[k, "data", "string", v] for k, v in (
-        ("wifi_ssid", a.wifi_ssid), ("wifi_pass", a.wifi_pass),
-        ("mqtt_uri", a.mqtt_uri), ("mqtt_user", a.mqtt_user), ("mqtt_pass", a.mqtt_pass),
-        ("ota_pass", a.ota_pass),
+        ("wifi_ssid", args.wifi_ssid), ("wifi_pass", args.wifi_pass),
+        ("mqtt_uri", args.mqtt_uri), ("mqtt_user", args.mqtt_user), ("mqtt_pass", args.mqtt_pass),
+        ("ota_pass", args.ota_pass),
     ) if v is not None]
     if not cfg:
-        ap.error("nothing to store: give at least one option")
+        parser.error("nothing to store: give at least one option")
 
     rows = [["key", "type", "encoding", "value"], ["cfg", "namespace", "", ""]] + cfg
 
-    out = os.path.abspath(a.output)
+    out = os.path.abspath(args.output)
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "nvs.csv")
-        with open(path, "w", newline="") as f:
-            csv.writer(f).writerows(rows)
-        if a.csv:
-            with open(a.csv, "w", newline="") as f:
-                csv.writer(f).writerows(rows)
-        r = subprocess.run([sys.executable, "-m", "esp_idf_nvs_partition_gen", "generate",
-                            "--outdir", tmp, path, out, hex(CFG_SIZE)],
-                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    if r.returncode != 0:
-        sys.stderr.write(r.stdout)
-        if "No module named" in r.stdout:
+        with open(path, "w", newline="") as csv_file:
+            csv.writer(csv_file).writerows(rows)
+        if args.csv:
+            with open(args.csv, "w", newline="") as csv_file:
+                csv.writer(csv_file).writerows(rows)
+        result = subprocess.run([sys.executable, "-m", "esp_idf_nvs_partition_gen", "generate",
+                                 "--outdir", tmp, path, out, hex(CFG_SIZE)],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if result.returncode != 0:
+        sys.stderr.write(result.stdout)
+        if "No module named" in result.stdout:
             sys.stderr.write("\ninstall the generator: pip install esp-idf-nvs-partition-gen\n")
         return 1
     print(f"{out}: {', '.join(row[0] for row in cfg)}")
-    print(f"flash:  esptool --port <PORT> write-flash {CFG_OFFSET:#x} {a.output}")
+    print(f"flash:  esptool --port <PORT> write-flash {CFG_OFFSET:#x} {args.output}")
     return 0
 
 

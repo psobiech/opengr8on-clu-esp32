@@ -34,33 +34,33 @@ esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg);
  *
  * Echo of own TX is discarded.
  *
- * @param tx         Frame to send.
- * @param txlen      Frame length.
- * @param rx         Reply buffer.
- * @param rxcap      Capacity of @p rx.
+ * @param request_frame         Frame to send.
+ * @param request_length      Frame length.
+ * @param reply_buffer         Reply buffer.
+ * @param reply_capacity      Capacity of @p reply_buffer.
  * @param timeout_ms Reply timeout.
  * @return Reply length (0 = no reply), -1 on error.
  */
-int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap, int timeout_ms);
+int tfbus_uart_transact(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity, int timeout_ms);
 
 /**
  * @brief Send without waiting for a reply (broadcasts).
- * @param tx    Frame to send.
- * @param txlen Frame length.
+ * @param request_frame    Frame to send.
+ * @param request_length Frame length.
  * @return ESP_OK or an ESP-IDF error.
  */
-esp_err_t tfbus_uart_send(const uint8_t *tx, size_t txlen);
+esp_err_t tfbus_uart_send(const uint8_t *request_frame, size_t request_length);
 
 /**
  * @brief Local bus endpoint: modules emulated by the firmware itself (e.g. on-board IO).
  *
- * Sees every frame before the wire, in the bus task. Returns the reply length written to @p rx
+ * Sees every frame before the wire, in the bus task. Returns the reply length written to @p reply_buffer
  * (> 0: frame handled locally, nothing goes on the wire), 0 if the frame is not (only) for a
  * local module (it goes on the wire as usual), or < 0 if a local module owns the frame but has
  * no reply (handled, the caller sees no reply). For frames sent with tfbus_uart_send() the
  * result is ignored and the frame always goes on the wire too.
  */
-typedef int (*tfbus_uart_local_fn_t)(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap);
+typedef int (*tfbus_uart_local_fn_t)(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity);
 
 /** @brief Max local endpoints. */
 #define TFBUS_UART_MAX_LOCAL 4

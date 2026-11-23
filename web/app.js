@@ -41,14 +41,14 @@ langSel.addEventListener("change", () => {
 
 // ---------------------------------------------------------------- image
 /** Partition table at 0x8000: [{label, type, subtype, offset, size}] */
-function partitions(buf, at = 0x8000) {
-  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+function partitions(buf, tableOffset = 0x8000) {
+  const dataView = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   const out = [];
-  for (let p = at; p + 32 <= buf.length && p < at + 0xc00; p += 32) {
+  for (let p = tableOffset; p + 32 <= buf.length && p < tableOffset + 0xc00; p += 32) {
     if (buf[p] !== 0xaa || buf[p + 1] !== 0x50) break; // 0xEBEB = MD5 entry, 0xFF = end
     const label = new TextDecoder().decode(buf.subarray(p + 12, p + 28)).replace(/\0.*$/s, "");
-    out.push({ label, type: buf[p + 2], subtype: buf[p + 3], offset: dv.getUint32(p + 4, true),
-               size: dv.getUint32(p + 8, true) });
+    out.push({ label, type: buf[p + 2], subtype: buf[p + 3], offset: dataView.getUint32(p + 4, true),
+               size: dataView.getUint32(p + 8, true) });
   }
   return out;
 }
@@ -74,16 +74,16 @@ function parseImage(bytes) {
  * (nvs = runtime state, phy_init, cfg = settings; storage lies past the image end).
  */
 function segments(bytes, parts) {
-  const skip = parts.filter((p) => p.type === 0x01 && p.subtype !== 0x00)
-    .map((p) => [p.offset, p.offset + p.size]).sort((a, b) => a[0] - b[0]);
+  const skip = parts.filter((partition) => partition.type === 0x01 && partition.subtype !== 0x00)
+    .map((partition) => [partition.offset, partition.offset + partition.size]).sort((left, right) => left[0] - right[0]);
   const out = [];
-  let at = 0;
-  for (const [s, e] of skip) {
-    if (s > at) out.push([at, Math.min(s, bytes.length)]);
-    at = Math.max(at, e);
+  let position = 0;
+  for (const [start, end] of skip) {
+    if (start > position) out.push([position, Math.min(start, bytes.length)]);
+    position = Math.max(position, end);
   }
-  if (at < bytes.length) out.push([at, bytes.length]);
-  return out.filter(([s, e]) => e > s).map(([s, e]) => ({ address: s, data: bytes.slice(s, e) }));
+  if (position < bytes.length) out.push([position, bytes.length]);
+  return out.filter(([start, end]) => end > start).map(([start, end]) => ({ address: start, data: bytes.slice(start, end) }));
 }
 
 function renderFwInfo() {
@@ -92,23 +92,23 @@ function renderFwInfo() {
   info.textContent = fwInfo ? fwInfo.render() : "";
 }
 
-$("fw").addEventListener("change", async (ev) => {
-  const f = ev.target.files[0];
+$("fw").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
   image = null;
   fwInfo = null;
-  if (f) {
+  if (file) {
     try {
-      const bytes = new Uint8Array(await f.arrayBuffer());
+      const bytes = new Uint8Array(await file.arrayBuffer());
       const { chip, parts, appOnly } = parseImage(bytes);
-      const board = /opengr8on-gate-http-esp32s3/.test(f.name) ? "gate-http-esp32s3"
-        : (f.name.match(/opengr8on-clu-([a-z0-9]+)/) || [])[1];
-      const cfg = parts.some((p) => p.label === "cfg");
-      image = { bytes, chip, parts, name: f.name, appOnly: !!appOnly };
+      const board = /opengr8on-gate-http-esp32s3/.test(file.name) ? "gate-http-esp32s3"
+        : (file.name.match(/opengr8on-clu-([a-z0-9]+)/) || [])[1];
+      const cfg = parts.some((partition) => partition.label === "cfg");
+      image = { bytes, chip, parts, name: file.name, appOnly: !!appOnly };
       fwInfo = { ok: true, render: () => `${BOARDS[board] || t("unknown_board")} · ${chip} · ` +
         `${(bytes.length / 1048576).toFixed(2)} MB` +
         (appOnly ? ` · ${t("app_only")}` : cfg ? "" : ` · ${t("fw_no_cfg")}`) };
-    } catch (e) {
-      fwInfo = { ok: false, render: () => (e.key ? t(e.key, e.vars) : e.message) };
+    } catch (error) {
+      fwInfo = { ok: false, render: () => (error.key ? t(error.key, error.vars) : error.message) };
     }
   }
   renderFwInfo();
@@ -118,21 +118,21 @@ $("fw").addEventListener("change", async (ev) => {
 // ---------------------------------------------------------------- settings
 const form = $("cfg");
 function settings() {
-  const s = {};
-  for (const k of KEYS) s[k] = form.elements[k].value.trim();
-  s.wifi_pass = form.elements.wifi_pass.value; // passwords as typed
-  s.mqtt_pass = form.elements.mqtt_pass.value;
-  s.ota_pass = form.elements.ota_pass.value;
-  s.mqtt_off = form.elements.mqtt_off.checked;
-  if (s.mqtt_off) s.mqtt_uri = "";
-  return s;
+  const values = {};
+  for (const key of KEYS) values[key] = form.elements[key].value.trim();
+  values.wifi_pass = form.elements.wifi_pass.value; // passwords as typed
+  values.mqtt_pass = form.elements.mqtt_pass.value;
+  values.ota_pass = form.elements.ota_pass.value;
+  values.mqtt_off = form.elements.mqtt_off.checked;
+  if (values.mqtt_off) values.mqtt_uri = "";
+  return values;
 }
-const hasSettings = (s) => s.mqtt_off || KEYS.some((k) => s[k] !== "");
+const hasSettings = (values) => values.mqtt_off || KEYS.some((key) => values[key] !== "");
 const writeCfg = () => $("write-cfg").checked;
 
 const otaMode = () => document.querySelector("input[name=mode]:checked")?.value === "ota";
 
-const modeRadio = (m) => document.querySelector(`input[name=mode][value=${m}]`);
+const modeRadio = (modeName) => document.querySelector(`input[name=mode][value=${modeName}]`);
 
 /**
  * Which modes are possible: an application-only image can only go over the network (OTA is the
@@ -167,17 +167,17 @@ function syncWriteCfg() {
 }
 /** Random identity in the firmware's own format (main/clu_state.c): SN 31-bit non-zero, PIN 8 x A-Z0-9. */
 function randomSn() {
-  const r = new Uint32Array(1);
-  do crypto.getRandomValues(r); while ((r[0] & 0x7fffffff) === 0);
-  return String(r[0] & 0x7fffffff);
+  const randomWord = new Uint32Array(1);
+  do crypto.getRandomValues(randomWord); while ((randomWord[0] & 0x7fffffff) === 0);
+  return String(randomWord[0] & 0x7fffffff);
 }
 function randomPin() {
   const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  const b = new Uint8Array(1);
+  const randomByte = new Uint8Array(1);
   let pin = "";
   while (pin.length < 8) {
-    crypto.getRandomValues(b);
-    if (b[0] < 252) pin += abc[b[0] % 36]; // 252 = 7 * 36: no modulo bias
+    crypto.getRandomValues(randomByte);
+    if (randomByte[0] < 252) pin += abc[randomByte[0] % 36]; // 252 = 7 * 36: no modulo bias
   }
   return pin;
 }
@@ -194,7 +194,7 @@ $("write-cfg").addEventListener("change", () => {
 
 function checkSettings() {
   const errors = validate(settings());
-  $("cfg-errors").textContent = errors.map((e) => t(e.key, e.vars)).join(" ");
+  $("cfg-errors").textContent = errors.map((error) => t(error.key, error.vars)).join(" ");
   return errors.length === 0;
 }
 
@@ -207,51 +207,51 @@ form.addEventListener("input", () => {
   form.elements.mqtt_uri.disabled = form.elements.mqtt_off.checked;
   checkSettings();
   try {
-    const s = settings();
+    const values = settings();
     const saved = JSON.parse(localStorage.getItem(STORE) || "{}");
-    localStorage.setItem(STORE, JSON.stringify({ ...saved, sn: s.sn, wifi_ssid: s.wifi_ssid, mqtt_uri: s.mqtt_uri,
-                                                 mqtt_user: s.mqtt_user }));
+    localStorage.setItem(STORE, JSON.stringify({ ...saved, sn: values.sn, wifi_ssid: values.wifi_ssid, mqtt_uri: values.mqtt_uri,
+                                                 mqtt_user: values.mqtt_user }));
   } catch { /* storage unavailable */ }
 });
 
 $("download").addEventListener("click", () => {
   if (!checkSettings()) return;
-  const s = settings();
-  if (!hasSettings(s)) {
+  const values = settings();
+  if (!hasSettings(values)) {
     $("cfg-errors").textContent = t("need_setting");
     return;
   }
-  const url = URL.createObjectURL(new Blob([buildCfgImage(s)], { type: "application/octet-stream" }));
-  const a = Object.assign(document.createElement("a"), { href: url, download: "cfg.bin" });
-  a.click();
+  const url = URL.createObjectURL(new Blob([buildCfgImage(values)], { type: "application/octet-stream" }));
+  const link = Object.assign(document.createElement("a"), { href: url, download: "cfg.bin" });
+  link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
 // ---------------------------------------------------------------- flashing
 const logEl = $("log");
-const log = (s) => {
-  logEl.textContent += s + "\n";
+const log = (text) => {
+  logEl.textContent += text + "\n";
   logEl.scrollTop = logEl.scrollHeight;
 };
 const terminal = {
   clean() {},
-  writeLine: (s) => log(s),
-  write: (s) => {
-    logEl.textContent += s;
+  writeLine: (text) => log(text),
+  write: (text) => {
+    logEl.textContent += text;
   },
 };
 
 /** Flash per the form; resolves to the (closed) port on success, null when cancelled. */
 async function flash() {
   const mode = document.querySelector("input[name=mode]:checked").value;
-  const s = settings();
+  const values = settings();
   const withCfg = writeCfg(); // else: keep the device's cfg partition
   if (withCfg && !checkSettings()) return null;
   if (mode !== "settings" && !image) throw new UiError("err_select_fw");
   if (mode !== "settings" && image.appOnly) throw new UiError("err_app_only");
   if (mode === "settings" && !withCfg) throw new UiError("err_settings_keep");
-  if (mode === "settings" && !hasSettings(s)) throw new UiError("err_fill_setting");
-  const fwHasCfg = image && image.parts.some((p) => p.label === "cfg" && p.offset === CFG_OFFSET);
+  if (mode === "settings" && !hasSettings(values)) throw new UiError("err_fill_setting");
+  const fwHasCfg = image && image.parts.some((partition) => partition.label === "cfg" && partition.offset === CFG_OFFSET);
   if (mode !== "settings" && withCfg && !fwHasCfg) throw new UiError("err_fw_no_cfg");
   if (mode === "install" && !confirm(t("confirm_install"))) return null;
 
@@ -268,12 +268,12 @@ async function flash() {
     // install keeping the settings: read them before the erase, write them back after
     let kept = null;
     if (mode === "settings" || (mode === "install" && !withCfg)) {
-      const pt = partitions(await loader.readFlash(0x8000, 0xc00), 0);
-      const devCfg = pt.some((p) => p.label === "cfg" && p.offset === CFG_OFFSET && p.size >= CFG_SIZE);
+      const partitionTable = partitions(await loader.readFlash(0x8000, 0xc00), 0);
+      const devCfg = partitionTable.some((partition) => partition.label === "cfg" && partition.offset === CFG_OFFSET && partition.size >= CFG_SIZE);
       if (mode === "settings" && !devCfg) throw new UiError("err_device_no_cfg");
       if (mode === "install") {
         const cur = devCfg && fwHasCfg ? await loader.readFlash(CFG_OFFSET, CFG_SIZE) : null;
-        kept = cur && cur.some((b) => b !== 0xff) ? cur : null;
+        kept = cur && cur.some((byte) => byte !== 0xff) ? cur : null;
         log(t(kept ? "log_cfg_kept" : "log_cfg_none"));
       }
     } else if (mode === "update" && !withCfg) {
@@ -281,13 +281,13 @@ async function flash() {
     }
 
     const files = mode === "settings" ? [] : segments(image.bytes, image.parts);
-    if (withCfg) files.push({ address: CFG_OFFSET, data: buildCfgImage(s) });
+    if (withCfg) files.push({ address: CFG_OFFSET, data: buildCfgImage(values) });
     else if (kept) files.push({ address: CFG_OFFSET, data: kept });
-    const total = files.reduce((n, f) => n + f.data.length, 0);
+    const total = files.reduce((sum, file) => sum + file.data.length, 0);
     const done = new Array(files.length).fill(0);
     progress.hidden = false;
     progress.value = 0;
-    for (const f of files) log(`0x${f.address.toString(16).padStart(5, "0")}  ${f.data.length} bytes`);
+    for (const file of files) log(`0x${file.address.toString(16).padStart(5, "0")}  ${file.data.length} bytes`);
     await loader.writeFlash({
       fileArray: files,
       flashMode: "keep",
@@ -295,9 +295,9 @@ async function flash() {
       flashSize: "keep",
       eraseAll: mode === "install",
       compress: true,
-      reportProgress: (i, written) => {
-        done[i] = written;
-        progress.value = done.reduce((a, b) => a + b, 0) / total;
+      reportProgress: (fileIndex, written) => {
+        done[fileIndex] = written;
+        progress.value = done.reduce((sum, fileWritten) => sum + fileWritten, 0) / total;
       },
     });
     progress.value = 1;
@@ -331,19 +331,19 @@ async function otaFlash() {
   if (!image) throw new UiError("err_select_fw");
   const base = cluBase(otaHost.value);
   if (!base) throw new UiError("err_clu_addr");
-  const pw = $("ota-pw").value;
-  const pwLen = new TextEncoder().encode(pw).length;
-  if (pwLen < 8 || pwLen > 64) throw new UiError("err_ota_pass");
+  const password = $("ota-pw").value;
+  const passwordLength = new TextEncoder().encode(password).length;
+  if (passwordLength < 8 || passwordLength > 64) throw new UiError("err_ota_pass");
   let app;
   try {
     app = appImage(image.bytes, image.parts);
-  } catch (e) {
-    throw new UiError(e.message);
+  } catch (error) {
+    throw new UiError(error.message);
   }
 
   logEl.textContent = "";
   $("ota-fallback").hidden = true;
-  const auth = basicAuth(pw);
+  const auth = basicAuth(password);
   const post = (body) => fetch(`${base}/ota`, {
     method: "POST",
     headers: { Authorization: auth, "Content-Type": "application/octet-stream" },
@@ -355,24 +355,24 @@ async function otaFlash() {
   progress.removeAttribute("value"); // fetch has no upload progress: indeterminate
   try {
     log(t("log_ota_check", { base }));
-    let r;
+    let response;
     try {
-      r = await post(new Uint8Array(0)); // password check: 411 = right, 401 = wrong
+      response = await post(new Uint8Array(0)); // password check: 411 = right, 401 = wrong
     } catch {
       log(t("log_ota_blocked"));
       otaFallback(base, app);
       return;
     }
-    if (r.status === 401) throw new UiError("err_ota_auth");
-    if (r.status !== 411) throw new UiError("err_ota_unexpected", { status: r.status });
+    if (response.status === 401) throw new UiError("err_ota_auth");
+    if (response.status !== 411) throw new UiError("err_ota_unexpected", { status: response.status });
     log(t("log_ota_upload", { size: (app.length / 1048576).toFixed(2) }));
     try {
-      r = await post(app);
+      response = await post(app);
     } catch {
       throw new UiError("err_ota_lost");
     }
-    const text = (await r.text().catch(() => "")).trim();
-    if (!r.ok) throw new UiError("err_ota_status", { status: r.status, text });
+    const text = (await response.text().catch(() => "")).trim();
+    if (!response.ok) throw new UiError("err_ota_status", { status: response.status, text });
     log(`\n${t("done_ota", { base })}`);
   } finally {
     progress.hidden = true;
@@ -383,7 +383,7 @@ async function otaFlash() {
 // ---------------------------------------------------------------- UART log
 const monEl = $("mon-log");
 const monitor = new Monitor(monEl, {
-  note: (k) => `--- ${t(`mon_${k}`)} ---`,
+  note: (key) => `--- ${t(`mon_${key}`)} ---`,
   onState: (on) => {
     $("mon").hidden = false;
     $("mon-stop").disabled = !on;
@@ -396,8 +396,8 @@ async function startMonitor(port, reset) {
   try {
     await monitor.start(port, { reset });
     monEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  } catch (e) {
-    log(`\n${t("error")}: ${t("mon_fail")} (${e?.message || e})`);
+  } catch (error) {
+    log(`\n${t("error")}: ${t("mon_fail")} (${error?.message || error})`);
   }
 }
 
@@ -460,8 +460,8 @@ btn.addEventListener("click", async () => {
       monitor.clear();
       await startMonitor(port, true);
     }
-  } catch (e) {
-    if (e?.name !== "NotFoundError") log(`\n${t("error")}: ${e?.message || e}`); // NotFoundError = port chooser closed
+  } catch (error) {
+    if (error?.name !== "NotFoundError") log(`\n${t("error")}: ${error?.message || error}`); // NotFoundError = port chooser closed
   } finally {
     syncMode();
   }

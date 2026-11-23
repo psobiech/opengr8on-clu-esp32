@@ -283,33 +283,33 @@ static void layout(uint8_t node, uint8_t kind, const entry_t *add)
     }
     qsort(entries, (size_t)entry_count, sizeof *entries, entry_cmp);
     while (module_count * per < entry_count) {
-        int i = take_module(node);
-        if (i < 0) {
+        int free_module_index = take_module(node);
+        if (free_module_index < 0) {
             ESP_LOGW(TAG, "node %u/%u: no free %s channel, %d module(s) = the limit (menuconfig "
                           "CLU_MYSENSORS_MODULES_MAX)", node, add ? add->child : 255, kname, s_max);
             return;
         }
-        mods[module_count++] = i;
+        mods[module_count++] = free_module_index;
     }
     bool moved = false;
     for (int i = 0; i < module_count * per; i++) {
-        int module_index = mods[i / per], c = i % per;
-        slot_t *slot_entry = &s_slot[module_index][first + c];
+        int module_index = mods[i / per], channel_offset = i % per;
+        slot_t *slot_entry = &s_slot[module_index][first + channel_offset];
         uint8_t *bits = kind == MS_SLOT_DIN ? &s_mod[module_index].in : &s_mod[module_index].out;
         if (i >= entry_count) { // past the node's last sensor of this kind
             moved |= slot_entry->used;
             *slot_entry = (slot_t){0};
-            *bits &= (uint8_t)~(1u << c);
+            *bits &= (uint8_t)~(1u << channel_offset);
             continue;
         }
         if (add && entries[i].child == add->child && entries[i].vtype == add->vtype) {
             ESP_LOGI(TAG, "node %u/%u -> module %d (SN %lu) %s %d", node, add->child, module_index + 1,
-                     (unsigned long)s_sn[module_index], kname, c + 1);
+                     (unsigned long)s_sn[module_index], kname, channel_offset + 1);
         } else if (!slot_entry->used || slot_entry->child != entries[i].child || slot_entry->vtype != entries[i].vtype) {
             moved = true;
         }
         *slot_entry = (slot_t){.used = 1, .node = node, .child = entries[i].child, .vtype = entries[i].vtype};
-        *bits = entries[i].bit ? (uint8_t)(*bits | 1u << c) : (uint8_t)(*bits & ~(1u << c));
+        *bits = entries[i].bit ? (uint8_t)(*bits | 1u << channel_offset) : (uint8_t)(*bits & ~(1u << channel_offset));
     }
     if (moved) {
         ESP_LOGW(TAG, "node %u: %s channels re-sorted by child id", node, kname);
@@ -404,9 +404,9 @@ void ms_vmod_value(uint8_t node, uint8_t child, uint8_t vtype, const char *paylo
     xSemaphoreGive(s_mx);
 }
 
-int ms_vmod_frame(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap)
+int ms_vmod_frame(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity)
 {
-    return tfbus_vmod_frame(s_bus, __atomic_load_n(&s_n, __ATOMIC_ACQUIRE), tx, txlen, rx, rxcap);
+    return tfbus_vmod_frame(s_bus, __atomic_load_n(&s_n, __ATOMIC_ACQUIRE), request_frame, request_length, reply_buffer, reply_capacity);
 }
 
 int ms_vmod_list(ms_vmod_slot_t *out, int max)

@@ -51,11 +51,11 @@ struct tfbus_vmod {
 
 /**
  * @brief Handle one CLU -> module frame for the modules @p modules[0..module_count) (::tfbus_uart_local_fn_t shape).
- * @return Reply length in @p rx; 0 if not for these modules (or the reply does not fit); < 0 if
+ * @return Reply length in @p reply_buffer; 0 if not for these modules (or the reply does not fit); < 0 if
  *         handled without a reply.
  */
-int tfbus_vmod_frame(tfbus_vmod_t *modules, int module_count, const uint8_t *tx, size_t txlen, uint8_t *rx,
-                     size_t rxcap);
+int tfbus_vmod_frame(tfbus_vmod_t *modules, int module_count, const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer,
+                     size_t reply_capacity);
 
 /** @name IO_MODULE_DIN_8 (hwType 0x1e: 8 DIN + 8 DOUT) wire format
  * @{ */

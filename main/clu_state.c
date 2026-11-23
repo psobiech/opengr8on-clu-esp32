@@ -17,7 +17,7 @@
 #include "tfbus_master.h"
 
 static const char *TAG = "clu_state";
-static const char *NS = "clu";
+static const char *NVS_NAMESPACE = "clu";
 #define CFG_PART "cfg" // provisioning partition and its namespace (tools/mknvs.py)
 
 clu_state_t g_clu;
@@ -96,7 +96,7 @@ void clu_state_factory_keys(void)
 void clu_state_save_keys(void)
 {
     nvs_handle_t nvs_handle;
-    if (nvs_open(NS, NVS_READWRITE, &nvs_handle) != ESP_OK) {
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle) != ESP_OK) {
         return;
     }
     nvs_set_blob(nvs_handle, "key", g_clu.project.key, 16);
@@ -113,7 +113,7 @@ void clu_state_load(void)
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     nvs_handle_t nvs_handle;
-    ESP_ERROR_CHECK(nvs_open(NS, NVS_READWRITE, &nvs_handle));
+    ESP_ERROR_CHECK(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle));
 
     // Serial / PIN to adopt: menuconfig, else the provisioning partition (prebuilt firmware).
     uint32_t want_sn = 0;

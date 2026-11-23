@@ -76,7 +76,7 @@ void ms_vmod_present(uint8_t node, uint8_t child, uint8_t stype, const char *des
 void ms_vmod_value(uint8_t node, uint8_t child, uint8_t vtype, const char *payload);
 
 /** @brief Bus endpoint (::tfbus_uart_local_fn_t). */
-int ms_vmod_frame(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap);
+int ms_vmod_frame(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity);
 
 /**
  * @brief Bound slots.

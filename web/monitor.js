@@ -6,20 +6,20 @@ const MAX_LINES = 5000;
 const RECOVERABLE = ["BufferOverrunError", "FramingError", "BreakError", "ParityError"];
 const SGR_CLASS = { 31: "e", 33: "w", 32: "i", 36: "d", 35: "v" }; // ESP-IDF LOG_COLOR_*
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const sameDevice = (a, b) => {
-  const x = a.getInfo(), y = b.getInfo();
-  return x.usbVendorId !== undefined && x.usbVendorId === y.usbVendorId && x.usbProductId === y.usbProductId;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sameDevice = (firstPort, secondPort) => {
+  const firstInfo = firstPort.getInfo(), secondInfo = secondPort.getInfo();
+  return firstInfo.usbVendorId !== undefined && firstInfo.usbVendorId === secondInfo.usbVendorId && firstInfo.usbProductId === secondInfo.usbProductId;
 };
 
 export class Monitor {
   /**
-   * @param el      <pre> the log goes to
+   * @param element <pre> the log goes to
    * @param onState called with true / false when the monitor starts / stops
    * @param note    formats a status line (port lost, reconnected) for the log
    */
-  constructor(el, { onState = () => {}, note = (s) => s } = {}) {
-    this.el = el;
+  constructor(element, { onState = () => {}, note = (text) => text } = {}) {
+    this.element = element;
     this.onState = onState;
     this.note = note;
     this.port = null;
@@ -68,12 +68,12 @@ export class Monitor {
   }
 
   clear() {
-    this.el.textContent = "";
+    this.element.textContent = "";
     this.line = null;
   }
 
   text() {
-    return this.el.textContent;
+    return this.element.textContent;
   }
 
   async #open() {
@@ -97,8 +97,8 @@ export class Monitor {
             if (done) break;
             if (value?.length) this.#feed(this.decoder.decode(value, { stream: true }));
           }
-        } catch (e) {
-          if (!RECOVERABLE.includes(e?.name) && !this.stopping) this.#status(this.note("lost"));
+        } catch (error) {
+          if (!RECOVERABLE.includes(error?.name) && !this.stopping) this.#status(this.note("lost"));
         } finally {
           this.reader.releaseLock();
           this.reader = null;
@@ -128,20 +128,20 @@ export class Monitor {
     return false;
   }
 
-  #status(s) {
+  #status(text) {
     this.line = null;
-    this.#append(`\n${s}\n`, "s");
+    this.#append(`\n${text}\n`, "s");
     this.line = null;
   }
 
   /** Append decoded text: SGR colours to classes, other escapes and CR dropped. */
-  #feed(s) {
-    const parts = s.split(/\x1b\[([0-9;]*)m/);
+  #feed(text) {
+    const parts = text.split(/\x1b\[([0-9;]*)m/);
     for (let i = 0; i < parts.length; i++) {
       if (i % 2) {
         const codes = parts[i].split(";").map(Number);
-        const c = codes.find((n) => SGR_CLASS[n]);
-        this.cls = c ? SGR_CLASS[c] : "";
+        const colorCode = codes.find((code) => SGR_CLASS[code]);
+        this.cls = colorCode ? SGR_CLASS[colorCode] : "";
         this.line = null;
       } else if (parts[i]) {
         this.#append(parts[i].replace(/\r|\x1b\[[0-9;?]*[A-Za-z]/g, ""), this.cls);
@@ -150,23 +150,23 @@ export class Monitor {
   }
 
   #append(text, cls) {
-    const el = this.el;
-    const follow = el.scrollTop + el.clientHeight >= el.scrollHeight - 24;
+    const element = this.element;
+    const follow = element.scrollTop + element.clientHeight >= element.scrollHeight - 24;
     const chunks = text.split("\n");
     chunks.forEach((chunk, i) => {
       if (i > 0) {
         this.line = null;
-        el.append("\n");
+        element.append("\n");
       }
       if (!chunk) return;
       if (!this.line || this.line.className !== cls) {
         this.line = document.createElement("span");
         this.line.className = cls;
-        el.append(this.line);
+        element.append(this.line);
       }
       this.line.textContent += chunk;
     });
-    while (el.childNodes.length > MAX_LINES * 2) el.firstChild.remove();
-    if (follow) el.scrollTop = el.scrollHeight;
+    while (element.childNodes.length > MAX_LINES * 2) element.firstChild.remove();
+    if (follow) element.scrollTop = element.scrollHeight;
   }
 }

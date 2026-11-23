@@ -3,7 +3,7 @@
 Zachowanie sterowników modułów oświetleniowych. Ramki i działanie metod odpowiadają przechwytom
 prawdziwej CLU sterującej tymi modułami (testy hosta `test_drivers` porównują je bajt po bajcie).
 Zdarzenia (OnValueChange, OnSwitchOn, …) nie są widoczne na magistrali, więc ich semantyka jest
-niezweryfikowana. Stan modułów: [README](README.md#moduły-tf-bus).
+niezweryfikowana. Stan modułów: [README](../README.md#moduły-tf-bus).
 
 - [Wspólne zasady](#wspólne-zasady)
 - [DIMMER_MOSFET_DIN](#dimmer_mosfet_din)

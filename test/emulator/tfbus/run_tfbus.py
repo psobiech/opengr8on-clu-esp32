@@ -148,7 +148,7 @@ def validate_set_value_commands(commands: list[tuple[int, int, bytes]], level: i
 
 
 def is_channel0_ramp_time(record: tuple[int, int, bytes]) -> bool:
-    """SET_RAMP_TIME per TFBUS.md: type 06, meta 0, data [0, ms LE u16, 0, 0]."""
+    """SET_RAMP_TIME per docs/TFBUS.md: type 06, meta 0, data [0, ms LE u16, 0, 0]."""
     record_type, meta, data = record
     return record_type == RECORD_SET_RAMP_TIME and meta == 0 and len(data) == 5 and data[0] == 0 and data[3:] == b"\x00\x00"
 

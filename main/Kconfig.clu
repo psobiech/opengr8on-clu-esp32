@@ -1,3 +1,118 @@
+choice CLU_BOARD
+    prompt "Board"
+    default CLU_BOARD_GRENTON_GATE if IDF_TARGET_ESP32
+    default CLU_BOARD_WAVESHARE_S3_RS485_CAN
+    help
+        Fixes the board's hardware: network interface, RS485 / I2C / Ethernet pins, RTC chip,
+        on-board IO and setup button. Their options are hidden for a named board and always
+        follow it, also when the board is changed later. "Custom" shows them all; it starts
+        from the values of the previously selected board. Features (WiFi, bus protocol, device
+        type, services) stay configurable on every board. Flash size, PSRAM mode and the
+        console UART are ESP-IDF options: the target and the preset's sdkconfig.defaults.* set
+        them.
+
+    config CLU_BOARD_WAVESHARE_S3_RS485_CAN
+        bool "Waveshare ESP32-S3-RS485-CAN"
+        depends on IDF_TARGET_ESP32S3
+        select CLU_RTC
+        set CLU_RTC_SDA_GPIO=39
+        set CLU_RTC_SCL_GPIO=38
+        set CLU_RS485_UART=1 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_TX_GPIO=17 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_RX_GPIO=18 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_DE_GPIO=21 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_SETUP_BUTTON_GPIO=0 if CLU_SETUP_WINDOW_S != 0
+        help
+            WiFi, RS485 with DE (TX 17, RX 18, DE 21), PCF85063 RTC (SDA 39, SCL 38), setup button
+            GPIO0 (BOOT). See docs/devices/waveshare-esp32-s3-rs485-can.md.
+
+    config CLU_BOARD_GRENTON_GATE
+        bool "Grenton GATE (ESP32-WROVER-B, LAN8720A)"
+        depends on IDF_TARGET_ESP32
+        select CLU_ETH
+        set CLU_ETH_PHY_ADDR=0
+        set CLU_ETH_MDC_GPIO=23
+        set CLU_ETH_MDIO_GPIO=18
+        set CLU_ETH_PHY_RST_GPIO=2
+        set CLU_RS485_UART=1 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_TX_GPIO=4 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_RX_GPIO=3 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_DE_GPIO=5 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_SETUP_BUTTON_GPIO=34 if CLU_SETUP_WINDOW_S != 0
+        help
+            Ethernet: internal EMAC + LAN8720A (PHY address 0, MDC 23, MDIO 18, reset 2, external
+            50 MHz clock into GPIO0). RS485 on UART1 (TX 4, RX 3, DE 5), no RTC, setup button
+            GPIO34 (the reset button). See docs/devices/grenton-gate.md.
+
+    config CLU_BOARD_KINCONY_F8
+        bool "KinCony F8 (W5500)"
+        depends on IDF_TARGET_ESP32S3
+        select CLU_ETH
+        set CLU_ETH_SPI_SCLK_GPIO=42
+        set CLU_ETH_SPI_MOSI_GPIO=43
+        set CLU_ETH_SPI_MISO_GPIO=44
+        set CLU_ETH_SPI_CS_GPIO=41
+        set CLU_ETH_SPI_INT_GPIO=2
+        set CLU_ETH_SPI_RST_GPIO=1
+        set CLU_RS485_UART=1 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_TX_GPIO=16 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_RX_GPIO=17 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_DE_GPIO=-1 if CLU_TFBUS || CLU_MYSENSORS
+        select CLU_RTC
+        set CLU_RTC_SDA_GPIO=8
+        set CLU_RTC_SCL_GPIO=18
+        select CLU_LOCAL_IO if CLU_TFBUS_MASTER
+        select CLU_LOCAL_IO_OUT_ACTIVE_LOW if CLU_LOCAL_IO
+        select CLU_LOCAL_IO_IN_ACTIVE_LOW if CLU_LOCAL_IO
+        set CLU_LOCAL_IO_SDA_GPIO=8 if CLU_LOCAL_IO
+        set CLU_LOCAL_IO_SCL_GPIO=18 if CLU_LOCAL_IO
+        set CLU_LOCAL_IO_ADDR=0x24 if CLU_LOCAL_IO
+        set CLU_SETUP_BUTTON_GPIO=0 if CLU_SETUP_WINDOW_S != 0
+        help
+            W5500 (SCLK 42, MOSI 43, MISO 44, CS 41, INT 2, RST 1), RS485 with automatic
+            direction (TX 16, RX 17), DS3231 RTC and PCF8575 at 0x24 (relays P10-P17, inputs
+            P00-P07) on I2C SDA 8 / SCL 18, setup button GPIO0. W5500 uses GPIO43/44, the UART0
+            console pins: the "f8" preset moves the console to USB-Serial-JTAG.
+            See docs/devices/kincony-f8.md.
+
+    config CLU_BOARD_KINCONY_A8V3
+        bool "KinCony KC868-A8v3 (W5500)"
+        depends on IDF_TARGET_ESP32S3
+        select CLU_ETH
+        set CLU_ETH_SPI_SCLK_GPIO=1
+        set CLU_ETH_SPI_MOSI_GPIO=2
+        set CLU_ETH_SPI_MISO_GPIO=41
+        set CLU_ETH_SPI_CS_GPIO=42
+        set CLU_ETH_SPI_INT_GPIO=43
+        set CLU_ETH_SPI_RST_GPIO=44
+        set CLU_RS485_UART=1 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_TX_GPIO=39 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_RX_GPIO=38 if CLU_TFBUS || CLU_MYSENSORS
+        set CLU_RS485_DE_GPIO=-1 if CLU_TFBUS || CLU_MYSENSORS
+        select CLU_RTC
+        set CLU_RTC_SDA_GPIO=8
+        set CLU_RTC_SCL_GPIO=18
+        select CLU_LOCAL_IO if CLU_TFBUS_MASTER
+        select CLU_LOCAL_IO_OUT_ACTIVE_LOW if CLU_LOCAL_IO
+        select CLU_LOCAL_IO_IN_ACTIVE_LOW if CLU_LOCAL_IO
+        set CLU_LOCAL_IO_SDA_GPIO=8 if CLU_LOCAL_IO
+        set CLU_LOCAL_IO_SCL_GPIO=18 if CLU_LOCAL_IO
+        set CLU_LOCAL_IO_ADDR=0x22 if CLU_LOCAL_IO
+        set CLU_SETUP_BUTTON_GPIO=0 if CLU_SETUP_WINDOW_S != 0
+        help
+            W5500 (SCLK 1, MOSI 2, MISO 41, CS 42, INT 43, RST 44), RS485 with automatic
+            direction (TX 39, RX 38), DS3231 RTC and PCF8575 at 0x22 (relays P00-P07, inputs
+            P10-P17) on I2C SDA 8 / SCL 18, setup button GPIO0. W5500 uses GPIO43/44, the UART0
+            console pins: the "a8v3" preset moves the console to USB-Serial-JTAG.
+            See docs/devices/kincony-kc868-a8v3.md.
+
+    config CLU_BOARD_CUSTOM
+        bool "Custom"
+        help
+            Any other board: every pin, interface and chip option below is editable.
+            See docs/devices/other-esp32-s3.md.
+endchoice
+
 config CLU_WIFI_REQUIRED
     bool
     default y if !CLU_ETH
@@ -55,7 +170,7 @@ config CLU_NET_DIAG_INTERVAL
         link stalls: correlate with MQTT drops and the broker log.
 
 menuconfig CLU_ETH
-    bool "Ethernet"
+    bool "Ethernet" if CLU_BOARD_CUSTOM
     default y if IDF_TARGET_ESP32
     help
         Wired network: the ESP32's internal EMAC with an RMII PHY (Grenton GATE: LAN8720A), or
@@ -73,41 +188,43 @@ if CLU_ETH
         config CLU_ETH_IF_EMAC
             bool "Internal EMAC + RMII PHY (Grenton GATE)"
             depends on IDF_TARGET_ESP32
+            depends on CLU_BOARD_CUSTOM || CLU_BOARD_GRENTON_GATE
             help
                 Only the classic ESP32 has the EMAC.
         config CLU_ETH_IF_W5500
             bool "WIZnet W5500 on SPI (KinCony F8, KC868-A8v3)"
+            depends on !CLU_BOARD_GRENTON_GATE
     endchoice
 
     if CLU_ETH_IF_W5500
 
         config CLU_ETH_SPI_SCLK_GPIO
-            int "W5500 SPI SCLK GPIO"
+            int "W5500 SPI SCLK GPIO" if CLU_BOARD_CUSTOM
             range 0 48
             default 42
 
         config CLU_ETH_SPI_MOSI_GPIO
-            int "W5500 SPI MOSI GPIO"
+            int "W5500 SPI MOSI GPIO" if CLU_BOARD_CUSTOM
             range 0 48
             default 43
 
         config CLU_ETH_SPI_MISO_GPIO
-            int "W5500 SPI MISO GPIO"
+            int "W5500 SPI MISO GPIO" if CLU_BOARD_CUSTOM
             range 0 48
             default 44
 
         config CLU_ETH_SPI_CS_GPIO
-            int "W5500 SPI CS GPIO"
+            int "W5500 SPI CS GPIO" if CLU_BOARD_CUSTOM
             range 0 48
             default 41
 
         config CLU_ETH_SPI_INT_GPIO
-            int "W5500 interrupt GPIO (-1 = poll every 10 ms)"
+            int "W5500 interrupt GPIO (-1 = poll every 10 ms)" if CLU_BOARD_CUSTOM
             range -1 48
             default 2
 
         config CLU_ETH_SPI_RST_GPIO
-            int "W5500 reset GPIO (-1 = none)"
+            int "W5500 reset GPIO (-1 = none)" if CLU_BOARD_CUSTOM
             range -1 48
             default 1
 
@@ -116,10 +233,10 @@ if CLU_ETH
             range 5 80
             default 20
             help
-                Defaults: KinCony F8 (SCLK 42, MOSI 43, MISO 44, CS 41, INT 2, RST 1).
-                KC868-A8v3: SCLK 1, MOSI 2, MISO 41, CS 42, INT 43, RST 44. Both use GPIO43/44,
-                the ESP32-S3 UART0 console pins: move the console to USB-Serial-JTAG (the board
-                profiles sdkconfig.defaults.f8 / .a8v3 do). Raise the clock only with short traces.
+                Raise the clock only with short traces. Custom board: the defaults of the W5500
+                pins are the KinCony F8 ones; pins on GPIO43/44 (the ESP32-S3 UART0 console)
+                need the console moved to USB-Serial-JTAG (Component config > ESP System
+                Settings > Channel for console output).
 
     endif
 
@@ -137,27 +254,28 @@ if CLU_ETH
                 bool "LAN8720A / LAN87xx (Grenton GATE)"
             config CLU_ETH_PHY_GENERIC
                 bool "Generic IEEE 802.3 (JL1101 and other PHYs)"
+                depends on CLU_BOARD_CUSTOM
         endchoice
 
         config CLU_ETH_PHY_ADDR
-            int "PHY address (-1 = auto-detect)"
+            int "PHY address (-1 = auto-detect)" if CLU_BOARD_CUSTOM
             range -1 31
             default 0
             help
                 Strap address of the PHY on the MDIO bus. Grenton GATE: 0.
 
         config CLU_ETH_MDC_GPIO
-            int "SMI MDC GPIO"
+            int "SMI MDC GPIO" if CLU_BOARD_CUSTOM
             range 0 33
             default 23
 
         config CLU_ETH_MDIO_GPIO
-            int "SMI MDIO GPIO"
+            int "SMI MDIO GPIO" if CLU_BOARD_CUSTOM
             range 0 33
             default 18
 
         config CLU_ETH_PHY_RST_GPIO
-            int "PHY reset GPIO (-1 = none)"
+            int "PHY reset GPIO (-1 = none)" if CLU_BOARD_CUSTOM
             range -1 33
             default 2
             help
@@ -175,10 +293,13 @@ if CLU_ETH
                 bool "External oscillator into GPIO0 (Grenton GATE, WT32-ETH01)"
             config CLU_ETH_CLK_OUT_GPIO0
                 bool "ESP32 outputs the clock on GPIO0"
+                depends on CLU_BOARD_CUSTOM
             config CLU_ETH_CLK_OUT_GPIO16
                 bool "ESP32 outputs the clock on GPIO16 (not with WROVER PSRAM)"
+                depends on CLU_BOARD_CUSTOM
             config CLU_ETH_CLK_OUT_GPIO17
                 bool "ESP32 outputs the clock on GPIO17 (not with WROVER PSRAM)"
+                depends on CLU_BOARD_CUSTOM
         endchoice
 
     endif
@@ -218,7 +339,7 @@ choice CLU_DEVICE
             CLU_GATE_HTTP: hwType 0x12, hwVer 2, fwType 3, fwApiVer 0x578, firmware 1.4.2-2346.
             No TF-Bus (the RS485 bus is off). Objects: HttpRequest (121), HttpListener (120),
             Timer. OM declares it as GATE:new(5000, ip, netmask, gateway, "", "").
-            See GATE_HTTP.md.
+            See docs/GATE_HTTP.md.
 
     config CLU_DEVICE_ZWAVE_2
         bool "CLU_ZWAVE_2"
@@ -252,7 +373,7 @@ menu "RS485 bus (TF-Bus / MySensors)"
                 Nodes built with MY_RS485 on the bus; the CLU is node 0, the gateway, and the
                 controller: answers find parent / ping / registration / echo, hands out node
                 ids (kept in NVS), answers I_CONFIG / I_TIME and value requests, and passes every
-                message to the scripts (USER.LUA global MySensors, see MYSENSORS.md). No other
+                message to the scripts (USER.LUA global MySensors, see docs/MYSENSORS.md). No other
                 gateway on the bus. OM sees no real TF-Bus modules.
 
         config CLU_BUS_NONE
@@ -272,24 +393,24 @@ menu "RS485 bus (TF-Bus / MySensors)"
     if CLU_TFBUS || CLU_MYSENSORS
 
         config CLU_RS485_UART
-            int "UART number"
+            int "UART number" if CLU_BOARD_CUSTOM
             range 1 2
             default 1
             help
                 Grenton GATE (ESP32): UART1 on TX=4, RX=3, DE=5.
 
         config CLU_RS485_TX_GPIO
-            int "TX (DI) GPIO"
+            int "TX (DI) GPIO" if CLU_BOARD_CUSTOM
             default 4 if IDF_TARGET_ESP32
             default 17
 
         config CLU_RS485_RX_GPIO
-            int "RX (RO) GPIO"
+            int "RX (RO) GPIO" if CLU_BOARD_CUSTOM
             default 3 if IDF_TARGET_ESP32
             default 18
 
         config CLU_RS485_DE_GPIO
-            int "DE/RE GPIO (-1 = auto-direction transceiver)"
+            int "DE/RE GPIO (-1 = auto-direction transceiver)" if CLU_BOARD_CUSTOM
             default 5 if IDF_TARGET_ESP32
             default 21
             help
@@ -347,7 +468,7 @@ menu "RS485 bus (TF-Bus / MySensors)"
     if CLU_TFBUS_MASTER
 
         menuconfig CLU_LOCAL_IO
-            bool "On-board IO as a TF-Bus module (PCF8575)"
+            bool "On-board IO as a TF-Bus module (PCF8575)" if CLU_BOARD_CUSTOM
             default n
             help
                 8 relay outputs and 8 digital inputs on one PCF8575 I2C expander on the controller
@@ -359,19 +480,19 @@ menu "RS485 bus (TF-Bus / MySensors)"
         if CLU_LOCAL_IO
 
             config CLU_LOCAL_IO_SDA_GPIO
-                int "I2C SDA GPIO"
+                int "I2C SDA GPIO" if CLU_BOARD_CUSTOM
                 range 0 48
                 default 8
 
             config CLU_LOCAL_IO_SCL_GPIO
-                int "I2C SCL GPIO"
+                int "I2C SCL GPIO" if CLU_BOARD_CUSTOM
                 range 0 48
                 default 18
                 help
                     Shared with the RTC (CLU_RTC) when it uses the same pins (KinCony F8 / A8v3).
 
             config CLU_LOCAL_IO_ADDR
-                hex "PCF8575 I2C address"
+                hex "PCF8575 I2C address" if CLU_BOARD_CUSTOM
                 range 0x20 0x27
                 default 0x24
                 help
@@ -379,23 +500,26 @@ menu "RS485 bus (TF-Bus / MySensors)"
 
             choice CLU_LOCAL_IO_OUT_PINS
                 prompt "Relay outputs on"
+                default CLU_LOCAL_IO_OUT_P0 if CLU_BOARD_KINCONY_A8V3
                 default CLU_LOCAL_IO_OUT_P1
 
                 config CLU_LOCAL_IO_OUT_P1
                     bool "P10-P17, inputs on P00-P07 (KinCony F8)"
+                    depends on !CLU_BOARD_KINCONY_A8V3
                 config CLU_LOCAL_IO_OUT_P0
                     bool "P00-P07, inputs on P10-P17 (KC868-A8v3)"
+                    depends on !CLU_BOARD_KINCONY_F8
             endchoice
 
             config CLU_LOCAL_IO_OUT_ACTIVE_LOW
-                bool "Outputs are active low"
+                bool "Outputs are active low" if CLU_BOARD_CUSTOM
                 default y
                 help
                     A relay is on when its PCF8575 pin is driven low. The expander powers up with all
                     pins high, so the relays stay off until the CLU switches them.
 
             config CLU_LOCAL_IO_IN_ACTIVE_LOW
-                bool "Inputs are active low"
+                bool "Inputs are active low" if CLU_BOARD_CUSTOM
                 default y
                 help
                     An input reads low when it is active (optocoupler conducting).
@@ -417,7 +541,7 @@ endmenu
 
 
 menuconfig CLU_RTC
-    bool "Battery-backed RTC (I2C)"
+    bool "Battery-backed RTC (I2C)" if CLU_BOARD_CUSTOM
     default n if IDF_TARGET_ESP32
     default y
     help
@@ -429,16 +553,19 @@ if CLU_RTC
 
     choice CLU_RTC_CHIP
         prompt "RTC chip"
+        default CLU_RTC_DS3231 if CLU_BOARD_KINCONY_F8 || CLU_BOARD_KINCONY_A8V3
         default CLU_RTC_PCF85063
 
         config CLU_RTC_PCF85063
             bool "PCF85063 (Waveshare ESP32-S3-RS485-CAN)"
+            depends on !CLU_BOARD_KINCONY_F8 && !CLU_BOARD_KINCONY_A8V3
         config CLU_RTC_DS3231
             bool "DS3231 (KinCony F8, KC868-A8v3)"
+            depends on !CLU_BOARD_WAVESHARE_S3_RS485_CAN
     endchoice
 
     config CLU_RTC_SDA_GPIO
-        int "RTC I2C SDA GPIO"
+        int "RTC I2C SDA GPIO" if CLU_BOARD_CUSTOM
         range 0 48
         default 39
         help
@@ -446,7 +573,7 @@ if CLU_RTC
             SCL=18. The bus can be shared with the on-board IO expander (same pins).
 
     config CLU_RTC_SCL_GPIO
-        int "RTC I2C SCL GPIO"
+        int "RTC I2C SCL GPIO" if CLU_BOARD_CUSTOM
         range 0 48
         default 38
 
@@ -481,7 +608,7 @@ config CLU_SETUP_WINDOW_S
         0 (default) disables the restriction; set e.g. 60 to enable it.
 
 config CLU_SETUP_BUTTON_GPIO
-    int "Setup button GPIO (-1 = none)"
+    int "Setup button GPIO (-1 = none)" if CLU_BOARD_CUSTOM
     range -1 48
     default 34 if IDF_TARGET_ESP32
     default 0
@@ -608,7 +735,7 @@ menu "GATE HTTP objects (HttpRequest / HttpListener)"
             requests on CLU_HTTP_PORT, routed by path to the listener whose Path matches.
             Object Manager offers them only on a GATE (CLU_DEVICE_GATE_HTTP); on a CLU they
             work when declared by hand. No authentication: anyone on the network can call the
-            listeners. See GATE_HTTP.md.
+            listeners. See docs/GATE_HTTP.md.
 
     config CLU_HTTP_PORT
         int "HttpListener TCP port"

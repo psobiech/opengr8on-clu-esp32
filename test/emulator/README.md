@@ -25,7 +25,7 @@ operations such as `http_start()` remain single-shot.
 The TF-Bus check boots one guest of a TF-Bus build (`waveshare` defaults: RS485 on UART1) with
 `esp-emu --uart1-tcp`, which serves UART1 as a TCP socket. `tfbus/fake_module.py` connects to it
 and answers the firmware's real `tfbus_uart` traffic as one DIMMER_MOSFET_DIN (hwType 0x1a, frames
-as in [TFBUS.md](../../TFBUS.md)). The check covers startup RESET / SEEK / DISCOVER / ADDR_ASSIGN
+as in [TFBUS.md](../../docs/TFBUS.md)). The check covers startup RESET / SEEK / DISCOVER / ADDR_ASSIGN
 and status polling. It then uploads an OM.LUA-style script declaring the module and `DIM0001`, and
 checks that Value 0.5 reaches the wire as SET_RAMP_TIME followed by SET_VALUE `[0, f4 01]`. A level
 the module reports itself (250) must become the Lua Value. A power cycle must log `OFFLINE`, then

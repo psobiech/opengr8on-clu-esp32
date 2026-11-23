@@ -61,7 +61,7 @@ przez `add_event(0, OnInit)`, jak na CLU. Cechy według interfejsu GATE:
 | 13 / 15 | LocalTime / UnixTime | znacznik czasu |
 | 14 | TimeZone | strefa czasowa (to samo wyliczenie co na CLU, 0–22), zapisywana w NVS |
 | 17 | FirmwareVersion | `1.4.2-2346` |
-| 18 / 19 | UseCloud / CloudConnection | połączenie MQTT, jak na CLU ([MQTT](README.md#mqtt--home-assistant)) |
+| 18 / 19 | UseCloud / CloudConnection | połączenie MQTT, jak na CLU ([MQTT](../README.md#mqtt--home-assistant)) |
 | 20 | NTPTimeout | zapamiętywana |
 | 21 | UseNTP | 0 zatrzymuje SNTP (niezapisywane: OnInit ustawia ją przy każdym starcie); `UseCloud` = 1 włącza ją też (jak w instrukcji) |
 | 23 | TelnetLogLevel | zapamiętywana (log telnet zawsze pełny) |

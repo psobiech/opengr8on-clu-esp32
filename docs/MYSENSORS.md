@@ -26,7 +26,7 @@ i wbudowane IO (`CLU_LOCAL_IO`).
 | `CLU_MYSENSORS_METRIC` | y | odpowiedź na `I_CONFIG`: `M` (metryczne) albo `I` |
 | `CLU_MYSENSORS_TRACE` | n | każda wiadomość (w obie strony, jako linia tekstu) w logu na poziomie INFO; w skrypcie `MySensors.trace(true)` |
 | `CLU_MYSENSORS_MODULES_MAX` | 4 | najwięcej emulowanych modułów IO_MODULE_DIN_8 (0–8, 0 = brak modułów w OM); tworzone w miarę prezentacji czujników |
-| `CLU_LOCAL_IO` | n | wbudowane IO płytki działa także z MySensors, zob. [DEVICES.md](DEVICES.md#kincony-f8-i-kc868-a8v3) |
+| `CLU_LOCAL_IO` | n | wbudowane IO płytki działa także z MySensors, zob. [KinCony F8](devices/kincony-f8.md), [KC868-A8v3](devices/kincony-kc868-a8v3.md) |
 
 ## Moduły w Object Manager
 
@@ -123,7 +123,7 @@ MySensors.unmap(12)                             -- free node 12's channels
 ```
 
 Wartości są liczbami, a dla typów tekstowych (`V_TEXT`, `V_RGB`, `V_ID`, …) tekstem. Pełny opis:
-[mysensors.lua](components/clu_mysensors/mysensors.lua).
+[mysensors.lua](../components/clu_mysensors/mysensors.lua).
 
 ## Kod i testy
 

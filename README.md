@@ -46,22 +46,22 @@ aplikacji `opengr8on-clu-<płytka>-<wersja>-ota.bin` ([aktualizacja przez sieć]
 
 | Płytka | Pełny obraz z wydania (USB) | Układ | Sieć |  Przetestowane | 
 |---|---|---|---|---|
-| [Waveshare ESP32-S3-RS485-CAN (sklep Kamami)](https://kamami.pl/moduly-wifi/1201081-industrial-esp32-s3-control-board-with-rs485-and-can-communication-interfaces-supports-wi-fi-blue-5902186330269.html) | `opengr8on-clu-waveshare-<wersja>.bin` | `esp32s3` | WiFi | TAK|
-| [KinCony F8 (strona produktu)](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html) | `opengr8on-clu-f8-<wersja>.bin` | `esp32s3` | Ethernet (DHCP) | Nie (w drodze)|
-| [KinCony KC868-A8v3 (strona produktu)](https://www.kincony.com/esp32-s3-8-channel-relay-module.html) | `opengr8on-clu-a8v3-<wersja>.bin` | `esp32s3` | Ethernet (DHCP) | Nie (w drodze)|
-| [ESP32-S3 N8R8 (sklep Kamami)](https://kamami.pl/esp32/1184834-esp32-s3-microcontroller-2-4ghz-wi-fi-development-board-240mhz-dual-core-processor-esp32-s3-wroom-5906623423545.html) — GATE HTTP, 8 MB flash / 8 MB PSRAM | `opengr8on-gate-http-esp32s3-<wersja>-N8R8.bin` | `esp32s3` | WiFi | W trakcie|
+| [Waveshare ESP32-S3-RS485-CAN](docs/devices/waveshare-esp32-s3-rs485-can.md) ([sklep Kamami](https://kamami.pl/moduly-wifi/1201081-industrial-esp32-s3-control-board-with-rs485-and-can-communication-interfaces-supports-wi-fi-blue-5902186330269.html)) | `opengr8on-clu-waveshare-<wersja>.bin` | `esp32s3` | WiFi | TAK|
+| [KinCony F8](docs/devices/kincony-f8.md) ([strona produktu](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html)) | `opengr8on-clu-f8-<wersja>.bin` | `esp32s3` | Ethernet | Nie (w drodze)|
+| [KinCony KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) ([strona produktu](https://www.kincony.com/esp32-s3-8-channel-relay-module.html)) | `opengr8on-clu-a8v3-<wersja>.bin` | `esp32s3` | Ethernet | TAK|
+| [ESP32-S3 N8R8](docs/devices/other-esp32-s3.md) ([sklep Kamami](https://kamami.pl/esp32/1184834-esp32-s3-microcontroller-2-4ghz-wi-fi-development-board-240mhz-dual-core-processor-esp32-s3-wroom-5906623423545.html)) — GATE HTTP, 8 MB flash / 8 MB PSRAM | `opengr8on-gate-http-esp32s3-<wersja>-N8R8.bin` | `esp32s3` | WiFi | W trakcie|
 
-Wariant CLU z bramką [MySensors](MYSENSORS.md) zamiast TF-Bus: obrazy CLU z końcówką `-mysensors`
+Wariant CLU z bramką [MySensors](docs/MYSENSORS.md) zamiast TF-Bus: obrazy CLU z końcówką `-mysensors`
 (`…-<wersja>-mysensors.bin`, `…-<wersja>-ota-mysensors.bin`).
 
-[GATE HTTP](GATE_HTTP.md) na ESP32-S3 (16 MB flash, 8 MB PSRAM, WiFi, bez TF-Bus):
+[GATE HTTP](docs/GATE_HTTP.md) na ESP32-S3 (16 MB flash, 8 MB PSRAM, WiFi, bez TF-Bus):
 `opengr8on-gate-http-esp32s3-<wersja>.bin` i `opengr8on-gate-http-esp32s3-<wersja>-ota.bin`.
 Wariant 8 MB flash / 8 MB octal PSRAM ma końcówkę `-N8R8`: `…-<wersja>-N8R8.bin`,
 `…-<wersja>-ota-N8R8.bin` i `…-<wersja>-N8R8.zip`.
 Przejście między układami partycji 16 MB i 8 MB wymaga pełnej instalacji przez USB
 (kasuje dane); OTA nie zmienia tablicy partycji.
 
-Dla [Grenton GATE](DEVICES.md#grenton-gate) wydanie ma tylko `opengr8on-clu-gate-<wersja>.zip`
+Dla [Grenton GATE](docs/devices/grenton-gate.md) wydanie ma tylko `opengr8on-clu-gate-<wersja>.zip`
 (zob. [Wgrywanie z linii poleceń](#wgrywanie-z-linii-poleceń)), bez osobnych `.bin`.
 
 Obrazy można wgrać
@@ -112,7 +112,7 @@ nie odróżni płytki, wgraj obraz właściwy dla swojej.
 ### Wgrywanie z linii poleceń
 
 Do linii poleceń służy `opengr8on-clu-<płytka>-<wersja>.zip` z wydania: katalog `tfbus/` i
-`mysensors/` (wariant [MySensors](MYSENSORS.md)), każdy z zawartością artefaktu z GitHub Actions
+`mysensors/` (wariant [MySensors](docs/MYSENSORS.md)), każdy z zawartością artefaktu z GitHub Actions
 (`opengr8on-clu-<płytka>` / `opengr8on-clu-<płytka>-mysensors`); `opengr8on-gate-http-esp32s3-<wersja>.zip`
 ma jeden katalog `firmware/` (artefakt `opengr8on-clu-gate-http`):
 
@@ -210,12 +210,12 @@ plik `sdkconfig`, więc można przełączać się między płytkami bez `set-tar
 
 | Preset | Płytka | Katalog | Konfiguracja |
 |---|---|---|---|
-| `waveshare` (domyślny) | [Waveshare ESP32-S3-RS485-CAN](DEVICES.md#waveshare-esp32-s3-rs485-can) | `build/` | `sdkconfig` |
-| `gate` | [Grenton GATE](DEVICES.md#grenton-gate) (`esp32`) | `build-gate/` | `sdkconfig.gate` |
-| `f8` | [KinCony F8](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-f8/` | `sdkconfig.f8` |
-| `a8v3` | [KinCony KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3) | `build-a8v3/` | `sdkconfig.a8v3` |
-| `gate-http` | [GATE HTTP](GATE_HTTP.md) na ESP32-S3 (WiFi) | `build-gate-http/` | `sdkconfig.gate-http` |
-| `gate-http-N8R8` | [GATE HTTP](GATE_HTTP.md) na ESP32-S3 N8R8 (8 MB flash, 8 MB PSRAM, WiFi) | `build-gate-http-N8R8/` | `sdkconfig.gate-http-N8R8` |
+| `waveshare` (domyślny) | [Waveshare ESP32-S3-RS485-CAN](docs/devices/waveshare-esp32-s3-rs485-can.md) | `build/` | `sdkconfig` |
+| `gate` | [Grenton GATE](docs/devices/grenton-gate.md) (`esp32`) | `build-gate/` | `sdkconfig.gate` |
+| `f8` | [KinCony F8](docs/devices/kincony-f8.md) | `build-f8/` | `sdkconfig.f8` |
+| `a8v3` | [KinCony KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) | `build-a8v3/` | `sdkconfig.a8v3` |
+| `gate-http` | [GATE HTTP](docs/GATE_HTTP.md) na ESP32-S3 (WiFi) | `build-gate-http/` | `sdkconfig.gate-http` |
+| `gate-http-N8R8` | [GATE HTTP](docs/GATE_HTTP.md) na ESP32-S3 N8R8 (8 MB flash, 8 MB PSRAM, WiFi) | `build-gate-http-N8R8/` | `sdkconfig.gate-http-N8R8` |
 
 ```bash
 . /opt/esp-idf/export.sh        # ścieżka do Twojej instalacji ESP-IDF
@@ -243,11 +243,11 @@ pierwszym `req_set_key`. Linia z PIN-em trafia tylko na UART, nie na telnet.
 | `components/lua` | Lua 5.3.6 (domyślnie, jak w CLU) i 5.5.1 (opcja `CLU_LUA_5_5`), domyślnie `float` + 64-bitowe liczby całkowite; opcjonalny tryb 32-bit (`CLU_LUA_32BITS`) |
 | `components/tfbus_uart` | UART RS485 half-duplex |
 | `components/tfbus_master` | master magistrali: rejestr modułów, adresowanie, odpytywanie, discovery |
-| `components/tfbus_drivers` | sterowniki modułów TF-Bus, zob. [TFBUS.md](TFBUS.md) |
+| `components/tfbus_drivers` | sterowniki modułów TF-Bus, zob. [TFBUS.md](docs/TFBUS.md) |
 | `components/clu_tftp` | serwer TFTP (a:\ i p:\) |
 | `components/clu_telnet` | konsola logów (TCP 23, tylko odczyt) |
 | `components/clu_mqtt` | MQTT + discovery Home Assistant |
-| `components/clu_mysensors` | kontroler MySensors, zob. [MYSENSORS.md](MYSENSORS.md) |
+| `components/clu_mysensors` | kontroler MySensors, zob. [MYSENSORS.md](docs/MYSENSORS.md) |
 | `components/clu_ota` | aktualizacja firmware przez HTTP z hasłem (`POST /ota`), potwierdzanie nowego obrazu |
 | `components/clu_rtc` | zegar RTC PCF85063 albo DS3231 na I2C (podtrzymywany bateryjnie) |
 | `components/clu_i2c` | wspólne magistrale I2C (jedna na parę pinów: RTC + ekspander IO) |
@@ -304,10 +304,10 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 | ROLLER_SH_DIN_3 (0x2a), ROLLER_SH_DIN (0x17) | 🟡 | maska bitowa ruch/stop niezweryfikowana |
 | TOUCH_PANEL_FM_4 (0x1c) | 🟡 | przyciski, temperatura, światło, buzzer; LED niezweryfikowane |
 | SMART_PANEL_FM_4 (0x03) | 🟡 | przyciski, czujniki, LED, PrintText/Draw/Beep; brak konfiguracji stron/gestów |
-| DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](TFBUS.md#dimmer_mosfet_din) |
-| LED_RGBW_DIN (0x18) | 🟡 | LEDRGB, LED_CHANNEL ×4, LED_CCT ×2, PowerSupplyVoltage; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](TFBUS.md#led_rgbw_din) |
+| DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](docs/TFBUS.md#dimmer_mosfet_din) |
+| LED_RGBW_DIN (0x18) | 🟡 | LEDRGB, LED_CHANNEL ×4, LED_CCT ×2, PowerSupplyVoltage; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](docs/TFBUS.md#led_rgbw_din) |
 | Pozostałe moduły TF-Bus (ściemniacze FM, LED FM, analogowe itd.) | ❌ | brak sterowników |
-| Wbudowane IO płytki (PCF8575) jako IO_MODULE_DIN_8 | 🟡 | KinCony F8, KC868-A8v3, zob. [DEVICES.md](DEVICES.md#kincony-f8-i-kc868-a8v3); niesprawdzone na sprzęcie |
+| Wbudowane IO płytki (PCF8575) jako IO_MODULE_DIN_8 | 🟡 | [KinCony F8](docs/devices/kincony-f8.md) (niesprawdzone na sprzęcie), [KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) (sprawdzone na sprzęcie) |
 
 ### Czego brakuje względem CLU_ZWAVE_2
 
@@ -332,8 +332,8 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 - **Surowe API obiektów przez MQTT** (opcjonalne) — get/set dowolnej cechy, wywołanie dowolnej
   metody.
 - **`MQTT.*` w USER.LUA** — własne mapowania encji, ukrywanie, publikowanie dowolnych tematów.
-- **MySensors zamiast TF-Bus** (opcja kompilacji), zob. [MYSENSORS.md](MYSENSORS.md).
-- **Emulacja GATE HTTP** (HttpRequest / HttpListener) zamiast CLU, zob. [GATE_HTTP.md](GATE_HTTP.md).
+- **MySensors zamiast TF-Bus** (opcja kompilacji), zob. [MYSENSORS.md](docs/MYSENSORS.md).
+- **Emulacja GATE HTTP** (HttpRequest / HttpListener) zamiast CLU, zob. [GATE_HTTP.md](docs/GATE_HTTP.md).
 - **Bez chmury Grentona** — OM nie rejestruje CLU w chmurze (zob. niżej).
 - **Aktualizacja firmware przez sieć** (OTA, HTTP z hasłem, cofanie nieudanej aktualizacji).
 - **Lua 5.5** jako opcja kompilacji.
@@ -343,15 +343,15 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 
 ## Sprzęt
 
-Piny, profile i uwagi do każdej płytki: [DEVICES.md](DEVICES.md). Wymagany PSRAM, zob.
-[Wymagania pamięci](DEVICES.md#wymagania-pamięci).
+Piny, profile i uwagi do każdej płytki: [docs/DEVICES.md](docs/DEVICES.md). Wymagany PSRAM, zob.
+[Wymagania pamięci](docs/DEVICES.md#wymagania-pamięci).
 
 | Płytka | Układ | Sieć | Uwagi |
 |---|---|---|---|
-| [Waveshare ESP32-S3-RS485-CAN](DEVICES.md#waveshare-esp32-s3-rs485-can) | ESP32-S3R8 | WiFi | zalecana; RS485 i RTC na płytce |
-| [Inne płytki ESP32-S3](DEVICES.md#inne-płytki-esp32-s3) | ESP32-S3, 16 MB / 8 MB PSRAM | WiFi | własny transceiver RS485 |
-| [KinCony F8, KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3) | ESP32-S3 N16R8 | Ethernet W5500 | 8 przekaźników + 8 wejść jako IO_MODULE_DIN_8 |
-| [Grenton GATE](DEVICES.md#grenton-gate) | ESP32-WROVER-B | Ethernet LAN8720A | target `esp32` |
+| [Waveshare ESP32-S3-RS485-CAN](docs/devices/waveshare-esp32-s3-rs485-can.md) | ESP32-S3R8 | WiFi | zalecana; RS485 i RTC na płytce |
+| [Inne płytki ESP32-S3](docs/devices/other-esp32-s3.md) | ESP32-S3, 16 MB / 8 MB PSRAM | WiFi | własny transceiver RS485 |
+| [KinCony F8](docs/devices/kincony-f8.md), [KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) | ESP32-S3 N16R8 | Ethernet W5500 | 8 przekaźników + 8 wejść jako IO_MODULE_DIN_8 |
+| [Grenton GATE](docs/devices/grenton-gate.md) | ESP32-WROVER-B | Ethernet LAN8720A | target `esp32` |
 
 Płytki dostępne w sklepach:
 
@@ -364,14 +364,21 @@ Płytki dostępne w sklepach:
 
 Wszystko w `idf.py menuconfig` na głównym poziomie menu; opcje ESP-IDF w **Advanced (ESP-IDF)**.
 
+**Board** (`CLU_BOARD`) ustala sprzęt płytki: interfejs Ethernet, piny RS485 / I2C / W5500 / PHY,
+układ RTC, IO na płytce i przycisk setup. Dla wybranej płytki te opcje są ukryte i zawsze zgodne
+z płytką (także po zmianie płytki w istniejącym `sdkconfig`); **Custom** pokazuje je wszystkie,
+zaczynając od wartości poprzednio wybranej płytki. Domyślnie: Waveshare ESP32-S3-RS485-CAN na
+`esp32s3`, Grenton GATE na `esp32`; presety `f8` / `a8v3` wybierają płytki KinCony. Rozmiar flash,
+tryb PSRAM i konsola to opcje ESP-IDF: ustawia je target i `sdkconfig.defaults.*` presetu.
+
 ### Sieć
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|
-| `CLU_ETH` | y na `esp32`, n na `esp32s3` | Ethernet |
-| `CLU_ETH_IF` | EMAC na `esp32`, W5500 na `esp32s3` | wewnętrzny EMAC + PHY RMII (tylko `esp32`, zob. [Grenton GATE](DEVICES.md#grenton-gate)) albo W5500 na SPI (zob. [KinCony F8 i KC868-A8v3](DEVICES.md#kincony-f8-i-kc868-a8v3)) |
+| `CLU_ETH` | z płytki (Custom: y na `esp32`, n na `esp32s3`) | Ethernet |
+| `CLU_ETH_IF` | EMAC na `esp32`, W5500 na `esp32s3` | wewnętrzny EMAC + PHY RMII (tylko `esp32`, zob. [Grenton GATE](docs/devices/grenton-gate.md)) albo W5500 na SPI (zob. [KinCony F8](docs/devices/kincony-f8.md), [KC868-A8v3](docs/devices/kincony-kc868-a8v3.md)) |
 | `CLU_ETH_PHY` | LAN87xx | EMAC: sterownik PHY, LAN8720A albo generyczny IEEE 802.3 (np. JL1101) |
-| `CLU_ETH_SPI_*_GPIO` | piny F8 | W5500: SCLK / MOSI / MISO / CS / INT (`-1` = odpytywanie co 10 ms) / RST (`-1` = brak) |
+| `CLU_ETH_SPI_*_GPIO` | z płytki (Custom: piny F8) | W5500: SCLK / MOSI / MISO / CS / INT (`-1` = odpytywanie co 10 ms) / RST (`-1` = brak) |
 | `CLU_ETH_SPI_CLOCK_MHZ` | 20 | W5500: zegar SPI |
 | `CLU_WIFI` | y bez Ethernetu, n z nim | WiFi STA; z Ethernetem opcjonalne (oba równolegle) |
 | `CLU_WIFI_SSID` / `CLU_WIFI_PASSWORD` | — | sieć WiFi; `cfg/wifi_ssid` / `cfg/wifi_pass` z partycji `cfg` mają pierwszeństwo ([`mknvs.py`](#wgrywanie-z-linii-poleceń)); bez SSID WiFi jest wyłączone |
@@ -392,7 +399,7 @@ interfejsu, przez który widzi rozmówcę. Przy obu interfejsach trasa domyślna
 | `CLU_SERIAL` | losowy | numer seryjny (dziesiętnie), zapisywany w NVS przy pierwszym starcie |
 | `CLU_PRIVATE_KEY` | losowy | PIN / klucz prywatny (8 znaków A–Z0–9) |
 | `CLU_IV` | losowy | fabryczny IV projektu (32 znaki hex) |
-| `CLU_DEVICE` | CLU_ZWAVE_2 | typ urządzenia widziany przez OM (`Device type`): CLU_ZWAVE_2 (hwType 0x13, fwApiVer 0x203, firmware 5.15.24-2635) albo GATE HTTP (hwType 0x12, fwApiVer 0x578, firmware 1.4.2-2346, [GATE_HTTP.md](GATE_HTTP.md)) |
+| `CLU_DEVICE` | CLU_ZWAVE_2 | typ urządzenia widziany przez OM (`Device type`): CLU_ZWAVE_2 (hwType 0x13, fwApiVer 0x203, firmware 5.15.24-2635) albo GATE HTTP (hwType 0x12, fwApiVer 0x578, firmware 1.4.2-2346, [GATE_HTTP.md](docs/GATE_HTTP.md)) |
 
 Numer seryjny i PIN ustawione w menuconfig zastępują zapisane w NVS; puste = wartości z partycji
 `cfg` (gotowe obrazy, `mknvs.py`, zob. [Gotowe obrazy](#gotowe-obrazy)), a bez nich
@@ -404,12 +411,12 @@ Podmenu **RS485 bus (TF-Bus / MySensors)**.
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|
-| `CLU_BUS` | `CLU_TFBUS` | co działa na pinach RS485 / UART: `CLU_TFBUS` (master TF-Bus), `CLU_MYSENSORS` ([MYSENSORS.md](MYSENSORS.md)) albo `CLU_BUS_NONE` (RS485 wyłączone: tylko obiekty wirtualne, skrypty i usługi sieciowe; jedyny wybór przy GATE) |
+| `CLU_BUS` | `CLU_TFBUS` | co działa na pinach RS485 / UART: `CLU_TFBUS` (master TF-Bus), `CLU_MYSENSORS` ([MYSENSORS.md](docs/MYSENSORS.md)) albo `CLU_BUS_NONE` (RS485 wyłączone: tylko obiekty wirtualne, skrypty i usługi sieciowe; jedyny wybór przy GATE) |
 | `CLU_RS485_UART` | 1 | numer UART |
 | `CLU_RS485_TX_GPIO` / `RX_GPIO` | 17 / 18 | piny |
 | `CLU_RS485_DE_GPIO` | 21 | pin DE/RE, `-1` = transceiver z automatycznym kierunkiem |
-| `CLU_TFBUS_BAUD` | 115200 | prędkość TF-Bus (MySensors: własna opcja, zob. [MYSENSORS.md](MYSENSORS.md)) |
-| `CLU_LOCAL_IO` | n (y w profilach F8 / A8v3) | 8 przekaźników + 8 wejść płytki na PCF8575 jako IO_MODULE_DIN_8, zob. [DEVICES.md](DEVICES.md#kincony-f8-i-kc868-a8v3) |
+| `CLU_TFBUS_BAUD` | 115200 | prędkość TF-Bus (MySensors: własna opcja, zob. [MYSENSORS.md](docs/MYSENSORS.md)) |
+| `CLU_LOCAL_IO` | n (y w profilach F8 / A8v3) | 8 przekaźników + 8 wejść płytki na PCF8575 jako IO_MODULE_DIN_8, zob. [KinCony F8](docs/devices/kincony-f8.md), [KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) |
 | `CLU_LOCAL_IO_SDA_GPIO` / `SCL_GPIO` | 8 / 18 | I2C ekspandera (te same piny co RTC = wspólna magistrala) |
 | `CLU_LOCAL_IO_ADDR` | 0x24 | adres PCF8575 |
 | `CLU_LOCAL_IO_OUT_PINS` | P10–P17 | przekaźniki na P10–P17 (wejścia P00–P07, F8) albo P00–P07 (wejścia P10–P17, A8v3) |
@@ -613,7 +620,7 @@ make -C test/host coverage                        # pokrycie C (gcov) i Lua; FAI
 | `test_tftp` | serwer TFTP: pobieranie / wysyłanie (octet, netascii), utrata pakietów, obce hosty, limity, błędy |
 | `test_telnet` | konsola logów: historia, filtr `CLU_TELNET_ALLOW`, komendy telnet (IAC, Ctrl-C), wolni klienci |
 | `test_mqttc` | połączenie MQTT (`clu_mqtt.c`): konfiguracja klienta i TLS, subskrypcje, wiadomości przychodzące, API Lua |
-| `test_mysensors` / `test_mysensors.lua` | MySensors, zob. [MYSENSORS.md](MYSENSORS.md#kod-i-testy) |
+| `test_mysensors` / `test_mysensors.lua` | MySensors, zob. [MYSENSORS.md](docs/MYSENSORS.md#kod-i-testy) |
 | `test_lua` | środowisko Lua (`clu_lua.c`): wywołania `req:`, limit czasu, zdarzenia, przeładowanie, tryb awaryjny, `BAD_M.LUA` |
 | `test_rtc` | RTC PCF85063 i DS3231: kodowanie BCD ↔ epoch (lata przestępne, zakres 2000–2099, flagi OS / OSF, tryb 12h), sterownik I2C na symulowanych układach, wspólna magistrala I2C |
 | `test_main` | kolejność startu, konfiguracja modułów, zdarzenia WiFi, mapowanie cech CLU (NTP, strefa, DNS, UseCloud); `test_main_nobus` / `test_main_mysensors`: bez magistrali / z MySensors |

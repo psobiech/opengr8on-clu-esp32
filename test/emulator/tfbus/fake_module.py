@@ -173,7 +173,7 @@ class ModuleLink:
 
 
 class DimmerModule:
-    """Module-side state machine of one DIMMER_MOSFET_DIN (hwType 0x1a, TFBUS.md)."""
+    """Module-side state machine of one DIMMER_MOSFET_DIN (hwType 0x1a, docs/TFBUS.md)."""
 
     def __init__(self, serial_number: int, level: int = 0, inputs: int = 0):
         self.serial_number = serial_number

@@ -425,6 +425,8 @@ Podmenu **RS485 bus (TF-Bus / MySensors)**.
 | `CLU_RTC` | y (n na `esp32`) | zegar RTC (brak układu jest logowany i pomijany) |
 | `CLU_RTC_CHIP` | PCF85063 | układ: PCF85063 (Waveshare) albo DS3231 (KinCony F8, KC868-A8v3) |
 | `CLU_RTC_SDA_GPIO` / `SCL_GPIO` | 39 / 38 | piny I2C zegara RTC (mogą być wspólne z ekspanderem IO) |
+| `CLU_DISPLAY` | n (y w profilu F8) | ekran statusu na OLED SSD1306 128x64 (I2C), zob. [KinCony F8](docs/devices/kincony-f8.md#wyświetlacz) |
+| `CLU_DISPLAY_SDA_GPIO` / `SCL_GPIO` / `ADDR` | 8 / 18 / 0x3c | piny I2C i adres wyświetlacza (magistrala może być wspólna z RTC i ekspanderem IO) |
 
 ### Inne
 

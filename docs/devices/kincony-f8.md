@@ -7,7 +7,7 @@ ESP32-S3-WROOM-1U N16R8 (16 MB flash, 8 MB PSRAM), Ethernet W5500 na SPI, RS485 
 - [KinCony F8 — strona produktu](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html)
 - [KinCony F8 — ESPHome Devices](https://devices.esphome.io/devices/kincony-f8/)
 
-Przetestowane na sprzęcie: przekaźniki i wejścia na PCF8575 działają. Pozostałe wejścia płytki
+Przetestowane na sprzęcie: przekaźniki i wejścia na PCF8575 oraz wyświetlacz działają. Pozostałe wejścia płytki
 (analogowe, 1-wire itd.) nie są obsługiwane.
 
 **Zasilanie i przekaźniki:** fabrycznie montowane są przekaźniki na 12 V, ale są wymienne (w
@@ -22,6 +22,7 @@ cewek przekaźników musi odpowiadać napięciu zasilania płytki.
 | I2C SDA / SCL | 8 / 18 | `CLU_LOCAL_IO_SDA_GPIO`, `CLU_LOCAL_IO_SCL_GPIO` |
 | PCF8575: adres | 0x24 | `CLU_LOCAL_IO_ADDR` |
 | PCF8575: przekaźniki / wejścia | P10–P17 / P00–P07 | `CLU_LOCAL_IO_OUT_PINS` |
+| Wyświetlacz SSD1306 128x64: adres | 0x3C | `CLU_DISPLAY_ADDR` |
 | Przycisk konfiguracji | 0 (BOOT) | `CLU_SETUP_BUTTON_GPIO` |
 
 - **Przekaźniki i wejścia płytki** widać w OM jako jeden moduł **IO_MODULE_DIN_8** (8 DOUT + 8 DIN;
@@ -43,6 +44,29 @@ cewek przekaźników musi odpowiadać napięciu zasilania płytki.
   (`CLU_RTC_CHIP` = DS3231, SDA 8 / SCL 18). Czas przetrwa zanik zasilania tylko z baterią
   podtrzymującą.
 - WiFi domyślnie wyłączone, można włączyć obok Ethernetu.
-- Nieużywane: wejścia analogowe, 1-wire, karta SD, EEPROM, wyświetlacz, RF 433 MHz, moduł Tuya.
+- Nieużywane: wejścia analogowe, 1-wire, karta SD, EEPROM, RF 433 MHz, moduł Tuya.
 - RS485 bez pinu DE: zob. uwagę o transceiverach z automatycznym kierunkiem w
   [Inne płytki ESP32-S3](other-esp32-s3.md#transceiver-rs485).
+
+## Wyświetlacz
+
+OLED SSD1306 128x64 (0x3C) na tej samej magistrali I2C co PCF8575 i DS3231. Profil go włącza
+(`CLU_DISPLAY`). Firmware pokazuje na nim ekran statusu, odświeżany co sekundę:
+
+```
+CLU 123456789
+ETH 192.168.1.50
+WiFi -
+
+2026-11-24 12:34:56
+TF-Bus 3/3 online
+Up 2d 04:05:06
+```
+
+- Wiersz `WiFi` jest tylko przy włączonym WiFi; `-` = interfejs bez adresu.
+- Czas lokalny (strefa z OM); `Time not set` do pierwszej synchronizacji (RTC, SNTP, OM).
+- `TF-Bus` liczy moduły z projektu / ostatniego wykrywania, razem z wbudowanym IO.
+- Po I2C idą tylko zmienione wiersze (zwykle zegar i czas pracy), każdy osobnym krótkim
+  transferem, więc odpytywanie PCF8575 co 5 ms nie czeka dłużej niż kilka ms.
+- Brak wyświetlacza jest logowany i pomijany.
+- Ekran nie jest dostępny ze skryptów Lua ani z OM.

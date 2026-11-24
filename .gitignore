@@ -27,6 +27,7 @@ test/host/test_mysensors
 test/host/test_lua
 test/host/test_main
 test/host/test_rtc
+test/host/test_display
 test/host/test_main_nobus
 test/host/test_main_mysensors
 test/host/test_main_gate

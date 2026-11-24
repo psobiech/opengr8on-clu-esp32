@@ -5,7 +5,8 @@
  * Boot order: NVS, crypto, CLU identity, telnet log hook, time zone + clock from the RTC (CLU_RTC), FAT
  * storage (a:\\, p:\\),
  * config files, RS485 + TFBUS master and drivers (CLU_TFBUS) with the on-board IO modules (CLU_LOCAL_IO)
- * or the MySensors gateway (CLU_MYSENSORS) on the same pins, network (WiFi and / or Ethernet), SNTP,
+ * or the MySensors gateway (CLU_MYSENSORS) on the same pins, network (WiFi and / or Ethernet), the
+ * status display (CLU_DISPLAY), SNTP,
  * telnet server, OTA updates (HTTP), MQTT, TFTP, the UDP/1234 CLU protocol server and the Lua runtime.
  *
  * Nothing waits for an IP: the bus and the local scripts run without the network. Network
@@ -34,6 +35,9 @@
 #include "clu_time.h"
 #include "clu_state.h"
 #include "clu_sysinfo.h"
+#if CONFIG_CLU_DISPLAY
+#include "clu_status_display.h"
+#endif
 #include "clu_telnet.h"
 #include "clu_tftp.h"
 #include "esp_event.h"
@@ -439,6 +443,9 @@ void app_main(void)
 #endif
 
     net_start(); // does not wait for an IP: see the file comment
+#if CONFIG_CLU_DISPLAY
+    clu_status_display_start(); // serial, IPs, time, TF-Bus modules on the board's OLED
+#endif
     clu_time_start_sntp();
 #if CONFIG_CLU_TELNET
     clu_telnet_start();

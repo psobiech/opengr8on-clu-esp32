@@ -1,5 +1,5 @@
-# KinCony F8 (docs/devices/kincony-f8.md). Pins, Ethernet, RTC and on-board IO come with the board
-# option (menuconfig: Board). Applied on top of sdkconfig.defaults by the "f8" preset
+# KinCony F8 (docs/devices/kincony-f8.md). Pins, Ethernet, RTC, on-board IO and the display come
+# with the board option (menuconfig: Board). Applied on top of sdkconfig.defaults by the "f8" preset
 # (CMakePresets.json):
 #   export IDF_PRESET=f8; idf.py build flash monitor
 CONFIG_CLU_BOARD_KINCONY_F8=y

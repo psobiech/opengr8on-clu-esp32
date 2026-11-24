@@ -6,6 +6,7 @@
  * drv_digital_io.c):
  * @verbatim
  *   STATUS_POLL    : 02 | 00 01 01 [inputs] | 01 01 01 [outputs]  (no reply: expander unreadable)
+ *                    outputs = as last driven, plus outputs read back as on (manual relay switch)
  *   VERSION_QUERY  : fwApiVer verA verB hwVer
  *   MODULE_CMD     : ACTIVATE (08) / DEACTIVATE (09) [bitmask] drive outputs, rest ACKed
  * @endverbatim
@@ -29,7 +30,9 @@ static const localio_hw_t *s_hw;
 static uint16_t s_out;      // outputs as last driven
 static uint16_t s_in;       // debounced inputs
 static uint16_t s_raw;      // last raw sample
-static bool s_have_in;      // s_in / s_raw valid
+static uint16_t s_out_level;     // debounced actual output levels
+static uint16_t s_out_level_raw; // last raw output level sample
+static bool s_have_in;      // s_in / s_raw / s_out_level / s_out_level_raw valid
 static int64_t s_sampled;   // time of the last good sample
 static int64_t s_failed;    // time of the last failed read (0 = none since the last good one)
 
@@ -59,7 +62,8 @@ void localio_setup(const uint32_t *serial_numbers, int module_count, const local
 }
 
 /**
- * @brief Refresh the debounced inputs (at most every LOCALIO_SAMPLE_US); false if unreadable.
+ * @brief Refresh the debounced inputs and output levels (at most every LOCALIO_SAMPLE_US); false if
+ * unreadable.
  *
  * A new raw value is taken once two consecutive samples agree.
  */
@@ -72,8 +76,8 @@ static bool sample(void)
     if (s_failed && now - s_failed < FAIL_RETRY_US) {
         return false; // do not stall every poll on a dead expander
     }
-    uint16_t raw;
-    if (!s_hw->read(&raw, s_hw->ctx)) {
+    uint16_t raw, out_level_raw;
+    if (!s_hw->read(&raw, &out_level_raw, s_hw->ctx)) {
         s_failed = now ? now : 1;
         s_have_in = false;
         return false;
@@ -82,7 +86,11 @@ static bool sample(void)
     if (!s_have_in || raw == s_raw) {
         s_in = raw;
     }
+    if (!s_have_in || out_level_raw == s_out_level_raw) {
+        s_out_level = out_level_raw;
+    }
     s_raw = raw;
+    s_out_level_raw = out_level_raw;
     s_sampled = now;
     s_have_in = true;
     return true;
@@ -100,7 +108,11 @@ static int din8_status(tfbus_vmod_t *module, uint8_t *status_buffer, size_t cap)
         return -1; // no reply: the master takes the module offline
     }
     int module_index = index_of(module);
-    tfbus_din8_status((uint8_t)(s_in >> (8 * module_index)), (uint8_t)(s_out >> (8 * module_index)), status_buffer);
+    // Driven on is reported at once; on by hand (read back, debounced) too. Driven off shows once
+    // the read-back level settles, so a relay held on by its switch never reports a false off.
+    uint16_t outputs_on = s_out | s_out_level;
+    tfbus_din8_status((uint8_t)(s_in >> (8 * module_index)), (uint8_t)(outputs_on >> (8 * module_index)),
+                      status_buffer);
     return TFBUS_DIN8_STATUS_LEN;
 }
 

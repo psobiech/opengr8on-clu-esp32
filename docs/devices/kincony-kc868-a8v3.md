@@ -36,6 +36,14 @@ Na magistrali I2C są: PCF8575 (0x22), EEPROM (0x50, nieużywany) i RTC DS3231 (
 - Przekaźniki są wyłączone od włączenia zasilania (PCF8575 startuje ze stanem wysokim). Po
   wykryciu modułu (start, przeładowanie projektu) CLU wysyła mu stan początkowy tak jak prawdziwym
   modułom: wszystkie wyłączone, potem to, co ustawią skrypty.
+- **Ręczne przełączniki przekaźników** (przełącznik ściągający pin przekaźnika PCF8575 do masy, jak
+  w KinCony F8) są widoczne w OM: przekaźnik włączony przełącznikiem ma `Value` = 1 w swoim DOUT i
+  wywołuje OnSwitchOn (wyłączenie przełącznika: OnSwitchOff). Firmware odczytuje stan pinów
+  przekaźników PCF8575 (próbkowanie i filtrowanie jak przy wejściach); bez przełącznika odczyt
+  zgadza się z tym, co ustawił CLU. Przełącznik widać tylko, gdy CLU trzyma przekaźnik wyłączony;
+  przekaźnik włączony z CLU jest zawsze widziany jako włączony. Wyłączenie z CLU przekaźnika
+  trzymanego przełącznikiem nic nie zmienia (przekaźnik zostaje włączony), ale `Value` od razu ma
+  0 aż do zmiany stanu przełącznika.
 - W5500 zajmuje GPIO43/44 (piny konsoli UART0), więc **konsola i log idą przez natywne USB
   (złącze USB-C, USB-Serial-JTAG)**; tamtędy też wgrywa się firmware.
 - Zegar RTC DS3231 (0x68) jest na tej samej magistrali I2C co PCF8575; profil go włącza
@@ -86,6 +94,13 @@ On the I2C bus: PCF8575 (0x22), EEPROM (0x50, unused), and DS3231 RTC (0x68).
 - Relays are off from power-on (PCF8575 boots with pins high). After
   module discovery (boot, project reload), the CLU sends it the initial state just like to real
   modules: all off, then whatever scripts set.
+- **Manual relay switches** (a switch pulling the PCF8575 relay pin to GND, as on the KinCony F8)
+  are visible in OM: a relay switched on by hand has `Value` = 1 in its DOUT and fires OnSwitchOn
+  (switching it back off: OnSwitchOff). The firmware reads back the PCF8575 relay pins (sampled
+  and debounced like the inputs); without a switch the readback matches what the CLU set. A switch
+  is only seen while the CLU holds that relay off; a relay the CLU switched on always reads as on.
+  Switching off from the CLU a relay held on by its switch changes nothing (the relay stays on),
+  but `Value` reads 0 right away until the switch changes state.
 - W5500 uses GPIO43/44 (UART0 console pins), so **console and logs go over native USB
   (USB-C port, USB-Serial-JTAG)**; firmware flashing also uses it.
 - DS3231 RTC (0x68) is on the same I2C bus as PCF8575; the profile enables it

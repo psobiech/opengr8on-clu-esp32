@@ -20,7 +20,7 @@ static void check(const char *name, int cond)
 static int64_t s_now = 1000000;
 int64_t esp_timer_get_time(void) { return s_now; }
 
-static uint16_t s_written, s_inputs;
+static uint16_t s_written, s_inputs, s_manual_on; // s_manual_on: outputs switched on by hand
 static int s_writes, s_reads;
 static bool s_write_fail, s_read_fail;
 
@@ -34,13 +34,14 @@ static bool hw_write(uint16_t on, void *ctx)
     return true;
 }
 
-static bool hw_read(uint16_t *active, void *ctx)
+static bool hw_read(uint16_t *active, uint16_t *outputs_on, void *ctx)
 {
     s_reads++;
     if (s_read_fail) {
         return false;
     }
     *active = s_inputs;
+    *outputs_on = s_written | s_manual_on;
     return true;
 }
 
@@ -212,6 +213,31 @@ int main(void)
     s_now += 2 * LOCALIO_SAMPLE_US;
     check("one module: inputs from bits 0-7", poll(3, &in, &out) && in == 0xa5);
     check("one module: ACTIVATE ch 7 -> bit 7", is_ack(cmd(3, 0x08, 0x80)) && s_written == 0x0080);
+
+    // ---------------- outputs read back (manual relay switch, KinCony F8)
+    s_now += 2 * LOCALIO_SAMPLE_US;
+    poll(3, &in, &out);
+    s_manual_on = 0x0001;
+    s_now += LOCALIO_SAMPLE_US;
+    check("manual switch: first sample not taken (debounce)", poll(3, &in, &out) && out == 0x80);
+    s_now += LOCALIO_SAMPLE_US;
+    check("manual switch: output reported on", poll(3, &in, &out) && out == 0x81);
+    check("ACTIVATE of an output held on by hand", is_ack(cmd(3, 0x08, 0x01)) && s_written == 0x0081);
+    check("DEACTIVATE while held on by hand: still reported on",
+          is_ack(cmd(3, 0x09, 0x01)) && s_written == 0x0080 && poll(3, &in, &out) && out == 0x81);
+    s_now += LOCALIO_SAMPLE_US;
+    check("  and on the next sample", poll(3, &in, &out) && out == 0x81);
+    s_manual_on = 0;
+    s_now += LOCALIO_SAMPLE_US;
+    poll(3, &in, &out);
+    s_now += LOCALIO_SAMPLE_US;
+    check("manual switch released: output reported off", poll(3, &in, &out) && out == 0x80);
+    check("DEACTIVATE: reported off once the read-back level settles",
+          is_ack(cmd(3, 0x09, 0x80)) && poll(3, &in, &out) && out == 0x80);
+    s_now += LOCALIO_SAMPLE_US;
+    poll(3, &in, &out);
+    s_now += LOCALIO_SAMPLE_US;
+    check("  off after two samples", poll(3, &in, &out) && out == 0x00);
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

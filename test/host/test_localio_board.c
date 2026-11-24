@@ -262,6 +262,23 @@ int main(void)
     s_now += LOCALIO_SAMPLE_US;
     check("relays on do not read back as inputs", poll(1, &in, &out) && in == 0x00);
 
+    // ---------------- manual relay switch: pulls an off relay's pin low -> DOUT reported on
+#if CONFIG_CLU_LOCAL_IO_OUT_P0
+    s_pulled_low = 0x0001; // P00: relay 1
+#else
+    s_pulled_low = 0x0100; // P10: relay 1
+#endif
+    s_now += LOCALIO_SAMPLE_US;
+    poll(1, &in, &out);
+    s_now += LOCALIO_SAMPLE_US;
+    check("relay 1 switched on by hand -> reported on, not as an input",
+          poll(1, &in, &out) && out == 0x81 && in == 0x00 && relay_pins(s_latch) == 0x7f);
+    s_pulled_low = 0;
+    s_now += LOCALIO_SAMPLE_US;
+    poll(1, &in, &out);
+    s_now += LOCALIO_SAMPLE_US;
+    check("  switched back off -> reported off", poll(1, &in, &out) && out == 0x80);
+
 #if BOARD_F8
     // ---------------- GPIO inputs: pin k in the list pulled low -> module 2 DIN channel k on
     s_gpio_pulled_low = 1ULL << 48 | 1ULL << 14; // first and last pin

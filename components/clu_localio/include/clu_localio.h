@@ -31,8 +31,12 @@ extern "C" {
 typedef struct {
     /** Drive all 16 outputs; false on failure. */
     bool (*write)(uint16_t on, void *ctx);
-    /** Read all 16 inputs; false on failure. */
-    bool (*read)(uint16_t *active, void *ctx);
+    /**
+     * Read all 16 inputs and the actual level of all 16 outputs (on hardware that can read an
+     * output back, e.g. a manual relay switch pulling the expander pin; otherwise as last
+     * written); false on failure.
+     */
+    bool (*read)(uint16_t *active, uint16_t *outputs_on, void *ctx);
     void *ctx;
 } localio_hw_t;
 

@@ -42,6 +42,7 @@ static const char *TAG = "localio";
 
 static i2c_master_dev_handle_t s_dev;
 static bool s_write_ok = true, s_read_ok = true; // last result, to log only changes
+static uint16_t s_written_outputs; // outputs as last written (bit = channel, 1 = on)
 static gpio_num_t s_gpio_inputs[GPIO_INPUTS_MAX];   // module 2 DIN1.. pins (GPIO_NUM_NC: the 1-Wire bus)
 static int s_gpio_input_count;
 static uint32_t s_serial_numbers[LOCALIO_MAX_MODULES];
@@ -79,11 +80,21 @@ static bool hw_write(uint16_t on, void *ctx)
 #endif
     esp_err_t err = i2c_master_transmit(s_dev, output_bytes, sizeof output_bytes, I2C_TIMEOUT);
     track(&s_write_ok, err == ESP_OK, "write", err);
+    if (err == ESP_OK) {
+        s_written_outputs = on;
+    }
     return err == ESP_OK;
 }
 
-/** @brief localio_hw_t::read: the 8 PCF8575 inputs (bits 0-7) and the GPIO inputs (bits 8-15). */
-static bool hw_read(uint16_t *active, void *ctx)
+/**
+ * @brief localio_hw_t::read: the 8 PCF8575 inputs (bits 0-7) and the GPIO inputs (bits 8-15); the
+ * relay pin levels (bits 0-7) and the GPIO module's outputs as last written (bits 8-15).
+ *
+ * With active-low outputs, a relay that is off leaves its pin only weakly high, so a manual relay
+ * switch pulling the pin low (KinCony F8) reads as the relay on. With active-high outputs a weakly
+ * high pin under load may read low, so the relays are reported as last written.
+ */
+static bool hw_read(uint16_t *active, uint16_t *outputs_on, void *ctx)
 {
     uint8_t input_bytes[2];
     esp_err_t err = i2c_master_receive(s_dev, input_bytes, sizeof input_bytes, I2C_TIMEOUT);
@@ -93,11 +104,15 @@ static bool hw_read(uint16_t *active, void *ctx)
     }
 #if CONFIG_CLU_LOCAL_IO_OUT_P0
     uint8_t in = input_bytes[1];
+    uint8_t relay_pins = input_bytes[0];
 #else
     uint8_t in = input_bytes[0];
+    uint8_t relay_pins = input_bytes[1];
 #endif
     uint8_t expander_inputs = (uint8_t)(CONFIG_CLU_LOCAL_IO_IN_ACTIVE_LOW ? ~in : in);
     *active = (uint16_t)(expander_inputs | read_gpio_inputs() << 8);
+    uint8_t relays_on = (uint8_t)(CONFIG_CLU_LOCAL_IO_OUT_ACTIVE_LOW ? ~relay_pins : s_written_outputs);
+    *outputs_on = (uint16_t)((s_written_outputs & 0xff00u) | relays_on);
     return true;
 }
 

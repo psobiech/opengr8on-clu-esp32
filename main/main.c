@@ -430,7 +430,7 @@ void app_main(void)
         .de_pin = CONFIG_CLU_RS485_DE_GPIO,
         .baud = CONFIG_CLU_TFBUS_BAUD,
 #else
-        .uart_num = -1, // the RS485 pins carry the MySensors gateway: emulated modules only
+        .uart_num = -1, // no TF-Bus wire (MySensors gateway or RS485 off): emulated modules only
 #endif
     };
     tfbus_uart_init(&uart_config);

@@ -413,12 +413,20 @@ Podmenu **RS485 bus (TF-Bus / MySensors)**.
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|
-| `CLU_BUS` | `CLU_TFBUS` | co działa na pinach RS485 / UART: `CLU_TFBUS` (master TF-Bus), `CLU_MYSENSORS` ([MYSENSORS.md](docs/MYSENSORS.md)) albo `CLU_BUS_NONE` (RS485 wyłączone: tylko obiekty wirtualne, skrypty i usługi sieciowe; jedyny wybór przy GATE) |
+| `CLU_BUS` | `CLU_TFBUS` | co działa na pinach RS485 / UART: `CLU_TFBUS` (master TF-Bus), `CLU_MYSENSORS` ([MYSENSORS.md](docs/MYSENSORS.md)) albo `CLU_BUS_NONE` (RS485 wyłączone: tylko obiekty wirtualne, skrypty, usługi sieciowe i IO na płytce; jedyny wybór przy GATE) |
 | `CLU_RS485_UART` | 1 | numer UART |
 | `CLU_RS485_TX_GPIO` / `RX_GPIO` | 17 / 18 | piny |
 | `CLU_RS485_DE_GPIO` | 21 | pin DE/RE, `-1` = transceiver z automatycznym kierunkiem |
 | `CLU_TFBUS_BAUD` | 115200 | prędkość TF-Bus (MySensors: własna opcja, zob. [MYSENSORS.md](docs/MYSENSORS.md)) |
-| `CLU_LOCAL_IO` | n (y w profilach F8 / A8v3) | 8 przekaźników + 8 wejść płytki na PCF8575 jako IO_MODULE_DIN_8, zob. [KinCony F8](docs/devices/kincony-f8.md), [KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) |
+
+### IO na płytce, RTC, wyświetlacz
+
+Opcje **On-board IO as a TF-Bus module (PCF8575)**, **RTC** i wyświetlacza, w menu zaraz pod
+**RS485 bus (TF-Bus / MySensors)**.
+
+| Opcja | Domyślnie | Opis |
+|---|---|---|
+| `CLU_LOCAL_IO` | n (y w profilach F8 / A8v3) | 8 przekaźników + 8 wejść płytki na PCF8575 jako IO_MODULE_DIN_8, zob. [KinCony F8](docs/devices/kincony-f8.md), [KC868-A8v3](docs/devices/kincony-kc868-a8v3.md); działa z każdym `CLU_BUS`, także bez RS485 (`CLU_BUS_NONE`) |
 | `CLU_LOCAL_IO_SDA_GPIO` / `SCL_GPIO` | 8 / 18 | I2C ekspandera (te same piny co RTC = wspólna magistrala) |
 | `CLU_LOCAL_IO_ADDR` | 0x24 | adres PCF8575 |
 | `CLU_LOCAL_IO_OUT_PINS` | P10–P17 | przekaźniki na P10–P17 (wejścia P00–P07, F8) albo P00–P07 (wejścia P10–P17, A8v3) |

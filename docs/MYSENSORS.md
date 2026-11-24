@@ -15,8 +15,8 @@ moduły emulowane przez firmware (MySensors niżej i wbudowane IO `CLU_LOCAL_IO`
 ## Konfiguracja (menuconfig)
 
 `OpenGr8on ESP32 CLU` → `RS485 bus (TF-Bus / MySensors)`: `Protocol` = `MySensors gateway`, tam
-też piny (`CLU_RS485_*`, wspólne z TF-Bus) i prędkość, podmenu `MySensors gateway` z opcjami poniżej
-i wbudowane IO (`CLU_LOCAL_IO`).
+też piny (`CLU_RS485_*`, wspólne z TF-Bus) i prędkość oraz podmenu `MySensors gateway` z opcjami
+poniżej. Wbudowane IO (`CLU_LOCAL_IO`) jest osobną opcją zaraz pod tym menu.
 
 | Opcja | Domyślnie | Opis |
 |---|---|---|
@@ -162,8 +162,8 @@ firmware-emulated modules (MySensors below and built-in IO `CLU_LOCAL_IO`).
 ## Configuration (menuconfig)
 
 `OpenGr8on ESP32 CLU` → `RS485 bus (TF-Bus / MySensors)`: `Protocol` = `MySensors gateway`, plus
-pins (`CLU_RS485_*`, shared with TF-Bus) and baud rate, `MySensors gateway` submenu with the options
-below, and built-in IO (`CLU_LOCAL_IO`).
+pins (`CLU_RS485_*`, shared with TF-Bus), baud rate and the `MySensors gateway` submenu with the
+options below. Built-in IO (`CLU_LOCAL_IO`) is a separate option right below that menu.
 
 | Option | Default | Description |
 |---|---|---|

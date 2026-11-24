@@ -90,3 +90,98 @@ Status: `01 | 02 02 10 [U LE u16, 0,01 V]` (PowerSupplyVoltage) oraz po zmianie
   Value i zimny do 0 (cieplej) albo odwrotnie. Stop ok. 0,25 s po ostatnim wywołaniu, potem
   Value i ColorTemp wynikają z raportu modułu.
 - Założenia niesprawdzone: rampa w pełnych sekundach jak w LED_CHANNEL, SwitchOff → 0.
+
+---
+
+# TF-Bus module drivers
+
+Behavior of lighting module drivers. Frames and method behavior match captures of a real CLU
+controlling these modules (host tests `test_drivers` compare them byte-for-byte). Events
+(OnValueChange, OnSwitchOn, …) are not visible on the bus, so their semantics are unverified.
+Module support status: [README](../README.md#moduły-tf-bus).
+
+- [Common rules](#common-rules)
+- [DIMMER_MOSFET_DIN](#dimmer_mosfet_din-1)
+- [LED_RGBW_DIN](#led_rgbw_din-1)
+
+## Common rules
+
+- Every method call sends frames, even when the value does not change.
+- `Ramp` argument omitted = RampTime property; provided (including 0) = sent as-is.
+- During module discovery and addressing, a real CLU sends nothing to the modules. Settings
+  (RampTime, StartLevel, corrections, DistributedLogicGroup, …) go onto the bus from `set()` in
+  OM.LUA's `OnInit`. The firmware does the same, and additionally sends the last script-set state
+  after re-addressing a module (coming back online).
+- `Switch*` with `Time > 0` restores the previous value once the timer expires.
+- `Hold*` (called from a button's OnHold): a gap longer than approx. 0.5 s starts a new hold in the
+  opposite direction (from either end of the range, always toward the middle).
+
+## DIMMER_MOSFET_DIN
+
+hwType 0x1a, DIMM object (class 5).
+
+| Frame (MODULE_CMD) | When |
+|---|---|
+| `06 05 00 [0, ms LE u16, 0, 0]` SET_RAMP_TIME | before every level; SetRampTime immediately |
+| `0c 03 00 [0, level LE u16]` level 0–1000 | SetValue, Switch*, HoldValue; end of timed Switch* without SET_RAMP_TIME |
+| `0e 03 00 [0, level LE u16]` | SetStartLevel |
+| `0f 04 00 [0, 1, group LE u16]` | DistributedLogicGroup |
+
+- Status: `02 | 01 02 10 [level LE u16] | 00 01 01 [inputs]` (level = target).
+- Min/MaxValue clamp the value in the CLU (OnOutOfRange); SwitchOn → MaxValue or (Mode 1) last
+  value above MinValue, SwitchOff → MinValue.
+- HoldValue(Ramp): each call steps by 100/Ramp of the full 0–1 range (Ramp 3000 → 0.033) with
+  SET_RAMP_TIME = Ramp; stops at the end of the range.
+- Last value (Mode LastValue) is saved in NVS and survives CLU reboot.
+
+## LED_RGBW_DIN
+
+hwType 0x18: LEDRGB (class 9), LED_CHANNEL ×4 (class 49), LED_CCT ×2 (class 72),
+PowerSupplyVoltage (class 12). Module channels: 0 R, 1 G, 2 B, 3 W.
+
+| Frame (MODULE_CMD) | When |
+|---|---|
+| `06 05 00 [channel, t LE u16, 0, 0]` SET_RAMP_TIME, t in 10 ms | before channel value |
+| `05 02 10 [channel, value]` 0–255 | channel value |
+| `07 03 10 [channel, % LE u16]` | Red/Green/BlueCorrection (applied by module) |
+| `13 03 00 [channel, dir 1 up / 2 down / 0 stop, target]` | Hold* (ramp driven by module) |
+| `0f 04 00 [channel, 1, group LE u16]` | DistributedLogicGroup (LED_CHANNEL) |
+
+Status: `01 | 02 02 10 [U LE u16, 0.01 V]` (PowerSupplyVoltage) and after a change
+`n | 04 02 08 [channel, value] …` — channel values used by LED_CHANNEL and LED_CCT.
+
+### LEDRGB
+
+- SET_RAMP_TIME for all four channels (two frames: 3, 2 and 1, 0), followed by one frame with all
+  four values. SetRampTime sends ramps immediately, Min/MaxValue send nothing.
+- Color model in CLU: HSV + R/G/B + W. Hue in whole degrees, Saturation/Value truncated to two
+  decimal places, R/G/B = truncated components × 255 computed from those values. Black and gray:
+  Saturation 0, Hue unchanged.
+- SwitchOn → MaxValue (W unchanged), SwitchOff → all channels including W to 0, Switch based on
+  "anything lit".
+- Hold*: single direction shared across all Hold*. HoldValue: step truncated 100/Ramp;
+  HoldHue: step 36000/Ramp degrees, wraps 0 ↔ 359, ramp 0; `Hold<channel>Value`: step rounded
+  25500/Ramp.
+
+### LED_CHANNEL
+
+- One frame per call: ramp and value for that channel only. Ramp in whole seconds (rounded:
+  200 ms → 0, 999 ms → 1 s, 1500 ms → 2 s).
+- SetValue clamped to [MinValue, MaxValue] and truncated to integer; SwitchOn → MaxValue or
+  (Mode 1) last value > 0; SwitchOff → 0. RampTime and Min/MaxValue are not sent.
+- Hold*: first call starts the module's ramp toward MaxValue / MinValue (t = Ramp), subsequent calls
+  keep it alive, stops approx. 0.55 s after the last call.
+- Value comes from the module report (as on a real CLU, `get()` lags behind); events follow it.
+
+### LED_CCT
+
+- LED_CCT 1 controls channels 0 (warm) and 1 (cool), LED_CCT 2 controls channels 2 and 3.
+- p = ColorTemp% / 100 = (6500 − ColorTemp) / 3800; warm = rounded Value × p,
+  cool = Value − warm. Default 4600 K (50%).
+- Each channel gets its own ramp so both finish together:
+  t = Ramp/10 · Δ · 255 / Δchannel, where Δ is the change in Value/255 or p, and Δchannel is
+  computed from the value last reported by the module.
+- Hold Value*: both channels toward the MaxValue split (up) or 0; HoldColorTemp*: warm to Value and
+  cool to 0 (warmer) or vice versa. Stops approx. 0.25 s after the last call, after which Value and
+  ColorTemp come from the module report.
+- Unverified assumptions: ramp in whole seconds as in LED_CHANNEL, SwitchOff → 0.

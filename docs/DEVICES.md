@@ -19,3 +19,27 @@ na nim nie uruchomi (w logu `Lua VM setup: not enough memory`; sieć, OTA i teln
 Obsługiwane płytki mają 8 MB PSRAM. Flash: 4 MB
 wystarcza (`partitions_4mb.csv`), na ESP32-S3 profile domyślnie zakładają 16 MB;
 `gate-http-N8R8` obsługuje 8 MB flash i 8 MB octal PSRAM (`partitions_8mb.csv`).
+
+---
+
+# Supported devices
+
+Boards on which opengr8on-clu-esp32 runs: pins, **Board** menuconfig option, and hardware notes.
+Building and menuconfig options: [README](../README.md).
+
+- [Waveshare ESP32-S3-RS485-CAN](devices/waveshare-esp32-s3-rs485-can.md) — recommended board (with external antenna)
+- [Other ESP32-S3 boards](devices/other-esp32-s3.md) — custom RS485 transceiver
+- [KinCony F8](devices/kincony-f8.md) — ESP32-S3, W5500, 8 relays / 8 inputs
+- [KinCony KC868-A8v3](devices/kincony-kc868-a8v3.md) — ESP32-S3, W5500, 8 relays / 8 inputs
+- [Grenton GATE](devices/grenton-gate.md) — ESP32-WROVER-B, LAN8720A Ethernet
+
+## Memory requirements
+
+**PSRAM is required.** The Lua runtime alone, before loading the OM project, uses approx. 170 KB
+(standard libraries, `prelude.lua`, virtual objects from `objects.lua`, `mqtt.lua`, `http.lua`),
+plus the OM project, scripts, and HTTP / MQTT payloads. An ESP32 without PSRAM (e.g.
+ESP32-WROOM-32 modules) has approx. 65 KB of free internal RAM after WiFi and services start, so Lua
+will not start on it (`Lua VM setup: not enough memory` in the log; networking, OTA, and telnet
+keep running). Supported boards have 8 MB PSRAM. 4 MB flash is enough (`partitions_4mb.csv`);
+ESP32-S3 profiles assume 16 MB by default; `gate-http-N8R8` supports 8 MB flash and 8 MB octal
+PSRAM (`partitions_8mb.csv`).

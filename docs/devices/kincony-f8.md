@@ -77,3 +77,86 @@ Up 2d 04:05:06
   transferem, więc odpytywanie PCF8575 co 5 ms nie czeka dłużej niż kilka ms.
 - Brak wyświetlacza jest logowany i pomijany.
 - Ekran nie jest dostępny ze skryptów Lua ani z OM.
+
+---
+
+# KinCony F8
+
+ESP32-S3-WROOM-1U N16R8 (16 MB flash, 8 MB PSRAM), W5500 Ethernet over SPI, RS485, and
+8 relays + 8 inputs on a single PCF8575 expander, plus 5 additional GPIO inputs. Board `KinCony F8` in menuconfig (**Board**), preset `f8`
+(see [Building](../../README.md)). Other boards: [Supported devices](../DEVICES.md#supported-devices).
+
+- [KinCony F8 — product page](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html)
+- [KinCony F8 — ESPHome Devices](https://devices.esphome.io/devices/kincony-f8/)
+
+Tested on hardware: relays and inputs on PCF8575, GPIO inputs (1-wire terminals and
+spare GPIO), and the display all work. Analog inputs are not supported.
+
+**Power and relays:** 12 V relays are fitted from the factory, but they are socketed (replaceable)
+and 24 V versions can be installed; the board also runs on 24 V power. Relay coil voltage
+must match the board supply voltage.
+
+| Function | GPIO / value | Option |
+|---|---|---|
+| W5500: SCLK / MOSI / MISO / CS | 42 / 43 / 44 / 41 | `CLU_ETH_SPI_*` |
+| W5500: INT / RST | 2 / 1 | `CLU_ETH_SPI_INT_GPIO`, `CLU_ETH_SPI_RST_GPIO` |
+| RS485 TX / RX (no DE, auto-direction) | 16 / 17 | `CLU_RS485_*` |
+| I2C SDA / SCL | 8 / 18 | `CLU_LOCAL_IO_SDA_GPIO`, `CLU_LOCAL_IO_SCL_GPIO` |
+| PCF8575: address | 0x24 | `CLU_LOCAL_IO_ADDR` |
+| PCF8575: relays / inputs | P10–P17 / P00–P07 | `CLU_LOCAL_IO_OUT_PINS` |
+| GPIO inputs (second module DIN1–DIN5) | 48 / 47 / 21 / 15 / 14 | `CLU_LOCAL_IO_GPIO_INPUTS` |
+| SSD1306 128x64 display: address | 0x3C | `CLU_DISPLAY_ADDR` |
+| Setup button | 0 (BOOT) | `CLU_SETUP_BUTTON_GPIO` |
+
+- **Board relays and inputs** appear in OM as a single **IO_MODULE_DIN_8** module (8 DOUT + 8 DIN;
+  channel 1 = relay 1 / DI1). The firmware answers TF-Bus frames for this module itself, so it
+  participates in discovery, addressing, and polling just like RS485 modules and is included in
+  `tfbusDevices` in `a:\CONFIG.JSON`. Add it to your OM project like any discovered module.
+- **GPIO inputs** (4 1-wire terminals GPIO48, 47, 21, 15 with onboard pull-ups and spare terminal
+  GPIO14 without pull-up) form a second **IO_MODULE_DIN_8** module: DIN1–DIN5 in that order,
+  DIN6–DIN8 always inactive. Its DOUT outputs control nothing. The firmware enables internal
+  pull-ups; an input is active when shorted to GND. The 1-wire terminals cannot then be used for
+  1-wire sensors. An empty list in `CLU_LOCAL_IO_GPIO_INPUTS` (`Custom` board) disables this module.
+  When the PCF8575 does not respond, both modules go offline (shared polling).
+- Module serial numbers are generated randomly on first boot and saved in NVS (`localio`
+  namespace), like the CLU serial number; `CLU_LOCAL_IO_SN` / `CLU_LOCAL_IO_SN2` in menuconfig
+  override them.
+- Outputs and inputs are active low (`CLU_LOCAL_IO_OUT_ACTIVE_LOW` /
+  `IN_ACTIVE_LOW`), matching the vendor's ESPHome configs; verified on hardware.
+- Inputs are sampled every 5 ms during module polling; a change counts after two matching
+  samples. An unresponsive expander marks the module offline.
+- Relays are off from power-on (PCF8575 boots with pins high). After
+  module discovery (boot, project reload), the CLU sends it the initial state just like to real
+  modules: all off, then whatever scripts set.
+- W5500 uses GPIO43/44 (UART0 console pins), so **console and logs go over native USB
+  (USB-C port, USB-Serial-JTAG)**; firmware flashing also uses it.
+- DS3231 RTC (0x68) is on the same I2C bus as PCF8575; the profile enables it
+  (`CLU_RTC_CHIP` = DS3231, SDA 8 / SCL 18). Time survives power loss only with a backup battery
+  installed.
+- WiFi is disabled by default and can be enabled alongside Ethernet.
+- Unused: analog inputs, 1-wire sensors, SD card, EEPROM, 433 MHz RF, Tuya module.
+- RS485 without DE pin: see the note on auto-direction transceivers in
+  [Other ESP32-S3 boards](other-esp32-s3.md#rs485-transceiver).
+
+## Display
+
+SSD1306 128x64 OLED (0x3C) on the same I2C bus as PCF8575 and DS3231. The profile enables it
+(`CLU_DISPLAY`). The firmware shows a status screen on it, refreshed every second:
+
+```
+CLU 123456789
+ETH 192.168.1.50
+WiFi -
+
+2026-11-24 12:34:56
+TF-Bus 3/3 online
+Up 2d 04:05:06
+```
+
+- The `WiFi` line is only shown when WiFi is enabled; `-` = interface without an address.
+- Local time (timezone from OM); `Time not set` until first sync (RTC, SNTP, OM).
+- `TF-Bus` counts modules from the project / last discovery, including built-in IO.
+- Only changed lines are sent over I2C (usually clock and uptime), each in a separate short
+  transfer, so 5 ms PCF8575 polling never waits more than a few ms.
+- A missing display is logged and skipped.
+- The screen is not accessible from Lua scripts or OM.

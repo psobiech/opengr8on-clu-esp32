@@ -45,3 +45,53 @@ Na magistrali I2C są: PCF8575 (0x22), EEPROM (0x50, nieużywany) i RTC DS3231 (
 - Nieużywane: wejścia analogowe, 1-wire, EEPROM, wyświetlacz, moduł Tuya.
 - RS485 bez pinu DE: zob. uwagę o transceiverach z automatycznym kierunkiem w
   [Inne płytki ESP32-S3](other-esp32-s3.md#transceiver-rs485).
+
+---
+
+# KinCony KC868-A8v3
+
+ESP32-S3-WROOM-1U N16R8 (16 MB flash, 8 MB PSRAM), W5500 Ethernet over SPI, RS485, and
+8 relays + 8 inputs on a single PCF8575 expander. Board `KinCony KC868-A8v3` in menuconfig
+(**Board**), preset `a8v3` (see [Building](../../README.md)). Other boards:
+[Supported devices](../DEVICES.md#supported-devices).
+
+- [KinCony KC868-A8v3 — product page](https://www.kincony.com/esp32-s3-8-channel-relay-module.html)
+- [ESPHome configuration](https://devices.esphome.io/devices/kincony-kc868-a8v3/) (pins match the Board option)
+
+| Function | GPIO / value | Option |
+|---|---|---|
+| W5500: SCLK / MOSI / MISO / CS | 1 / 2 / 41 / 42 | `CLU_ETH_SPI_*` |
+| W5500: INT / RST | 43 / 44 | `CLU_ETH_SPI_INT_GPIO`, `CLU_ETH_SPI_RST_GPIO` |
+| RS485 TX / RX (no DE, auto-direction) | 39 / 38 | `CLU_RS485_*` |
+| I2C SDA / SCL | 8 / 18 | `CLU_LOCAL_IO_SDA_GPIO`, `CLU_LOCAL_IO_SCL_GPIO` |
+| PCF8575: address | 0x22 | `CLU_LOCAL_IO_ADDR` |
+| PCF8575: relays / inputs | P00–P07 / P10–P17 | `CLU_LOCAL_IO_OUT_PINS` |
+| Setup button | 0 (BOOT) | `CLU_SETUP_BUTTON_GPIO` |
+
+On the I2C bus: PCF8575 (0x22), EEPROM (0x50, unused), and DS3231 RTC (0x68).
+
+- **Board relays and inputs** appear in OM as a single **IO_MODULE_DIN_8** module (8 DOUT + 8 DIN;
+  channel 1 = relay 1 / DI1). The firmware answers TF-Bus frames for this module itself, so it
+  participates in discovery, addressing, and polling just like RS485 modules and is included in
+  `tfbusDevices` in `a:\CONFIG.JSON`. Add it to your OM project like any discovered module.
+- **Input terminals are in reverse order: leftmost is DI8**, rightmost is DI1.
+- An input is active when DI is shorted to GND on the same terminal strip (dry contact);
+  an open input reads approx. 23 V with a 24 V supply. The input LED lights up when active.
+- Outputs and inputs are active low (`CLU_LOCAL_IO_OUT_ACTIVE_LOW` /
+  `IN_ACTIVE_LOW`); verified on hardware.
+- The module serial number is generated randomly on first boot and saved in NVS (`localio`
+  namespace), like the CLU serial number; `CLU_LOCAL_IO_SN` in menuconfig overrides it.
+- Inputs are sampled every 5 ms during module polling; a change counts after two matching
+  samples. An unresponsive expander marks the module offline.
+- Relays are off from power-on (PCF8575 boots with pins high). After
+  module discovery (boot, project reload), the CLU sends it the initial state just like to real
+  modules: all off, then whatever scripts set.
+- W5500 uses GPIO43/44 (UART0 console pins), so **console and logs go over native USB
+  (USB-C port, USB-Serial-JTAG)**; firmware flashing also uses it.
+- DS3231 RTC (0x68) is on the same I2C bus as PCF8575; the profile enables it
+  (`CLU_RTC_CHIP` = DS3231, SDA 8 / SCL 18). Time survives power loss only with a backup battery
+  installed.
+- WiFi is disabled by default and can be enabled alongside Ethernet.
+- Unused: analog inputs, 1-wire, EEPROM, display, Tuya module.
+- RS485 without DE pin: see the note on auto-direction transceivers in
+  [Other ESP32-S3 boards](other-esp32-s3.md#rs485-transceiver).

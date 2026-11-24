@@ -34,3 +34,42 @@ idf.py --preset gate -p /dev/ttyUSB0 erase-flash flash monitor
 
 > **UWAGA: eFuse są nieodwracalne.** `FLASH_CRYPT_CNT` ma 7 bitów, więc szyfrowanie można przełączać
 > tylko kilka razy. Po dopaleniu eFuse fabryczny firmware przestaje się uruchamiać i nie jest możliwe jego przywrócenie!
+
+---
+
+# Grenton GATE
+
+Preset `gate`, target `esp32`, board `Grenton GATE` in menuconfig (**Board**; `sdkconfig.defaults.esp32`,
+`partitions_4mb.csv`): ESP32-WROVER-B (4 MB flash,
+PSRAM), Ethernet via internal EMAC + LAN8720A PHY. Other boards:
+[Supported devices](../DEVICES.md#supported-devices). Default pins:
+
+| Function | GPIO | Option |
+|---|---|---|
+| LAN8720A: MDC / MDIO, PHY address | 23 / 18, 0 | `CLU_ETH_MDC_GPIO`, `CLU_ETH_MDIO_GPIO`, `CLU_ETH_PHY_ADDR` |
+| LAN8720A: reset | 2 | `CLU_ETH_PHY_RST_GPIO` |
+| RMII 50 MHz | oscillator input on GPIO0 | `CLU_ETH_CLK` |
+| RMII data (fixed on ESP32) | TXEN 21, TXD0 19, TXD1 22, CRS_DV 27, RXD0 25, RXD1 26 | — |
+| RS485 (UART1) TX / RX / DE | 4 / 3 / 5 | `CLU_RS485_*` |
+| Reset button (active low) | 34 | `CLU_SETUP_BUTTON_GPIO` |
+
+- WiFi and Ethernet can run concurrently (`CLU_WIFI` + `CLU_ETH`); without Ethernet, WiFi is
+  always enabled. Default on `esp32`: Ethernet only.
+- RTC (`CLU_RTC`) is disabled by default on `esp32` (GPIO38/39 are input-only on ESP32).
+- RS485 RX on GPIO3 is the U0RXD pin: the UART console does not accept input (logs still go out on TX).
+- Partitions: 2 × 1.5 MB OTA, 896 KB FAT.
+
+## Flashing GATE with flash encryption enabled
+
+Disable encryption by burning the
+next `FLASH_CRYPT_CNT` bit (even number of set bits = encryption disabled), then
+flash from scratch:
+
+```bash
+espefuse.py -p /dev/ttyUSB0 summary                    # FLASH_CRYPT_CNT: odd = enabled
+espefuse.py -p /dev/ttyUSB0 burn_efuse FLASH_CRYPT_CNT # +1 bit -> disabled
+idf.py --preset gate -p /dev/ttyUSB0 erase-flash flash monitor
+```
+
+> **WARNING: eFuses are irreversible.** `FLASH_CRYPT_CNT` has 7 bits, so encryption can only be
+> toggled a few times. After burning the eFuse, the factory firmware will no longer boot and cannot be restored!

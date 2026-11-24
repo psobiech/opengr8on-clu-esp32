@@ -294,6 +294,27 @@ int main(void)
         n = tfbus_addr_assign(buf, sizeof buf, 0x12345678, 3);
         tfbus_rx_push(&rx, buf, n, on_frame, &c);
         check("rx ADDR_ASSIGN typed length 9", c.n == 1 && c.last_len == 9);
+
+        // every other CLU -> module frame type: its fixed length; an unknown type by its third byte
+        const struct {
+            uint8_t type;
+            size_t frame_length;
+        } typed_frames[] = {{0x04, 4}, {0x07, 4},  {0x09, 5}, {0x0A, 4},  {0x0B, 4}, {0x18, 7}, {0x2A, 4},
+                            {0x31, 26}, {0xF9, 4}, {0xFB, 25}, {0xFD, 7}, {0xFE, 7}, {0x01, 4}};
+        bool all_typed_lengths_match = true;
+        for (size_t i = 0; i < sizeof typed_frames / sizeof typed_frames[0]; i++) {
+            const uint8_t zero_payload[TFBUS_MAX_PAYLOAD] = {0};
+            n = tfbus_build(buf, sizeof buf, 5, typed_frames[i].type, zero_payload, typed_frames[i].frame_length - 4);
+            tfbus_rx_init(&rx);
+            c.n = 0;
+            tfbus_rx_push(&rx, buf, n, on_frame, &c);
+            if (c.n != 1 || c.last_len != typed_frames[i].frame_length) {
+                printf("  type 0x%02x: %d frame(s), last %zu bytes, want 1 of %zu\n", typed_frames[i].type, c.n,
+                       c.last_len, typed_frames[i].frame_length);
+                all_typed_lengths_match = false;
+            }
+        }
+        check("rx CLU -> module frame types: typed lengths, unknown type by length byte", all_typed_lengths_match);
     }
 
     // --- tftp: packet builders, path edge cases ---

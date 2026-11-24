@@ -613,7 +613,7 @@ static void test_unit(void)
         lua_settop(L, clu);
     }
     check("CLU get: Uptime, State, IsLocalPower, date parts, ISO weekday, hour, UseCloud default, CloudConnection", all);
-    char date[16], tod[16];
+    char date[40], tod[16]; // room for any int: -O0 builds warn about truncation
     snprintf(date, sizeof date, "%04d-%02d-%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
     clu0_get(L, clu, 5);
     clu0_get(L, clu, 6);

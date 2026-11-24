@@ -260,8 +260,8 @@ z `mknvs.py`, firmware tylko je czyta), dwie partycje aplikacji po 4 MB, FAT 6 M
 (projekt, CONFIG.JSON, STORAGE.DAT, certyfikaty).
 Dla `gate-http-N8R8`: `partitions_8mb.csv`, dwie partycje aplikacji po 3 MB i FAT 1920 KB.
 
-> **Pokrycie testami** (make -C test/host coverage, mierzone też w CI): 97,1% linii (77% gałęzi)
-> całego kodu C i 97,8% kodu Lua; razem 97,2%.
+> **Pokrycie testami:** Ponad 2079 testów, pokryte 96,7% linii (75% gałęzi)
+> całego kodu C i 98,8% kodu Lua; razem 97,1%.
 > Testy hosta zastępują ESP-IDF zaślepkami: nie sprawdzają WiFi, FAT, UART ani zegarów na
 > prawdziwym sprzęcie. Uzupełniają je testy emulatora ([test/emulator](test/emulator/README.md),
 > w CI): prawdziwy obraz ESP32-S3 w `esp-emu`.

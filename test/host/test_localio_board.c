@@ -81,8 +81,12 @@ bool clu_localio_sensors_channels(uint32_t serial_number, localio_channels_t *ch
 // GPIO: pins set up by gpio_config; a pin reads low when the outside world pulls it low.
 static uint64_t s_gpio_configured_mask, s_gpio_pulled_low;
 static bool s_gpio_pull_up;
+static bool s_gpio_config_fails;
 esp_err_t gpio_config(const gpio_config_t *config)
 {
+    if (s_gpio_config_fails) {
+        return ESP_ERR_INVALID_ARG;
+    }
     s_gpio_configured_mask = config->pin_bit_mask;
     s_gpio_pull_up = config->mode == GPIO_MODE_INPUT && config->pull_up_en == GPIO_PULLUP_ENABLE;
     return ESP_OK;
@@ -332,6 +336,19 @@ int main(void)
           n > 0 && tfbus_parse_response(rx, (size_t)n, &pl, &plen) && tfbus_parse_discover(pl, plen, &id) &&
               id.sn == 330000002 && nvs_get_u32(1, "sn2", &stored) == ESP_OK && stored == 330000002);
 #endif
+
+    // ---------------- GPIO input pin list (menuconfig text): any error disables the GPIO module
+    s_gpio_configured_mask = 0;
+    check("pin list with spaces: 3 inputs, pull-up",
+          setup_gpio_inputs("  4, 5 ,6") == 3 && s_gpio_inputs[0] == 4 && s_gpio_inputs[2] == 6 &&
+              s_gpio_configured_mask == (1ULL << 4 | 1ULL << 5 | 1ULL << 6));
+    check("pin list: not a number -> disabled", setup_gpio_inputs("4,x") == 0);
+    check("pin list: invalid GPIO -> disabled", setup_gpio_inputs("4,49") == 0);
+    check("pin list: more than 8 pins -> disabled", setup_gpio_inputs("1,2,3,4,5,6,7,8,9") == 0);
+    check("pin list: empty / blanks only -> no module", setup_gpio_inputs("   ") == 0);
+    s_gpio_config_fails = true;
+    check("pin list: gpio_config error -> disabled", setup_gpio_inputs("4") == 0);
+    s_gpio_config_fails = false;
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

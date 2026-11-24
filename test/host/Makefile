@@ -11,7 +11,9 @@ COVERAGE ?= 0
 COV := $(if $(filter 1,$(COVERAGE)),--coverage)
 TCC := $(CC) $(COV)
 SAN := -fsanitize=address,undefined
-CFLAGS := -std=c11 -Wall -Wextra -Werror -O1 -g $(SAN) -I$(PROTO)/include
+# Coverage builds run unoptimised: -O1 merges lines and turns switches into tables gcov cannot attribute.
+OPT := $(if $(COV),-O0,-O1)
+CFLAGS := -std=c11 -Wall -Wextra -Werror $(OPT) -g $(SAN) -I$(PROTO)/include
 # Tests compile against these stubs and headers: rebuild when they change.
 STUBS := $(wildcard stubs/*.h stubs/*/*.h)
 HDRS := $(wildcard $(COMP)/*/include/*.h $(COMP)/tfbus_drivers/*.h $(MAIN)/*.h)
@@ -38,24 +40,24 @@ $(LUALIB): $(LUA_SRCS)
 	ar rcs $@ $(OUT)/lua/*.o && rm -rf $(OUT)/lua
 
 $(OUT)/test_drivers: test_drivers.c $(DRV_SRCS) $(PROTO)/tfbus_frame.c $(LUALIB) $(STUBS) $(HDRS)
-	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter $(OPT) -g $(SAN) \
 	    $(LUA_DEFS) $(DRV_INC) -o $@ test_drivers.c $(DRV_SRCS) $(PROTO)/tfbus_frame.c $(LUALIB) -lm -ldl
 
 MASTER_INC := -Istubs -I$(COMP)/clu_proto/include -I$(LUA_DIR) -I$(COMP)/clu_lua/include \
               -I$(COMP)/tfbus_master/include -I$(COMP)/tfbus_uart/include
 
 $(OUT)/test_master: test_master.c $(COMP)/tfbus_master/tfbus_master.c $(PROTO)/tfbus_frame.c $(LUALIB) $(STUBS) $(HDRS)
-	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-but-set-variable -O1 -g $(SAN) \
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-but-set-variable $(OPT) -g $(SAN) \
 	    $(LUA_DEFS) $(MASTER_INC) -o $@ test_master.c $(PROTO)/tfbus_frame.c $(LUALIB) -lm -ldl
 
 # On-board IO emulation (two IO_MODULE_DIN_8 answering TF-Bus frames) against fake expanders.
 $(OUT)/test_localio: test_localio.c $(COMP)/clu_localio/localio.c $(PROTO)/tfbus_frame.c $(PROTO)/tfbus_vmod.c $(STUBS) $(HDRS)
-	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter $(OPT) -g $(SAN) \
 	    -Istubs -I$(PROTO)/include -I$(COMP)/clu_localio/include -o $@ $(filter %.c,$^)
 
 # On-board analog inputs / 1-Wire sensors as TF-Bus modules (localio_sensors.c, included by the test).
 $(OUT)/test_localio_sensors: test_localio_sensors.c $(COMP)/clu_localio/localio_sensors.c $(PROTO)/tfbus_frame.c $(PROTO)/tfbus_vmod.c $(STUBS) $(HDRS)
-	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter $(OPT) -g $(SAN) \
 	    -Istubs -I$(PROTO)/include -I$(COMP)/clu_localio/include -o $@ test_localio_sensors.c $(PROTO)/tfbus_frame.c $(PROTO)/tfbus_vmod.c
 
 # On-board analog inputs / 1-Wire buses hardware glue (clu_localio_sensors.c, included by the test)
@@ -85,17 +87,17 @@ UDP_INC := -Istubs -I$(MAIN) -I$(PROTO)/include -I$(COMP)/clu_crypto/include -I$
            -I$(COMP)/clu_lua/include -I$(COMP)/tfbus_master/include -I$(COMP)/clu_tftp/include
 
 $(OUT)/test_udp: test_udp.c $(MAIN)/udp_server.c $(PROTO)/clu_keys.c $(STUBS) $(HDRS)
-	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter $(OPT) -g $(SAN) \
 	    $(UDP_INC) -o $@ test_udp.c $(PROTO)/clu_keys.c
 
 # The same without a TF-Bus master (CLU_BUS_NONE / GATE): discovery and "Clear CLU" do not rescan.
 $(OUT)/test_udp_nobus: test_udp.c $(MAIN)/udp_server.c $(PROTO)/clu_keys.c $(STUBS) $(HDRS)
-	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter $(OPT) -g $(SAN) \
 	    $(UDP_INC) -DCONFIG_CLU_TFBUS=0 -o $@ test_udp.c $(PROTO)/clu_keys.c
 
 # RS485 transport (tfbus_uart.c) against a fake ESP-IDF UART driver.
 $(OUT)/test_uart: test_uart.c $(COMP)/tfbus_uart/tfbus_uart.c $(PROTO)/tfbus_frame.c $(STUBS) $(HDRS)
-	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) \
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter $(OPT) -g $(SAN) \
 	    -Istubs -I$(PROTO)/include -I$(COMP)/tfbus_uart/include -o $@ $(filter %.c,$^)
 
 # System helpers in main/ (network, time, identity/keys, diagnostics, sysinfo): each source is a
@@ -105,7 +107,7 @@ SYS_OBJS := $(patsubst $(MAIN)/%.c,$(OUT)/sys_%.o,$(SYS_SRCS))
 SYS_INC := -Istubs -I. -I$(MAIN) -I$(PROTO)/include -I$(COMP)/clu_crypto/include -I$(LUA_DIR) \
            -I$(COMP)/clu_lua/include -I$(COMP)/tfbus_master/include -I$(COMP)/clu_mqtt/include \
            -I$(COMP)/clu_rtc/include -I$(COMP)/clu_localio/include
-HOST_CFLAGS := -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter -O1 -g $(SAN) $(LUA_DEFS)
+HOST_CFLAGS := -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter $(OPT) -g $(SAN) $(LUA_DEFS)
 
 $(OUT)/sys_%.o: $(MAIN)/%.c sys_host.h $(STUBS) $(HDRS)
 	$(TCC) $(HOST_CFLAGS) $(SYS_INC) -include sys_host.h -c $< -o $@
@@ -211,7 +213,7 @@ $(OUT)/test_eth_w5500: test_eth.c $(MAIN)/clu_eth.c $(STUBS) $(HDRS)
 MBEDTLS3_INC ?= /usr/include/mbedtls3
 MBEDTLS3_LIB ?= /usr/lib/mbedtls3
 $(OUT)/test_crypto: test_crypto.c $(COMP)/clu_crypto/clu_crypto.c $(PROTO)/clu_keys.c
-	$(TCC) -std=gnu11 -Wall -Wextra -Werror -O1 -g $(SAN) \
+	$(TCC) -std=gnu11 -Wall -Wextra -Werror $(OPT) -g $(SAN) \
 	    -Istubs -I$(MBEDTLS3_INC) -I$(PROTO)/include -I$(COMP)/clu_crypto/include \
 	    -o $@ $^ $(MBEDTLS3_LIB)/libmbedcrypto.a
 

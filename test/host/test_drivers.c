@@ -1576,6 +1576,31 @@ int main(void)
         check_frames("LED_CCT SetValue(0) from the module's 71 + 111, RampTime 1000 == capture",
                      T_OUT("02", "0001", "00", "47") T_OUT("03", "a300", "00", "e5"));
 #undef T_OUT
+
+        // timed SwitchOn: back to the previous Value at expiry (timer context: posted, not stored)
+        lua_execn(m, 72, 1, 4, 1, (lua_Number[]){2000}); // SwitchOn(2000)
+        check("LED_CCT SwitchOn(2000): Value = MaxValue", s_feat[2] == 255);
+        frames_reset();
+        posts_reset();
+        timers_advance(1999000);
+        check_frames("LED_CCT timed SwitchOn: nothing sent before expiry", "");
+        timers_advance(1000);
+        check("LED_CCT timed SwitchOn: both channels off at expiry", count_frames(s_frames, "aa05f00f") == 2);
+        check("LED_CCT timed SwitchOn: Value 0, Change + Off posted at expiry",
+              strstr(s_posts, "CCT[2]=0 CCT!0 CCT!3 ") != NULL);
+
+        // revert dropped by a full defer queue: LED_RGBW's overdue scan reaches the CCT timer
+        lua_execn(m, 72, 1, 4, 1, (lua_Number[]){2000});
+        s_defer_full = true;
+        frames_reset();
+        timers_advance(2000000);
+        s_defer_full = false;
+        check_frames("LED_CCT timed SwitchOn: revert dropped with a full defer queue", "");
+        m->drv->overdue(m);
+        check("LED_CCT overdue: dropped revert runs by deadline", count_frames(s_frames, "aa05f00f") == 2);
+        frames_reset();
+        m->drv->overdue(m);
+        check_frames("LED_CCT overdue: runs once", "");
         reset_module(m);
 #undef R_RAMP
 #undef R_0

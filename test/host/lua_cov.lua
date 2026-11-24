@@ -2,10 +2,14 @@
 -- Appends "<source>\t<line>" for every line of components/ code that ran (see coverage.py).
 local getinfo, sethook, open, pairs = debug.getinfo, debug.sethook, io.open, pairs
 local hits = {}
-sethook(function(_, l)
+local function hook(_, l)
   local s = getinfo(2, "S").source
   if s:find("components/") then local t = hits[s] or {}; hits[s] = t; t[l] = true end
-end, "l")
+end
+sethook(hook, "l")
+-- Hooks are per thread: also count lines run in coroutines (event handlers, remote CLU calls).
+local cocreate = coroutine.create
+coroutine.create = function(fn) local co = cocreate(fn); sethook(co, hook, "l"); return co end
 local function flush()
   sethook()
   local f = open(COVOUT, "a")

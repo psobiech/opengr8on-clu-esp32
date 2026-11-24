@@ -174,6 +174,8 @@ static void test_start(void)
     s_onewire_gpio_list = "";
     check("no inputs and no 1-Wire bus: not started", !clu_localio_sensors_start(1234) && s_setups == 0 &&
                                                           s_task_function == NULL);
+    localio_channels_t channels;
+    check("not started: no channels for any serial", !clu_localio_sensors_channels(1234, &channels));
 
     s_analog_input_list = "1";
     s_task_create_fails = true;
@@ -196,11 +198,17 @@ static void test_start(void)
     check("sensor task: name, stack, priority", s_task_function == sensor_task &&
                                                     strcmp(s_task_name, "localio_sens") == 0 &&
                                                     s_task_stack_size == 4096 && s_task_priority == 3);
+    check("channels: one analog input, one 1-Wire hub",
+          clu_localio_sensors_channels(5678, &channels) && channels.analog_inputs == 0x01 &&
+              channels.onewire_hubs == 1 && channels.digital_inputs == 0 && channels.digital_outputs == 0);
+    check("channels: other serial -> not this module", !clu_localio_sensors_channels(1234, &channels));
 
     s_analog_input_list = "";
     s_failing_bus_gpio = -1;
     check("1-Wire only: started", clu_localio_sensors_start(42) && s_onewire_bus_count == 3 &&
                                       s_analog_input_count == 0);
+    check("channels: 1-Wire only -> hub, no analog inputs",
+          clu_localio_sensors_channels(42, &channels) && channels.analog_inputs == 0 && channels.onewire_hubs == 1);
 }
 
 // ---------------------------------------------------------------- task: search, conversion, reading

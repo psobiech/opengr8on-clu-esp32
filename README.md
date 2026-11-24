@@ -47,7 +47,7 @@ aplikacji `opengr8on-clu-<płytka>-<wersja>-ota.bin` ([aktualizacja przez sieć]
 | Płytka | Pełny obraz z wydania (USB) | Układ | Sieć |  Przetestowane | 
 |---|---|---|---|---|
 | [Waveshare ESP32-S3-RS485-CAN](docs/devices/waveshare-esp32-s3-rs485-can.md) ([sklep Kamami](https://kamami.pl/moduly-wifi/1201081-industrial-esp32-s3-control-board-with-rs485-and-can-communication-interfaces-supports-wi-fi-blue-5902186330269.html)) | `opengr8on-clu-waveshare-<wersja>.bin` | `esp32s3` | WiFi | TAK|
-| [KinCony F8](docs/devices/kincony-f8.md) ([strona produktu](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html)) | `opengr8on-clu-f8-<wersja>.bin` | `esp32s3` | Ethernet | Nie (w drodze)|
+| [KinCony F8](docs/devices/kincony-f8.md) ([strona produktu](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html)) | `opengr8on-clu-f8-<wersja>.bin` | `esp32s3` | Ethernet | TAK|
 | [KinCony KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) ([strona produktu](https://www.kincony.com/esp32-s3-8-channel-relay-module.html)) | `opengr8on-clu-a8v3-<wersja>.bin` | `esp32s3` | Ethernet | TAK|
 | [ESP32-S3 N8R8](docs/devices/other-esp32-s3.md) ([sklep Kamami](https://kamami.pl/esp32/1184834-esp32-s3-microcontroller-2-4ghz-wi-fi-development-board-240mhz-dual-core-processor-esp32-s3-wroom-5906623423545.html)) — GATE HTTP, 8 MB flash / 8 MB PSRAM | `opengr8on-gate-http-esp32s3-<wersja>-N8R8.bin` | `esp32s3` | WiFi | W trakcie|
 
@@ -307,7 +307,7 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 | DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](docs/TFBUS.md#dimmer_mosfet_din) |
 | LED_RGBW_DIN (0x18) | 🟡 | LEDRGB, LED_CHANNEL ×4, LED_CCT ×2, PowerSupplyVoltage; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](docs/TFBUS.md#led_rgbw_din) |
 | Pozostałe moduły TF-Bus (ściemniacze FM, LED FM, analogowe itd.) | ❌ | brak sterowników |
-| Wbudowane IO płytki (PCF8575) jako IO_MODULE_DIN_8 | 🟡 | [KinCony F8](docs/devices/kincony-f8.md) (niesprawdzone na sprzęcie), [KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) (sprawdzone na sprzęcie) |
+| Wbudowane IO płytki (PCF8575) jako IO_MODULE_DIN_8 | 🟡 | [KinCony F8](docs/devices/kincony-f8.md) (sprawdzone na sprzęcie), [KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) (sprawdzone na sprzęcie) |
 
 ### Czego brakuje względem CLU_ZWAVE_2
 

@@ -5,6 +5,14 @@ ESP32-S3-WROOM-1U N16R8 (16 MB flash, 8 MB PSRAM), Ethernet W5500 na SPI, RS485 
 (zob. [Budowanie](../../README.md#budowanie)). Pozostałe płytki: [Obsługiwane urządzenia](../DEVICES.md).
 
 - [KinCony F8 — strona produktu](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html)
+- [KinCony F8 — ESPHome Devices](https://devices.esphome.io/devices/kincony-f8/)
+
+Przetestowane na sprzęcie: przekaźniki i wejścia na PCF8575 działają. Pozostałe wejścia płytki
+(analogowe, 1-wire itd.) nie są obsługiwane.
+
+**Zasilanie i przekaźniki:** fabrycznie montowane są przekaźniki na 12 V, ale są wymienne (w
+podstawkach) i można założyć wersje na 24 V; płytka pracuje też przy zasilaniu 24 V. Napięcie
+cewek przekaźników musi odpowiadać napięciu zasilania płytki.
 
 | Funkcja | GPIO / wartość | Opcja |
 |---|---|---|
@@ -23,8 +31,7 @@ ESP32-S3-WROOM-1U N16R8 (16 MB flash, 8 MB PSRAM), Ethernet W5500 na SPI, RS485 
 - Numer seryjny modułu jest losowany przy pierwszym starcie i zapisywany w NVS (przestrzeń
   `localio`), jak numer CLU; `CLU_LOCAL_IO_SN` w menuconfig go nadpisuje.
 - Wyjścia i wejścia są aktywne stanem niskim (`CLU_LOCAL_IO_OUT_ACTIVE_LOW` /
-  `IN_ACTIVE_LOW`), jak w konfiguracjach ESPHome producenta; na F8 niesprawdzone na sprzęcie
-  (na [KC868-A8v3](kincony-kc868-a8v3.md) sprawdzone).
+  `IN_ACTIVE_LOW`), jak w konfiguracjach ESPHome producenta; sprawdzone na sprzęcie.
 - Wejścia są próbkowane co 5 ms przy odpytywaniu modułu; zmiana liczy się po dwóch zgodnych
   próbkach. Ekspander, który nie odpowiada, oznacza moduł jako offline.
 - Przekaźniki są wyłączone od włączenia zasilania (PCF8575 startuje ze stanem wysokim). Po

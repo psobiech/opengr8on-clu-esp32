@@ -1,7 +1,7 @@
 /**
  * @file clu_localio.c
- * @brief On-board IO glue: module serial (NVS / menuconfig), one PCF8575 (8 relays + 8 inputs),
- * tfbus_uart hook.
+ * @brief On-board IO glue: module serials (NVS / menuconfig), one PCF8575 (8 relays + 8 inputs,
+ * module 1), optional ESP32 GPIO inputs (CLU_LOCAL_IO_GPIO_INPUTS, DIN of module 2), tfbus_uart hook.
  */
 #include "clu_localio.h"
 
@@ -13,6 +13,7 @@
 
 #include "clu_crypto.h"
 #include "clu_i2c.h"
+#include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "nvs.h"
@@ -23,9 +24,21 @@ static const char *TAG = "localio";
 #define NVS_NS      "localio"
 #define I2C_HZ      400000
 #define I2C_TIMEOUT 20 // ms
+#define GPIO_INPUTS_MAX 8
+
+#ifdef CONFIG_CLU_LOCAL_IO_SN2
+#define LOCAL_IO_SN2 CONFIG_CLU_LOCAL_IO_SN2
+#else
+#define LOCAL_IO_SN2 ""
+#endif
 
 static i2c_master_dev_handle_t s_dev;
 static bool s_write_ok = true, s_read_ok = true; // last result, to log only changes
+static gpio_num_t s_gpio_inputs[GPIO_INPUTS_MAX];   // module 2 DIN1.. pins
+static int s_gpio_input_count;
+
+static uint8_t read_gpio_inputs(void);
+static int setup_gpio_inputs(const char *pin_list);
 
 /** @brief Log the expander failing / recovering once per change. */
 static void track(bool *ok, bool now, const char *what, esp_err_t err)
@@ -59,7 +72,7 @@ static bool hw_write(uint16_t on, void *ctx)
     return err == ESP_OK;
 }
 
-/** @brief localio_hw_t::read: the 8 inputs (bits 0-7). */
+/** @brief localio_hw_t::read: the 8 PCF8575 inputs (bits 0-7) and the GPIO inputs (bits 8-15). */
 static bool hw_read(uint16_t *active, void *ctx)
 {
     uint8_t input_bytes[2];
@@ -73,8 +86,21 @@ static bool hw_read(uint16_t *active, void *ctx)
 #else
     uint8_t in = input_bytes[0];
 #endif
-    *active = (uint8_t)(CONFIG_CLU_LOCAL_IO_IN_ACTIVE_LOW ? ~in : in);
+    uint8_t expander_inputs = (uint8_t)(CONFIG_CLU_LOCAL_IO_IN_ACTIVE_LOW ? ~in : in);
+    *active = (uint16_t)(expander_inputs | read_gpio_inputs() << 8);
     return true;
+}
+
+/** @brief GPIO inputs, bit i = s_gpio_inputs[i] pulled low. */
+static uint8_t read_gpio_inputs(void)
+{
+    uint8_t active_inputs = 0;
+    for (int i = 0; i < s_gpio_input_count; i++) {
+        if (gpio_get_level(s_gpio_inputs[i]) == 0) {
+            active_inputs |= (uint8_t)(1u << i);
+        }
+    }
+    return active_inputs;
 }
 
 static const localio_hw_t s_hw = {.write = hw_write, .read = hw_read};
@@ -115,7 +141,13 @@ void clu_localio_start(void)
         ESP_LOGE(TAG, "NVS open failed: on-board IO disabled");
         return;
     }
-    const uint32_t serial_number = serial(nvs_handle, "sn1", CONFIG_CLU_LOCAL_IO_SN);
+    s_gpio_input_count = setup_gpio_inputs(CONFIG_CLU_LOCAL_IO_GPIO_INPUTS);
+    const int module_count = s_gpio_input_count > 0 ? 2 : 1;
+    uint32_t serial_numbers[LOCALIO_MAX_MODULES];
+    serial_numbers[0] = serial(nvs_handle, "sn1", CONFIG_CLU_LOCAL_IO_SN);
+    if (module_count == 2) {
+        serial_numbers[1] = serial(nvs_handle, "sn2", LOCAL_IO_SN2);
+    }
     nvs_commit(nvs_handle);
     nvs_close(nvs_handle);
 
@@ -140,10 +172,56 @@ void clu_localio_start(void)
         ESP_LOGW(TAG, "no PCF8575 at 0x%02x", CONFIG_CLU_LOCAL_IO_ADDR);
     }
 
-    localio_setup(&serial_number, 1, &s_hw); // relays off, input pins high
+    localio_setup(serial_numbers, module_count, &s_hw); // relays off, input pins high
     tfbus_uart_add_local(localio_frame);
-    ESP_LOGI(TAG, "on-board IO: IO_MODULE_DIN_8 sn=%lu (PCF8575 0x%02x)", (unsigned long)serial_number,
+    ESP_LOGI(TAG, "on-board IO: IO_MODULE_DIN_8 sn=%lu (PCF8575 0x%02x)", (unsigned long)serial_numbers[0],
              CONFIG_CLU_LOCAL_IO_ADDR);
+    if (module_count == 2) {
+        ESP_LOGI(TAG, "on-board IO: IO_MODULE_DIN_8 sn=%lu (%d GPIO inputs: %s)", (unsigned long)serial_numbers[1],
+                 s_gpio_input_count, CONFIG_CLU_LOCAL_IO_GPIO_INPUTS);
+    }
+}
+
+/**
+ * @brief Parse @p pin_list ("48,47,21") into s_gpio_inputs and make the pins inputs with pull-up.
+ * @return Number of pins; 0 if the list is empty or invalid (no second module).
+ */
+static int setup_gpio_inputs(const char *pin_list)
+{
+    int pin_count = 0;
+    uint64_t pin_mask = 0;
+    const char *cursor = pin_list;
+    while (*cursor == ' ') {
+        cursor++;
+    }
+    while (*cursor) {
+        char *after_number;
+        long pin_number = strtol(cursor, &after_number, 10);
+        if (after_number == cursor || !GPIO_IS_VALID_GPIO(pin_number) || pin_count == GPIO_INPUTS_MAX) {
+            ESP_LOGE(TAG, "GPIO inputs \"%s\": invalid pin list, GPIO input module disabled", pin_list);
+            return 0;
+        }
+        s_gpio_inputs[pin_count++] = (gpio_num_t)pin_number;
+        pin_mask |= 1ULL << pin_number;
+        cursor = after_number;
+        while (*cursor == ',' || *cursor == ' ') {
+            cursor++;
+        }
+    }
+    if (pin_count == 0) {
+        return 0;
+    }
+    const gpio_config_t input_config = {
+        .pin_bit_mask = pin_mask,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+    };
+    esp_err_t err = gpio_config(&input_config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "GPIO inputs \"%s\": %s, GPIO input module disabled", pin_list, esp_err_to_name(err));
+        return 0;
+    }
+    return pin_count;
 }
 
 #else

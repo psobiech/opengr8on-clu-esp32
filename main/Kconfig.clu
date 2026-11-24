@@ -75,7 +75,8 @@ choice CLU_BOARD
         help
             W5500 (SCLK 42, MOSI 43, MISO 44, CS 41, INT 2, RST 1), RS485 with automatic
             direction (TX 16, RX 17), DS3231 RTC, PCF8575 at 0x24 (relays P10-P17, inputs
-            P00-P07) and SSD1306 OLED at 0x3c on I2C SDA 8 / SCL 18, setup button GPIO0. W5500
+            P00-P07) and SSD1306 OLED at 0x3c on I2C SDA 8 / SCL 18, GPIO inputs 48, 47, 21, 15, 14
+            as a second module, setup button GPIO0. W5500
             uses GPIO43/44, the UART0 console pins: the "f8" preset moves the console to
             USB-Serial-JTAG.
             See docs/devices/kincony-f8.md.
@@ -537,6 +538,24 @@ menu "RS485 bus (TF-Bus / MySensors)"
                     module keeps its identity in the OM project across reboots and updates. Set it to
                     take over the serial of a module already in the project. Overrides the NVS value
                     when non-empty.
+
+            config CLU_LOCAL_IO_GPIO_INPUTS
+                string "GPIO inputs as a second module (comma-separated, up to 8)" if CLU_BOARD_CUSTOM
+                default "48,47,21,15,14" if CLU_BOARD_KINCONY_F8
+                default ""
+                help
+                    ESP32 pins read as the DIN channels of a second IO_MODULE_DIN_8 module (first pin
+                    = DIN1). Internal pull-up on; an input is active when pulled low (contact to
+                    GND). The second module's DOUT channels drive nothing. Empty = no second module.
+                    KinCony F8: the four 1-Wire terminals (GPIO48, 47, 21, 15, pull-up on the board)
+                    and the free GPIO14 terminal; they cannot be used for 1-Wire at the same time.
+
+            config CLU_LOCAL_IO_SN2
+                string "GPIO input module serial (decimal, empty = random, stored in NVS)"
+                depends on CLU_LOCAL_IO_GPIO_INPUTS != ""
+                default ""
+                help
+                    Like CLU_LOCAL_IO_SN, for the module with the GPIO inputs.
 
         endif
 

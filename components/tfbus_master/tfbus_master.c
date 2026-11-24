@@ -554,7 +554,108 @@ static int io_execute(lua_State *L, int obj, int idx, int first, int nargs)
     return call_context.ret; // results (if any) are on top
 }
 
-static const clu_class_ops_t s_io_ops = {.on_new = io_on_new, .set = io_set, .execute = io_execute};
+/** @brief Feature value type (interface XML feature `type`). */
+typedef enum { FEATURE_NUMBER, FEATURE_STRING, FEATURE_BOOLEAN } feature_type_t;
+
+/**
+ * @brief Non-numeric features of the objects hosted on modules (module_*.xml interfaces:
+ *        `str` -> string, `confirmation` -> boolean); every other feature is a number.
+ */
+static const struct {
+    uint8_t object_class, index;
+    feature_type_t type;
+} s_feature_types[] = {
+    {9, 6, FEATURE_STRING},    // LEDRGB RGB
+    {10, 0, FEATURE_STRING},   // GSM Inbox
+    {10, 1, FEATURE_STRING},   // GSM Outbox
+    {10, 2, FEATURE_STRING},   // GSM AccessList
+    {10, 3, FEATURE_STRING},   // GSM ScriptList
+    {10, 4, FEATURE_STRING},   // GSM Password
+    {10, 5, FEATURE_BOOLEAN},  // GSM PassMandatory
+    {10, 6, FEATURE_STRING},   // GSM ConfirmMessage
+    {10, 7, FEATURE_STRING},   // GSM RefuseMessage
+    {10, 9, FEATURE_STRING},   // GSM AskConfirm
+    {10, 10, FEATURE_STRING},  // GSM AskRefuse
+    {10, 11, FEATURE_STRING},  // GSM PIN
+    {11, 0, FEATURE_BOOLEAN},  // ROLLER_SH M0
+    {11, 1, FEATURE_BOOLEAN},  // ROLLER_SH M1
+    {19, 1, FEATURE_STRING},   // PANEL_PAGE PageName
+    {19, 3, FEATURE_STRING},   // PANEL_PAGE Object_1_Id
+    {19, 4, FEATURE_STRING},   // PANEL_PAGE Object_1_Name
+    {19, 5, FEATURE_STRING},   // PANEL_PAGE Object_2_Id
+    {19, 6, FEATURE_STRING},   // PANEL_PAGE Object_2_Name
+    {19, 7, FEATURE_STRING},   // PANEL_PAGE Object_3_Id
+    {19, 8, FEATURE_STRING},   // PANEL_PAGE Object_3_Name
+    {19, 9, FEATURE_STRING},   // PANEL_PAGE Object_4_Id
+    {19, 10, FEATURE_STRING},  // PANEL_PAGE Object_4_Name
+    {19, 15, FEATURE_STRING},  // PANEL_PAGE Object_1_CustomIcon
+    {19, 16, FEATURE_STRING},  // PANEL_PAGE Object_2_CustomIcon
+    {19, 17, FEATURE_STRING},  // PANEL_PAGE Object_3_CustomIcon
+    {19, 18, FEATURE_STRING},  // PANEL_PAGE Object_4_CustomIcon
+    {27, 3, FEATURE_STRING},   // DALI_MASTER GearAddresses
+    {27, 4, FEATURE_STRING},   // DALI_MASTER ActiveGears
+    {27, 5, FEATURE_STRING},   // DALI_MASTER MissingGears
+    {29, 4, FEATURE_STRING},   // PANEL GestureIconUp
+    {29, 5, FEATURE_STRING},   // PANEL GestureIconDown
+    {29, 6, FEATURE_STRING},   // PANEL GestureIconLeft
+    {29, 7, FEATURE_STRING},   // PANEL GestureIconRight
+    {30, 4, FEATURE_STRING},   // PANEL_BUTTON Label
+    {30, 5, FEATURE_STRING},   // PANEL_BUTTON IconA
+    {30, 6, FEATURE_STRING},   // PANEL_BUTTON IconB
+    {32, 0, FEATURE_STRING},   // DALI_GEAR Group
+    {33, 5, FEATURE_STRING},   // RS232_CONTROLLER TxBuffer
+    {33, 6, FEATURE_STRING},   // RS232_CONTROLLER RxBuffer
+    {35, 0, FEATURE_STRING},   // DALI_GEAR_DT8 Group
+    {54, 1, FEATURE_STRING},   // ZWAVE_WAKEUP LastWakeUp
+    {59, 0, FEATURE_BOOLEAN},  // ZWAVE_ROLLER_SHUTTER M1 (num in some versions)
+    {59, 1, FEATURE_BOOLEAN},  // ZWAVE_ROLLER_SHUTTER M2 (num in some versions)
+    {64, 6, FEATURE_STRING},   // ZWAVE_CONFIG RepeatersList
+    {70, 3, FEATURE_STRING},   // ZWAVE_LEDRGB RGB
+};
+
+static bool io_get(lua_State *L, int obj, int idx);
+static feature_type_t feature_type(int object_class, int idx);
+
+static const clu_class_ops_t s_io_ops = {.on_new = io_on_new, .get = io_get, .set = io_set, .execute = io_execute};
+
+/**
+ * @brief IO class hook get: a feature with no value yet (before the first status, never set) reads
+ *        its type's zero on every object hosted on a module: "" for str, false for confirmation
+ *        (boolean), 0 for the rest (num). Stored values go the generic way.
+ */
+static bool io_get(lua_State *L, int obj, int idx)
+{
+    lua_getfield(L, obj, "_module");
+    bool hosted_on_module = lua_istable(L, -1);
+    lua_pop(L, 1);
+    if (!hosted_on_module) {
+        return false;
+    }
+    lua_getfield(L, obj, "_f");
+    lua_rawgeti(L, -1, idx);
+    bool has_value = !lua_isnil(L, -1);
+    lua_pop(L, 2);
+    if (has_value) {
+        return false;
+    }
+    switch (feature_type(clu_obj_class(L, obj), idx)) {
+    case FEATURE_STRING: lua_pushliteral(L, ""); break;
+    case FEATURE_BOOLEAN: lua_pushboolean(L, 0); break;
+    default: lua_pushinteger(L, 0); break;
+    }
+    return true;
+}
+
+/** @brief Type of feature @p idx of object class @p object_class (::s_feature_types, num if not listed). */
+static feature_type_t feature_type(int object_class, int idx)
+{
+    for (size_t i = 0; i < sizeof s_feature_types / sizeof s_feature_types[0]; i++) {
+        if (s_feature_types[i].object_class == object_class && s_feature_types[i].index == idx) {
+            return s_feature_types[i].type;
+        }
+    }
+    return FEATURE_NUMBER;
+}
 
 // ---------------------------------------------------------------------------
 // Bus task

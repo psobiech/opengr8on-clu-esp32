@@ -51,8 +51,9 @@ void localio_setup(const uint32_t *serial_numbers, int module_count, const local
 int localio_frame(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity);
 
 /**
- * @brief Board glue (Kconfig CLU_LOCAL_IO): serial from NVS / menuconfig, one PCF8575 on
- * I2C, local endpoint installed in tfbus_uart. Call after nvs_flash_init(), before the bus starts.
+ * @brief Board glue (Kconfig CLU_LOCAL_IO): serials from NVS / menuconfig, one PCF8575 on
+ * I2C (module 1), optional GPIO inputs (CLU_LOCAL_IO_GPIO_INPUTS, module 2), local endpoint
+ * installed in tfbus_uart. Call after nvs_flash_init(), before the bus starts.
  */
 void clu_localio_start(void);
 

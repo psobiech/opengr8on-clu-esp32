@@ -457,6 +457,40 @@ int main(void)
         lua_newtable(L);
         lua_setfield(L, dou, "_f"); // prelude gives every object its feature table
         int top = lua_gettop(L);
+        bool unset_handled = s_ops[4]->get(L, dou, 3);
+        check("io get: feature with no value reads 0, not nil",
+              unset_handled && lua_gettop(L) == top + 1 && lua_isinteger(L, -1) && lua_tointeger(L, -1) == 0);
+        lua_settop(L, top);
+        lua_getfield(L, dou, "_f");
+        lua_pushinteger(L, 7);
+        lua_rawseti(L, -2, 3);
+        lua_settop(L, top);
+        check("io get: stored value left to the generic store, stack unchanged",
+              !s_ops[4]->get(L, dou, 3) && lua_gettop(L) == top);
+        check("io get: virtual object not handled", !s_ops[6]->get(L, vt, 3) && lua_gettop(L) == top);
+        lua_newtable(L);
+        lua_setfield(L, bio, "_f");
+        check("io get: driverless module object reads 0 too", s_ops[4]->get(L, bio, 0) && lua_tointeger(L, -1) == 0);
+        lua_settop(L, top);
+        lua_newtable(L); // LEDRGB on module A, built without on_new (no driver hook)
+        lua_pushinteger(L, 9);
+        lua_setfield(L, -2, "_class");
+        lua_pushvalue(L, A);
+        lua_setfield(L, -2, "_module");
+        lua_newtable(L);
+        lua_setfield(L, -2, "_f");
+        int led = lua_gettop(L);
+        check("io get: unset str feature (LEDRGB RGB) reads \"\"",
+              s_ops[9]->get(L, led, 6) && lua_type(L, -1) == LUA_TSTRING && lua_rawlen(L, -1) == 0);
+        lua_settop(L, led);
+        lua_pushinteger(L, 11);
+        lua_setfield(L, led, "_class"); // same table as a ROLLER_SH
+        check("io get: unset confirmation feature (ROLLER_SH M0) reads false",
+              s_ops[11]->get(L, led, 0) && lua_isboolean(L, -1) && !lua_toboolean(L, -1));
+        lua_settop(L, led);
+        check("io get: unset num feature of the same class reads 0",
+              s_ops[11]->get(L, led, 3) && lua_isinteger(L, -1) && lua_tointeger(L, -1) == 0);
+        lua_settop(L, top);
         lua_pushinteger(L, 21);
         int n = s_ops[4]->execute(L, dou, 8, top + 1, 1);
         check("io execute results passed through the protected call",

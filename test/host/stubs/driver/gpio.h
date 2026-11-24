@@ -1,10 +1,12 @@
-// Host stub: the ESP-IDF GPIO driver calls used by udp_server.c, implemented by the test.
+// Host stub: the ESP-IDF GPIO driver calls used by udp_server.c and clu_localio.c, implemented by
+// the test.
 #pragma once
 #include <stdint.h>
 #include "esp_err.h"
 
 typedef int gpio_num_t;
 #define GPIO_IS_VALID_OUTPUT_GPIO(n) ((n) >= 0 && (n) < 34)
+#define GPIO_IS_VALID_GPIO(n) ((n) >= 0 && (n) < 49)
 typedef enum { GPIO_MODE_INPUT = 1 } gpio_mode_t;
 typedef enum { GPIO_PULLUP_DISABLE = 0, GPIO_PULLUP_ENABLE = 1 } gpio_pullup_t;
 typedef struct {

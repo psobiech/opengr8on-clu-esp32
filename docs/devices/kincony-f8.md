@@ -1,14 +1,14 @@
 # KinCony F8
 
 ESP32-S3-WROOM-1U N16R8 (16 MB flash, 8 MB PSRAM), Ethernet W5500 na SPI, RS485 i
-8 przekaźników + 8 wejść na jednym ekspanderze PCF8575. Płytka `KinCony F8` w menuconfig (**Board**), preset `f8`
+8 przekaźników + 8 wejść na jednym ekspanderze PCF8575, 5 dodatkowych wejść na GPIO. Płytka `KinCony F8` w menuconfig (**Board**), preset `f8`
 (zob. [Budowanie](../../README.md#budowanie)). Pozostałe płytki: [Obsługiwane urządzenia](../DEVICES.md).
 
 - [KinCony F8 — strona produktu](https://www.kincony.com/kincony-f8-esp32-s3-16a-removable-relay-board.html)
 - [KinCony F8 — ESPHome Devices](https://devices.esphome.io/devices/kincony-f8/)
 
-Przetestowane na sprzęcie: przekaźniki i wejścia na PCF8575 oraz wyświetlacz działają. Pozostałe wejścia płytki
-(analogowe, 1-wire itd.) nie są obsługiwane.
+Przetestowane na sprzęcie: przekaźniki i wejścia na PCF8575, wejścia na GPIO (zaciski 1-wire i
+wolny GPIO) oraz wyświetlacz działają. Wejścia analogowe nie są obsługiwane.
 
 **Zasilanie i przekaźniki:** fabrycznie montowane są przekaźniki na 12 V, ale są wymienne (w
 podstawkach) i można założyć wersje na 24 V; płytka pracuje też przy zasilaniu 24 V. Napięcie
@@ -22,6 +22,7 @@ cewek przekaźników musi odpowiadać napięciu zasilania płytki.
 | I2C SDA / SCL | 8 / 18 | `CLU_LOCAL_IO_SDA_GPIO`, `CLU_LOCAL_IO_SCL_GPIO` |
 | PCF8575: adres | 0x24 | `CLU_LOCAL_IO_ADDR` |
 | PCF8575: przekaźniki / wejścia | P10–P17 / P00–P07 | `CLU_LOCAL_IO_OUT_PINS` |
+| Wejścia GPIO (DIN1–DIN5 drugiego modułu) | 48 / 47 / 21 / 15 / 14 | `CLU_LOCAL_IO_GPIO_INPUTS` |
 | Wyświetlacz SSD1306 128x64: adres | 0x3C | `CLU_DISPLAY_ADDR` |
 | Przycisk konfiguracji | 0 (BOOT) | `CLU_SETUP_BUTTON_GPIO` |
 
@@ -29,8 +30,14 @@ cewek przekaźników musi odpowiadać napięciu zasilania płytki.
   kanał 1 = przekaźnik 1 / DI1). Firmware sam odpowiada na ramki TF-Bus tego modułu, więc bierze
   on udział w wykrywaniu, adresowaniu i odpytywaniu jak moduły na RS485 i trafia do
   `tfbusDevices` w `a:\CONFIG.JSON`. Dodaj go do projektu w OM jak każdy wykryty moduł.
-- Numer seryjny modułu jest losowany przy pierwszym starcie i zapisywany w NVS (przestrzeń
-  `localio`), jak numer CLU; `CLU_LOCAL_IO_SN` w menuconfig go nadpisuje.
+- **Wejścia na GPIO** (4 zaciski 1-wire GPIO48, 47, 21, 15 z podciąganiem na płytce i wolny zacisk
+  GPIO14 bez podciągania) to drugi moduł **IO_MODULE_DIN_8**: DIN1–DIN5 w tej kolejności,
+  DIN6–DIN8 zawsze nieaktywne. Jego wyjścia DOUT niczego nie sterują. Firmware włącza wewnętrzne
+  podciąganie; wejście jest aktywne po zwarciu do GND. Zaciski 1-wire nie mogą wtedy służyć do
+  czujników 1-wire. Pusta lista w `CLU_LOCAL_IO_GPIO_INPUTS` (płytka `Custom`) wyłącza ten moduł.
+  Gdy PCF8575 nie odpowiada, oba moduły są offline (wspólne odpytywanie).
+- Numery seryjne modułów są losowane przy pierwszym starcie i zapisywane w NVS (przestrzeń
+  `localio`), jak numer CLU; `CLU_LOCAL_IO_SN` / `CLU_LOCAL_IO_SN2` w menuconfig je nadpisują.
 - Wyjścia i wejścia są aktywne stanem niskim (`CLU_LOCAL_IO_OUT_ACTIVE_LOW` /
   `IN_ACTIVE_LOW`), jak w konfiguracjach ESPHome producenta; sprawdzone na sprzęcie.
 - Wejścia są próbkowane co 5 ms przy odpytywaniu modułu; zmiana liczy się po dwóch zgodnych
@@ -44,7 +51,7 @@ cewek przekaźników musi odpowiadać napięciu zasilania płytki.
   (`CLU_RTC_CHIP` = DS3231, SDA 8 / SCL 18). Czas przetrwa zanik zasilania tylko z baterią
   podtrzymującą.
 - WiFi domyślnie wyłączone, można włączyć obok Ethernetu.
-- Nieużywane: wejścia analogowe, 1-wire, karta SD, EEPROM, RF 433 MHz, moduł Tuya.
+- Nieużywane: wejścia analogowe, czujniki 1-wire, karta SD, EEPROM, RF 433 MHz, moduł Tuya.
 - RS485 bez pinu DE: zob. uwagę o transceiverach z automatycznym kierunkiem w
   [Inne płytki ESP32-S3](other-esp32-s3.md#transceiver-rs485).
 

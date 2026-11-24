@@ -1,7 +1,7 @@
 // Host tests for the on-board IO board glue (clu_localio.c, included: state is static): module
 // serial in NVS / menuconfig, and the PCF8575 pin mapping of one board, against a fake expander.
-// Built twice: -DBOARD_F8 (relays P10-P17, inputs P00-P07, 0x24) and -DBOARD_A8V3 (relays
-// P00-P07, inputs P10-P17, 0x22).
+// Built twice: -DBOARD_F8 (relays P10-P17, inputs P00-P07, 0x24, plus the GPIO input module on
+// GPIO48/47/21/15/14) and -DBOARD_A8V3 (relays P00-P07, inputs P10-P17, 0x22, no GPIO inputs).
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,10 +17,14 @@ static const char *cfg_sn = "";
 #if BOARD_F8
 #define CONFIG_CLU_LOCAL_IO_ADDR 0x24
 #define CONFIG_CLU_LOCAL_IO_OUT_P1 1
+#define CONFIG_CLU_LOCAL_IO_GPIO_INPUTS "48,47,21,15,14"
+#define CONFIG_CLU_LOCAL_IO_SN2 cfg_sn2
+static const char *cfg_sn2 = "";
 #define BOARD "F8"
 #else
 #define CONFIG_CLU_LOCAL_IO_ADDR 0x22
 #define CONFIG_CLU_LOCAL_IO_OUT_P0 1
+#define CONFIG_CLU_LOCAL_IO_GPIO_INPUTS ""
 #define BOARD "A8v3"
 #endif
 
@@ -46,6 +50,21 @@ void clu_random(uint8_t *out, size_t len)
     for (size_t i = 0; i < len; i++) {
         out[i] = (uint8_t)(s_rand >> (8 * (i % 4)));
     }
+    s_rand = s_rand * 1103515245u + 12345u; // next call: another serial
+}
+
+// GPIO: pins set up by gpio_config; a pin reads low when the outside world pulls it low.
+static uint64_t s_gpio_configured_mask, s_gpio_pulled_low;
+static bool s_gpio_pull_up;
+esp_err_t gpio_config(const gpio_config_t *config)
+{
+    s_gpio_configured_mask = config->pin_bit_mask;
+    s_gpio_pull_up = config->mode == GPIO_MODE_INPUT && config->pull_up_en == GPIO_PULLUP_ENABLE;
+    return ESP_OK;
+}
+int gpio_get_level(gpio_num_t gpio)
+{
+    return !(s_gpio_pulled_low >> gpio & 1);
 }
 
 static tfbus_uart_local_fn_t s_local;
@@ -162,7 +181,20 @@ int main(void)
           n > 0 && tfbus_parse_response(rx, (size_t)n, &pl, &plen) && tfbus_parse_discover(pl, plen, &id) &&
               id.sn == sn && id.hw_type == 0x1e);
     bus(tfbus_addr_assign(f, sizeof f, sn, 1));
+#if BOARD_F8
+    uint32_t gpio_module_serial;
+    n = bus(tfbus_discover(f, sizeof f));
+    check("GPIO input module: own serial stored in NVS, IO_MODULE_DIN_8",
+          n > 0 && tfbus_parse_response(rx, (size_t)n, &pl, &plen) && tfbus_parse_discover(pl, plen, &id) &&
+              nvs_get_u32(1, "sn2", &gpio_module_serial) == ESP_OK && id.sn == gpio_module_serial &&
+              gpio_module_serial != sn && id.hw_type == 0x1e);
+    check("GPIO48/47/21/15/14 inputs with pull-up",
+          s_gpio_pull_up && s_gpio_configured_mask == (1ULL << 48 | 1ULL << 47 | 1ULL << 21 | 1ULL << 15 | 1ULL << 14));
+    bus(tfbus_addr_assign(f, sizeof f, gpio_module_serial, 2));
+    check("only two modules", bus(tfbus_discover(f, sizeof f)) == 0);
+#else
     check("only one module", bus(tfbus_discover(f, sizeof f)) == 0);
+#endif
 
     // ---------------- relays: DOUT channel k -> relay k+1, active low; input half stays high
     check("ACTIVATE ch 0 -> relay 1 pin low", cmd(1, 0x08, 0x01) > 0 && relay_pins(s_latch) == 0xfe);
@@ -181,6 +213,19 @@ int main(void)
     poll(1, &in, &out);
     s_now += LOCALIO_SAMPLE_US;
     check("relays on do not read back as inputs", poll(1, &in, &out) && in == 0x00);
+
+#if BOARD_F8
+    // ---------------- GPIO inputs: pin k in the list pulled low -> module 2 DIN channel k on
+    s_gpio_pulled_low = 1ULL << 48 | 1ULL << 14; // first and last pin
+    s_now += LOCALIO_SAMPLE_US;
+    poll(2, &in, &out);
+    s_now += LOCALIO_SAMPLE_US;
+    check("GPIO48 + GPIO14 low -> module 2 inputs 0x11", poll(2, &in, &out) && in == 0x11);
+    check("  module 1 inputs unaffected", poll(1, &in, &out) && in == 0x00);
+    uint16_t latch_before = s_latch;
+    check("module 2 ACTIVATE: acknowledged, drives nothing", cmd(2, 0x08, 0x01) > 0 && s_latch == latch_before);
+    s_gpio_pulled_low = 0;
+#endif
 
     // ---------------- expander gone
     s_chip = false;
@@ -207,6 +252,16 @@ int main(void)
     check("invalid menuconfig serial ignored, NVS value kept",
           n > 0 && tfbus_parse_response(rx, (size_t)n, &pl, &plen) && tfbus_parse_discover(pl, plen, &id) &&
               id.sn == 330000001);
+#if BOARD_F8
+    cfg_sn = "";
+    cfg_sn2 = "330000002";
+    clu_localio_start();
+    bus(tfbus_addr_assign(f, sizeof f, 330000001, 1));
+    n = bus(tfbus_discover(f, sizeof f));
+    check("menuconfig GPIO module serial overrides and is stored",
+          n > 0 && tfbus_parse_response(rx, (size_t)n, &pl, &plen) && tfbus_parse_discover(pl, plen, &id) &&
+              id.sn == 330000002 && nvs_get_u32(1, "sn2", &stored) == ESP_OK && stored == 330000002);
+#endif
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

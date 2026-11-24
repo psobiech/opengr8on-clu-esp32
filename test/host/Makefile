@@ -256,7 +256,7 @@ test-c: $(C_TESTS)
 	$(if $(HAVE_MBEDTLS3),$(OUT)/test_crypto,@echo "skip test_crypto: no $(MBEDTLS3_INC)/psa/crypto.h")
 
 clean:
-	rm -rf $(OUT)
+	rm -rf $(OUT) && mkdir -p $(OUT) # recreated: `make clean test` reuses the parse-time mkdir
 
 # Prelude (Lua object model) + MQTT/Home Assistant (clu_mqtt/mqtt.lua) tests; needs lua$(LUA) on the host. Pass OM=<path> to also load a real OM.LUA.
 # With COVERAGE=1 each script runs under lua_cov.lua (line hits -> $(OUT)/coverage/lua.hits).

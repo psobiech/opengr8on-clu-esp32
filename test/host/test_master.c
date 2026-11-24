@@ -307,7 +307,11 @@ static bool fd_ioset(tfbus_module_t *m, lua_State *L, int obj, int cls, int ch, 
     tfbus_obj_store(L, obj, idx, 42); // obj index valid inside the protected call
     return idx == 1;
 }
-static void fd_deinit(tfbus_module_t *m) { DRV("deinit:%u:%s ", m->addr, (char *)m->drv_ctx); }
+static void fd_deinit(tfbus_module_t *m)
+{
+    // ":hidden" = Lua can no longer reach the module (io_module() looks it up by SN)
+    DRV("deinit:%u:%s%s ", m->addr, (char *)m->drv_ctx, tfbus_master_find_sn(m->sn) ? "" : ":hidden");
+}
 static void fd_overdue(tfbus_module_t *m) { DRV("overdue:%u:%s ", m->addr, (char *)m->drv_ctx); }
 static const tfbus_driver_t s_fake = {
     .hw_type = 0x1e, .name = "FAKE", .init = fd_init, .on_status = fd_status, .on_online = fd_online,
@@ -818,7 +822,7 @@ int main(void)
     drv_reset();
     mod_forget(tfbus_master_get(3));
     reg_save();
-    check_drv("refresh drop: driver deinit", "deinit:4:P ");
+    check_drv("refresh drop: module hidden from Lua before driver deinit", "deinit:4:P:hidden ");
     {
         const nvs_entry_t *e = nvs_peek(NVS_NS, NVS_KEY);
         check("refresh drop: entry kept as gone (SN, address 4), context freed, saved",

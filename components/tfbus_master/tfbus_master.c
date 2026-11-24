@@ -290,6 +290,11 @@ static tfbus_module_t *mod_add(uint32_t serial_number, uint8_t hw_type)
 static void mod_forget(tfbus_module_t *module)
 {
     ESP_LOGW(TAG, "refresh: sn=%lu addr=%u not found, dropped", (unsigned long)module->sn, module->addr);
+    // Gone before deinit: a Lua call while s_drv_lock is released below must not find the module
+    // and start a new driver timer on the context about to be freed.
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    module->gone = true;
+    xSemaphoreGive(s_lock);
     xSemaphoreTake(s_drv_lock, portMAX_DELAY);
     if (module->drv_ctx && module->drv && module->drv->deinit) {
         module->drv->deinit(module);
@@ -304,7 +309,6 @@ static void mod_forget(tfbus_module_t *module)
     module->online = false;
     module->assigned = false;
     module->status_len = 0;
-    module->gone = true;
     xSemaphoreGive(s_lock);
     xSemaphoreGive(s_drv_lock);
     free(ctx);

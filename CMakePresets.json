@@ -4,111 +4,111 @@
         {
             "name": "waveshare",
             "displayName": "Waveshare ESP32-S3-RS485-CAN (default)",
-            "binaryDir": "build",
+            "binaryDir": "build/waveshare",
             "cacheVariables": {
                 "IDF_TARGET": "esp32s3",
-                "SDKCONFIG": "${sourceDir}/sdkconfig",
-                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults"
+                "SDKCONFIG": "${sourceDir}/build/waveshare/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/configs/sdkconfig.defaults"
             }
         },
         {
             "name": "gate",
             "displayName": "Grenton GATE (ESP32-WROVER-B, LAN8720A)",
-            "binaryDir": "build-gate",
+            "binaryDir": "build/gate",
             "cacheVariables": {
                 "IDF_TARGET": "esp32",
-                "SDKCONFIG": "${sourceDir}/sdkconfig.gate",
-                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults"
+                "SDKCONFIG": "${sourceDir}/build/gate/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/configs/sdkconfig.defaults"
             }
         },
         {
             "name": "f8",
             "displayName": "KinCony F8 (ESP32-S3, W5500)",
-            "binaryDir": "build-f8",
+            "binaryDir": "build/f8",
             "cacheVariables": {
                 "IDF_TARGET": "esp32s3",
-                "SDKCONFIG": "${sourceDir}/sdkconfig.f8",
-                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.f8"
+                "SDKCONFIG": "${sourceDir}/build/f8/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/configs/sdkconfig.defaults;${sourceDir}/configs/sdkconfig.defaults.f8"
             }
         },
         {
             "name": "a8v3",
             "displayName": "KinCony KC868-A8v3 (ESP32-S3, W5500)",
-            "binaryDir": "build-a8v3",
+            "binaryDir": "build/a8v3",
             "cacheVariables": {
                 "IDF_TARGET": "esp32s3",
-                "SDKCONFIG": "${sourceDir}/sdkconfig.a8v3",
-                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.a8v3"
+                "SDKCONFIG": "${sourceDir}/build/a8v3/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/configs/sdkconfig.defaults;${sourceDir}/configs/sdkconfig.defaults.a8v3"
             }
         },
         {
             "name": "gate-http",
             "displayName": "GATE HTTP on ESP32-S3 (WiFi, no TF-Bus)",
-            "binaryDir": "build-gate-http",
+            "binaryDir": "build/gate-http",
             "cacheVariables": {
                 "IDF_TARGET": "esp32s3",
-                "SDKCONFIG": "${sourceDir}/sdkconfig.gate-http",
-                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.gate-http"
+                "SDKCONFIG": "${sourceDir}/build/gate-http/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/configs/sdkconfig.defaults;${sourceDir}/configs/sdkconfig.defaults.gate-http"
             }
         },
         {
             "name": "gate-http-N8R8",
             "displayName": "GATE HTTP on ESP32-S3 N8R8 (8 MB flash, 8 MB octal PSRAM)",
-            "binaryDir": "build-gate-http-N8R8",
+            "binaryDir": "build/gate-http-N8R8",
             "cacheVariables": {
                 "IDF_TARGET": "esp32s3",
-                "SDKCONFIG": "${sourceDir}/sdkconfig.gate-http-N8R8",
-                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.gate-http;${sourceDir}/sdkconfig.defaults.N8R8"
+                "SDKCONFIG": "${sourceDir}/build/gate-http-N8R8/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/configs/sdkconfig.defaults;${sourceDir}/configs/sdkconfig.defaults.gate-http;${sourceDir}/configs/sdkconfig.defaults.N8R8"
             }
         },
         {
             "name": "gate-http-low-memory",
             "displayName": "GATE HTTP on ESP32-S3 (4 MB flash, 2 MB PSRAM)",
-            "binaryDir": "build-gate-http-low-memory",
+            "binaryDir": "build/gate-http-low-memory",
             "cacheVariables": {
                 "IDF_TARGET": "esp32s3",
-                "SDKCONFIG": "${sourceDir}/build-gate-http-low-memory/sdkconfig",
-                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.gate-http;${sourceDir}/sdkconfig.defaults.gate-http-low-memory"
+                "SDKCONFIG": "${sourceDir}/build/gate-http-low-memory/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/configs/sdkconfig.defaults;${sourceDir}/configs/sdkconfig.defaults.gate-http;${sourceDir}/configs/sdkconfig.defaults.gate-http-low-memory"
             }
         },
         {
             "name": "waveshare-mysensors",
             "displayName": "Waveshare ESP32-S3-RS485-CAN — MySensors gateway",
-            "binaryDir": "build-waveshare-mysensors",
+            "binaryDir": "build/waveshare-mysensors",
             "cacheVariables": {
                 "IDF_TARGET": "esp32s3",
-                "SDKCONFIG": "${sourceDir}/sdkconfig.waveshare-mysensors",
-                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.mysensors"
+                "SDKCONFIG": "${sourceDir}/build/waveshare-mysensors/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/configs/sdkconfig.defaults;${sourceDir}/configs/sdkconfig.defaults.mysensors"
             }
         },
         {
             "name": "gate-mysensors",
             "displayName": "Grenton GATE — MySensors gateway",
-            "binaryDir": "build-gate-mysensors",
+            "binaryDir": "build/gate-mysensors",
             "cacheVariables": {
                 "IDF_TARGET": "esp32",
-                "SDKCONFIG": "${sourceDir}/sdkconfig.gate-mysensors",
-                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.mysensors"
+                "SDKCONFIG": "${sourceDir}/build/gate-mysensors/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/configs/sdkconfig.defaults;${sourceDir}/configs/sdkconfig.defaults.mysensors"
             }
         },
         {
             "name": "f8-mysensors",
             "displayName": "KinCony F8 — MySensors gateway",
-            "binaryDir": "build-f8-mysensors",
+            "binaryDir": "build/f8-mysensors",
             "cacheVariables": {
                 "IDF_TARGET": "esp32s3",
-                "SDKCONFIG": "${sourceDir}/sdkconfig.f8-mysensors",
-                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.f8;${sourceDir}/sdkconfig.defaults.mysensors"
+                "SDKCONFIG": "${sourceDir}/build/f8-mysensors/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/configs/sdkconfig.defaults;${sourceDir}/configs/sdkconfig.defaults.f8;${sourceDir}/configs/sdkconfig.defaults.mysensors"
             }
         },
         {
             "name": "a8v3-mysensors",
             "displayName": "KinCony KC868-A8v3 — MySensors gateway",
-            "binaryDir": "build-a8v3-mysensors",
+            "binaryDir": "build/a8v3-mysensors",
             "cacheVariables": {
                 "IDF_TARGET": "esp32s3",
-                "SDKCONFIG": "${sourceDir}/sdkconfig.a8v3-mysensors",
-                "SDKCONFIG_DEFAULTS": "${sourceDir}/sdkconfig.defaults;${sourceDir}/sdkconfig.defaults.a8v3;${sourceDir}/sdkconfig.defaults.mysensors"
+                "SDKCONFIG": "${sourceDir}/build/a8v3-mysensors/sdkconfig",
+                "SDKCONFIG_DEFAULTS": "${sourceDir}/configs/sdkconfig.defaults;${sourceDir}/configs/sdkconfig.defaults.a8v3;${sourceDir}/configs/sdkconfig.defaults.mysensors"
             }
         }
     ]

@@ -59,57 +59,57 @@ With ESP-IDF v6.1.1 and `esp-emu` v1.0.0 installed:
 
 ```sh
 idf.py --preset gate-http build merge-bin
-python3 tools/mknvs.py --serial 221010155 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build-gate-http/udp-cfg-a.bin
-python3 tools/mknvs.py --serial 221010156 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build-gate-http/udp-cfg-b.bin
+python3 tools/mknvs.py --serial 221010155 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build/gate-http/udp-cfg-a.bin
+python3 tools/mknvs.py --serial 221010156 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build/gate-http/udp-cfg-b.bin
 python3 -m pip install cryptography==44.0.2
 python3 -m test.emulator.boot.run_boot \
-  --firmware build-gate-http/merged-binary.bin \
-  --elf build-gate-http/opengr8on_clu_esp32.elf \
-  --log build-gate-http/esp-emu.log
+  --firmware build/gate-http/merged-binary.bin \
+  --elf build/gate-http/opengr8on_clu_esp32.elf \
+  --log build/gate-http/esp-emu.log
 python3 -m test.emulator.udp.run_udp \
-  --firmware build-gate-http/merged-binary.bin \
-  --elf build-gate-http/opengr8on_clu_esp32.elf \
-  --cfg-a build-gate-http/udp-cfg-a.bin \
-  --cfg-b build-gate-http/udp-cfg-b.bin \
-  --out-dir build-gate-http/udp-test
+  --firmware build/gate-http/merged-binary.bin \
+  --elf build/gate-http/opengr8on_clu_esp32.elf \
+  --cfg-a build/gate-http/udp-cfg-a.bin \
+  --cfg-b build/gate-http/udp-cfg-b.bin \
+  --out-dir build/gate-http/udp-test
 python3 -m test.emulator.http.run_http \
-  --firmware build-gate-http/merged-binary.bin \
-  --elf build-gate-http/opengr8on_clu_esp32.elf \
-  --cfg-a build-gate-http/udp-cfg-a.bin \
-  --cfg-b build-gate-http/udp-cfg-b.bin \
-  --out-dir build-gate-http/http-test
+  --firmware build/gate-http/merged-binary.bin \
+  --elf build/gate-http/opengr8on_clu_esp32.elf \
+  --cfg-a build/gate-http/udp-cfg-a.bin \
+  --cfg-b build/gate-http/udp-cfg-b.bin \
+  --out-dir build/gate-http/http-test
 idf.py --preset gate-http-low-memory build merge-bin
-python3 tools/mknvs.py --serial 221010155 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build-gate-http-low-memory/udp-cfg-a.bin
-python3 tools/mknvs.py --serial 221010156 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build-gate-http-low-memory/udp-cfg-b.bin
+python3 tools/mknvs.py --serial 221010155 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build/gate-http-low-memory/udp-cfg-a.bin
+python3 tools/mknvs.py --serial 221010156 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build/gate-http-low-memory/udp-cfg-b.bin
 python3 -m test.emulator.boot.run_boot \
-  --firmware build-gate-http-low-memory/merged-binary.bin \
-  --elf build-gate-http-low-memory/opengr8on_clu_esp32.elf \
+  --firmware build/gate-http-low-memory/merged-binary.bin \
+  --elf build/gate-http-low-memory/opengr8on_clu_esp32.elf \
   --flash-size 4MB --psram-size 2M \
-  --log build-gate-http-low-memory/esp-emu.log
+  --log build/gate-http-low-memory/esp-emu.log
 python3 -m test.emulator.udp.run_udp \
-  --firmware build-gate-http-low-memory/merged-binary.bin \
-  --elf build-gate-http-low-memory/opengr8on_clu_esp32.elf \
-  --cfg-a build-gate-http-low-memory/udp-cfg-a.bin \
-  --cfg-b build-gate-http-low-memory/udp-cfg-b.bin \
-  --psram-size 2M --out-dir build-gate-http-low-memory/udp-test
+  --firmware build/gate-http-low-memory/merged-binary.bin \
+  --elf build/gate-http-low-memory/opengr8on_clu_esp32.elf \
+  --cfg-a build/gate-http-low-memory/udp-cfg-a.bin \
+  --cfg-b build/gate-http-low-memory/udp-cfg-b.bin \
+  --psram-size 2M --out-dir build/gate-http-low-memory/udp-test
 python3 -m test.emulator.http.run_http \
-  --firmware build-gate-http-low-memory/merged-binary.bin \
-  --elf build-gate-http-low-memory/opengr8on_clu_esp32.elf \
-  --cfg-a build-gate-http-low-memory/udp-cfg-a.bin \
-  --cfg-b build-gate-http-low-memory/udp-cfg-b.bin \
-  --psram-size 2M --out-dir build-gate-http-low-memory/http-test
-idf.py -B build-waveshare-emu -D IDF_TARGET=esp32s3 -D SDKCONFIG=build-waveshare-emu/sdkconfig build merge-bin
-python3 tools/mknvs.py --serial 221010157 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build-waveshare-emu/tfbus-cfg.bin
+  --firmware build/gate-http-low-memory/merged-binary.bin \
+  --elf build/gate-http-low-memory/opengr8on_clu_esp32.elf \
+  --cfg-a build/gate-http-low-memory/udp-cfg-a.bin \
+  --cfg-b build/gate-http-low-memory/udp-cfg-b.bin \
+  --psram-size 2M --out-dir build/gate-http-low-memory/http-test
+idf.py -B build/waveshare-emu -D IDF_TARGET=esp32s3 -D SDKCONFIG=build/waveshare-emu/sdkconfig build merge-bin
+python3 tools/mknvs.py --serial 221010157 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build/waveshare-emu/tfbus-cfg.bin
 python3 -m test.emulator.tfbus.run_tfbus \
-  --firmware build-waveshare-emu/merged-binary.bin \
-  --elf build-waveshare-emu/opengr8on_clu_esp32.elf \
-  --cfg build-waveshare-emu/tfbus-cfg.bin \
-  --out-dir build-waveshare-emu/tfbus-test
+  --firmware build/waveshare-emu/merged-binary.bin \
+  --elf build/waveshare-emu/opengr8on_clu_esp32.elf \
+  --cfg build/waveshare-emu/tfbus-cfg.bin \
+  --out-dir build/waveshare-emu/tfbus-test
 python3 -m unittest discover -s test -t . -v
 ```
 
-`build-waveshare-emu` builds the `waveshare` defaults with its own `sdkconfig` inside the build
-directory, so a locally customised root `sdkconfig` does not change the bus. It is not a preset:
+`build/waveshare-emu` builds the `waveshare` defaults with its own `sdkconfig` inside the build
+directory, so a locally customised `build/waveshare/sdkconfig` does not change the bus. It is not a preset:
 every preset is a release artifact (`test/test_firmware_release.py`). In CI, the `emulator-tfbus` job
 uses the `waveshare` artifact from the firmware matrix, which is built from the same defaults. The
 UART1 bridge uses host TCP port 19401 (`--uart-port`).

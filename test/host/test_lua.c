@@ -435,10 +435,13 @@ static void test_unit(void)
         exec_request(L, r);
         check("req: abandoned request freed by the runtime", 1);
     }
-    lua_sethook(L, req_hook, LUA_MASKCOUNT, 1);
+    lua_sethook(L, count_hook, LUA_MASKCOUNT, 1);
     s_req_active = false;
-    req_hook(L, NULL);
-    check("req hook outside a req: (resumed coroutine) removes itself", lua_gethook(L) == NULL);
+    s_req_deadline_us = 0; // long past: only a running req: is limited
+    check("count hook outside a req: (resumed coroutine) raises nothing",
+          luaL_dostring(L, "local n = 0 for i = 1, 100 do n = n + i end") == LUA_OK);
+    check("count hook stays armed (watchdog)", lua_gethook(L) == count_hook);
+    lua_sethook(L, NULL, 0, 0);
     lua_settop(L, 0);
 
     // ---- memory budget

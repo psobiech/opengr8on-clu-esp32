@@ -40,7 +40,8 @@ __clu = {
   end,
   sys_info = function()
     return { heap_free = 200 * 1024 + 5, heap_min = 150 * 1024, psram_free = 7000 * 1024, rssi = -61,
-             ip = "192.168.1.100", reset_reason = "power_on", tfbus_total = 2, tfbus_online = 1,
+             ip = "192.168.1.100", reset_reason = "task_watchdog", tfbus_total = 2, tfbus_online = 1,
+             last_crash = "task watchdog: clu_lua (CPU 1) | task IDLE1 | pc 0x400d1234",
              tfbus_fails = sys_fails }
   end,
   tfbus_module = function(sn)
@@ -277,7 +278,10 @@ check("heap in KiB", (find("grenton/CLU100000001/system/memory/heap_free") or {}
 check("rssi", (find("grenton/CLU100000001/system/network/rssi") or {}).p == "-61")
 check("ip text sensor", (find("grenton/CLU100000001/system/network/ip") or {}).p == "192.168.1.100"
   and not (find(CFG .. "sensor" .. NODE .. "system_network_ip/config") or {}).p:find("state_class", 1, true))
-check("reset reason", (find("grenton/CLU100000001/system/clu/reset_reason") or {}).p == "power_on")
+check("reset reason", (find("grenton/CLU100000001/system/clu/reset_reason") or {}).p == "task_watchdog")
+check("last crash text sensor", (find("grenton/CLU100000001/system/clu/last_crash") or {}).p
+  == "task watchdog: clu_lua (CPU 1) | task IDLE1 | pc 0x400d1234"
+  and (find(CFG .. "sensor" .. NODE .. "system_clu_last_crash/config") or {}).p:find('"name":"Last crash"', 1, true) ~= nil)
 check("lua memory", tonumber((find("grenton/CLU100000001/system/memory/lua") or {}).p) ~= nil)
 local rb = find(CFG .. "button" .. NODE .. "system_clu_restart/config")
 check("restart button", rb and rb.p:find('"command_topic":"~/set"', 1, true) and rb.p:find('"device_class":"restart"', 1, true)

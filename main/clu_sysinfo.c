@@ -3,7 +3,7 @@
  * @brief Firmware internals for Lua (merged into the private __clu table, used by mqtt.lua).
  *
  * - `__clu.sys_info()`       -> {heap_free, heap_min, psram_free, rssi? (WiFi), ip? (Ethernet first,
- *                                else WiFi), reset_reason,
+ *                                else WiFi), reset_reason, last_crash? (clu_crash),
  *                                tfbus_total, tfbus_online, tfbus_fails}
  * - `__clu.tfbus_module(sn)` -> {online, fails, polls, addr, hw_type} | nil
  * - `__clu.local_channels(sn)` -> {[OM class] = bit mask of the channels with hardware behind them}
@@ -13,6 +13,7 @@
  */
 #include "clu_sysinfo.h"
 
+#include "clu_crash.h"
 #include "clu_localio.h"
 #include "clu_lua.h"
 #include "esp_heap_caps.h"
@@ -67,6 +68,11 @@ static int l_sys_info(lua_State *L)
     set_int(L, "psram_free", (lua_Integer)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     lua_pushstring(L, reset_reason());
     lua_setfield(L, -2, "reset_reason");
+    const char *last_crash = clu_crash_last();
+    if (last_crash) {
+        lua_pushstring(L, last_crash);
+        lua_setfield(L, -2, "last_crash");
+    }
 
 #if CONFIG_CLU_WIFI
     int rssi;

@@ -28,6 +28,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -657,7 +658,13 @@ static void udp_task(void *arg)
     // broadcast key first marks the packet as broadcast-class.
     ESP_LOGI(TAG, "listening on udp/%d", CLU_UDP_PORT);
 
+    // Wake up every second without traffic to check in with the task watchdog. The longest
+    // dispatch (req_reset: Lua reload 10 s, then halt 3 s) stays below its 20 s timeout.
+    struct timeval receive_timeout = {.tv_sec = 1};
+    setsockopt(s_sock, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout, sizeof receive_timeout);
+    esp_task_wdt_add(NULL);
     for (;;) {
+        esp_task_wdt_reset();
         struct sockaddr_in from;
         socklen_t source_address_length = sizeof from;
         int datagram_length = recvfrom(s_sock, in, sizeof in, 0, (struct sockaddr *)&from, &source_address_length);

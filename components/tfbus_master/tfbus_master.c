@@ -23,6 +23,7 @@
 
 #include "clu_lua.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -44,6 +45,7 @@ static const char *TAG = "tfbus"; // tfbus_master_set_log_tag()
 #define DISCOVER_TIMEOUT_MS 40
 #define DISCOVER_RETRIES    3
 #define SUMMARY_EVERY_MS    600000 // "round N: x/y online" heartbeat (also logged on change)
+#define WATCHDOG_SLICE_MS   1000   // idle / parked bus: wake up this often to check in with the task watchdog
 #define NVS_NS              "tfbus"
 #define NVS_KEY             "mods"
 
@@ -315,6 +317,7 @@ static void mod_forget(tfbus_module_t *module)
 }
 
 static void drain_cmds(void);
+static void wait_notified(void);
 
 esp_err_t tfbus_master_queue(const uint8_t *frame, size_t len)
 {
@@ -1110,11 +1113,12 @@ static void poll_module(tfbus_module_t *module)
  */
 static void bus_task(void *arg)
 {
+    esp_task_wdt_add(NULL); // checked in once per module poll and while waiting (wait_notified)
     for (;;) {
         if (s_park) {
             s_parked = true;
             while (s_park) {
-                ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+                wait_notified();
             }
             s_parked = false;
         }
@@ -1124,6 +1128,7 @@ static void bus_task(void *arg)
             bool refresh = s_refresh;
             s_refresh = false;
             discover(refresh);
+            esp_task_wdt_reset();
             if (s_scan_cb) {
                 s_scan_cb();
             }
@@ -1138,7 +1143,7 @@ static void bus_task(void *arg)
         }
         if (s_nmod == 0) {
             ESP_LOGI(TAG, "no modules, bus idle");
-            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            wait_notified();
             continue;
         }
 
@@ -1159,6 +1164,7 @@ static void bus_task(void *arg)
                 }
             }
             for (int i = 0; i < s_nmod && !s_restart; i++) {
+                esp_task_wdt_reset();
                 run_deferred(); // driver timer work queues frames: send them right after
                 drain_cmds();
                 tfbus_module_t *module = &s_mod[i];
@@ -1193,6 +1199,14 @@ static void bus_task(void *arg)
             }
             vTaskDelay(1); // let lower-priority tasks run between rounds
         }
+    }
+}
+
+/** @brief Block the bus task until it is notified, checking in with the task watchdog meanwhile. */
+static void wait_notified(void)
+{
+    while (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(WATCHDOG_SLICE_MS)) == 0) {
+        esp_task_wdt_reset();
     }
 }
 

@@ -18,11 +18,10 @@ class AssessBootTests(unittest.TestCase):
         low_memory_output = "\n".join(boot_markers("4MB", "2M"))
         self.assertEqual(assess_boot(low_memory_output, 0, "4MB", "2M"), [])
         failures = assess_boot(self.ready_output, 0, "4MB", "2M")
-        self.assertIn("missing boot marker: SPI Flash Size : 4MB", failures)
-        self.assertIn("missing boot marker: Found 2MB PSRAM device", failures)
+        self.assertIn("missing boot marker: flash 4MB, PSRAM 2MB", failures)
 
     def test_conflicting_standard_memory_markers_fail_low_memory_check(self):
-        output = "\n".join(boot_markers("4MB", "2M")) + "\nSPI Flash Size : 16MB\nFound 8MB PSRAM device"
+        output = "\n".join(boot_markers("4MB", "2M")) + "\nflash 16MB, PSRAM 8MB"
         failures = assess_boot(output, 0, "4MB", "2M")
         self.assertIn("unexpected flash size marker: 16MB", failures)
         self.assertIn("unexpected PSRAM size marker: 8MB", failures)

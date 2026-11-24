@@ -6,6 +6,7 @@
 #define ESP_LOGI(tag, fmt, ...) ((void)(tag), (void)sizeof(printf(fmt, ##__VA_ARGS__)))
 #define ESP_LOGD(tag, fmt, ...) ((void)(tag), (void)sizeof(printf(fmt, ##__VA_ARGS__)))
 typedef enum { ESP_LOG_NONE, ESP_LOG_ERROR, ESP_LOG_WARN, ESP_LOG_INFO, ESP_LOG_DEBUG } esp_log_level_t;
+static inline void esp_log_level_set(const char *tag, esp_log_level_t level) { (void)tag, (void)level; }
 #define ESP_LOG_BUFFER_HEX_LEVEL(tag, buf, len, level) ((void)(tag), (void)(buf), (void)(len), (void)(level))
 #include <stdarg.h>
 #include <stdint.h>

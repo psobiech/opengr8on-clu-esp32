@@ -23,12 +23,26 @@ CONFIG_FATFS_LFN_HEAP=y
 
 CONFIG_FREERTOS_HZ=1000
 
+# Quiet boot: the bootloader (boot:, esp_image:) and the startup code before app_main (cpu_start:,
+# heap_init:, octal_psram:, efuse_init:, sleep_gpio:, ...) log only warnings. Early logs obey only
+# this compile-time default (no per-tag levels yet); app_main raises it back to Info at runtime.
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y
+CONFIG_LOG_MAXIMUM_LEVEL_INFO=y
+
 # Hardening (cheap, no protocol impact): stack-smashing protector on functions with arrays,
 # watchpoint on the end of the current task's stack (overflow -> panic + reboot instead of silent
 # corruption), light heap poisoning (detects heap overruns on free).
 CONFIG_COMPILER_STACK_CHECK_MODE_NORM=y
 CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
 CONFIG_HEAP_POISONING_LIGHT=y
+
+# Task watchdog: the Lua, TFBUS and UDP tasks check in while they run. A task stuck for this long
+# (deadlock, a wait that never ends) panics and reboots the CLU instead of leaving it half alive;
+# main/clu_crash.c records which task it was. 20 s covers the longest legitimate stall: a soft
+# reset waits up to 10 s for the Lua VM, whose on_reload waits up to 8 s for the bus.
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=20
 
 # Sockets: UDP/1234, TFTP (+transfer), MQTT, SNTP, DNS, telnet listener + clients,
 # OTA HTTP server (listener, control socket, 2 clients)
@@ -39,8 +53,9 @@ CONFIG_LWIP_MAX_SOCKETS=16
 CONFIG_MQTT_USE_CUSTOM_CONFIG=y
 CONFIG_MQTT_POLL_READ_TIMEOUT_MS=20
 
-# OTA (components/clu_ota): a new image that restarts before it reaches the network (clu_ota_confirm)
-# is rolled back to the previous one by the bootloader.
+# OTA (components/clu_ota): a new image that does not reach the network, or crashes / hits the task
+# watchdog within 60 s of uptime (clu_ota_confirm), is rolled back to the previous one by the
+# bootloader.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # Image size (measured on esp32s3 -Os: ~160 KB less). The CLU is a WiFi station / Ethernet host

@@ -93,8 +93,9 @@ curl -u ota:HASLO --data-binary @opengr8on-clu-waveshare-v0.0.3-ota.bin http://I
 
 Nazwa użytkownika jest dowolna. Obraz trafia do drugiego slotu OTA, jest weryfikowany (układ,
 SHA-256, nazwa projektu), a CLU restartuje się do niego; ustawienia, stan i dysk `a:\` zostają.
-Bootloader przywraca poprzedni firmware, jeśli nowy zrestartuje się, zanim dostanie IP
-(`BOOTLOADER_APP_ROLLBACK_ENABLE`; wymaga bootloadera z tej wersji lub nowszej, wgranego raz przez
+Bootloader przywraca poprzedni firmware, jeśli nowy nie dostanie IP albo w ciągu 60 s pracy padnie
+(wyjątek, watchdog); celowy restart (reset z OM, przycisk MQTT, kolejna aktualizacja) zatwierdza go
+od razu (`BOOTLOADER_APP_ROLLBACK_ENABLE`; wymaga bootloadera z tej wersji lub nowszej, wgranego raz przez
 USB/UART). Odpowiedzi: `200` — wgrane, restart; `401` — złe hasło (każda próba ~2 s); `400` — nie ten
 plik / inny układ; `411` — brak obrazu; `413` — obraz większy niż slot.
 
@@ -205,17 +206,18 @@ publikują wydanie.
 
 ### Budowanie
 
-Płytkę wybiera preset CMake (`CMakePresets.json`). Każdy ma własny katalog budowania, target i
-plik `sdkconfig`, więc można przełączać się między płytkami bez `set-target` i bez czyszczenia:
+Płytkę wybiera preset CMake (`CMakePresets.json`). Każdy ma własny katalog `build/<preset>/`
+(z wygenerowanym `sdkconfig` w środku) i target, więc można przełączać się między płytkami bez
+`set-target` i bez czyszczenia. Śledzone ustawienia domyślne płytek: `configs/sdkconfig.defaults*`.
 
-| Preset | Płytka | Katalog | Konfiguracja |
-|---|---|---|---|
-| `waveshare` (domyślny) | [Waveshare ESP32-S3-RS485-CAN](docs/devices/waveshare-esp32-s3-rs485-can.md) | `build/` | `sdkconfig` |
-| `gate` | [Grenton GATE](docs/devices/grenton-gate.md) (`esp32`) | `build-gate/` | `sdkconfig.gate` |
-| `f8` | [KinCony F8](docs/devices/kincony-f8.md) | `build-f8/` | `sdkconfig.f8` |
-| `a8v3` | [KinCony KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) | `build-a8v3/` | `sdkconfig.a8v3` |
-| `gate-http` | [GATE HTTP](docs/GATE_HTTP.md) na ESP32-S3 (WiFi) | `build-gate-http/` | `sdkconfig.gate-http` |
-| `gate-http-N8R8` | [GATE HTTP](docs/GATE_HTTP.md) na ESP32-S3 N8R8 (8 MB flash, 8 MB PSRAM, WiFi) | `build-gate-http-N8R8/` | `sdkconfig.gate-http-N8R8` |
+| Preset | Płytka | Domyślne |
+|---|---|---|
+| `waveshare` (domyślny) | [Waveshare ESP32-S3-RS485-CAN](docs/devices/waveshare-esp32-s3-rs485-can.md) | `sdkconfig.defaults` |
+| `gate` | [Grenton GATE](docs/devices/grenton-gate.md) (`esp32`) | `sdkconfig.defaults.esp32` |
+| `f8` | [KinCony F8](docs/devices/kincony-f8.md) | `sdkconfig.defaults.f8` |
+| `a8v3` | [KinCony KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) | `sdkconfig.defaults.a8v3` |
+| `gate-http` | [GATE HTTP](docs/GATE_HTTP.md) na ESP32-S3 (WiFi) | `sdkconfig.defaults.gate-http` |
+| `gate-http-N8R8` | [GATE HTTP](docs/GATE_HTTP.md) na ESP32-S3 N8R8 (8 MB flash, 8 MB PSRAM, WiFi) | `sdkconfig.defaults.gate-http` + `.N8R8` |
 
 ```bash
 . /opt/esp-idf/export.sh        # ścieżka do Twojej instalacji ESP-IDF
@@ -371,7 +373,7 @@ układ RTC, IO na płytce i przycisk setup. Dla wybranej płytki te opcje są uk
 z płytką (także po zmianie płytki w istniejącym `sdkconfig`); **Custom** pokazuje je wszystkie,
 zaczynając od wartości poprzednio wybranej płytki. Domyślnie: Waveshare ESP32-S3-RS485-CAN na
 `esp32s3`, Grenton GATE na `esp32`; presety `f8` / `a8v3` wybierają płytki KinCony. Rozmiar flash,
-tryb PSRAM i konsola to opcje ESP-IDF: ustawia je target i `sdkconfig.defaults.*` presetu.
+tryb PSRAM i konsola to opcje ESP-IDF: ustawia je target i `configs/sdkconfig.defaults.*` presetu.
 
 ### Sieć
 
@@ -567,6 +569,7 @@ tylko przy zmianie.
 <base>/<obj>/event                             {"event_type":"click"} (nie retained)
 
 <base>/system/clu/boot_time | state | reset_reason     ISO time | starting/ok/emergency | text
+<base>/system/clu/last_crash                           text: przyczyna, zadanie i PC awarii przed tym startem
 <base>/system/clu/event                                {"event_type":"time_change"}
 <base>/system/clu/restart/set                          PRESS -> reboot
 <base>/system/memory/heap_free | heap_min | psram_free | lua     KiB

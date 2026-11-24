@@ -184,6 +184,8 @@ void esp_sntp_init(void) { s_sntp_init++; }
 static esp_reset_reason_t s_reason = ESP_RST_POWERON;
 static int s_restarts, s_rssi_ok = 1;
 esp_reset_reason_t esp_reset_reason(void) { return s_reason; }
+static const char *s_last_crash;
+const char *clu_crash_last(void) { return s_last_crash; }
 uint32_t esp_get_free_heap_size(void) { return 123456; }
 uint32_t esp_get_minimum_free_heap_size(void) { return 100000; }
 void esp_restart(void) { s_restarts++; }
@@ -765,6 +767,16 @@ static void test_sysinfo(void)
         lua_pop(L, 1);
     }
     check("sys_info: every reset reason named", all);
+
+    call("sys_info", 0, 0);
+    lua_getfield(L, -1, "last_crash");
+    check("sys_info: no recorded crash -> last_crash absent", lua_isnil(L, -1));
+    lua_pop(L, 2);
+    s_last_crash = "task watchdog: clu_lua (CPU 1) | task IDLE1 | pc 0x400d1234";
+    call("sys_info", 0, 0);
+    check("sys_info: last_crash from clu_crash", !strcmp(field_str("last_crash"), s_last_crash));
+    lua_pop(L, 1);
+    s_last_crash = NULL;
 
     s_rssi_ok = 0;
     s_netif_present = false;

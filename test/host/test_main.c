@@ -83,6 +83,11 @@ static int s_nvs_inits;
 esp_err_t nvs_flash_init(void) { L("nvs_init"); return s_nvs_init[s_nvs_inits++ % 2]; }
 esp_err_t nvs_flash_erase(void) { L("nvs_erase"); return ESP_OK; }
 esp_err_t clu_crypto_init(void) { L("crypto"); return ESP_OK; }
+const esp_app_desc_t *esp_app_get_description(void)
+{
+    static const esp_app_desc_t app_description = {.version = "test", .project_name = "opengr8on-clu"};
+    return &app_description;
+}
 void clu_state_load(void) { L("state_load"); }
 // NVS cfg/* settings: key -> value (NULL = not provisioned)
 static const char *s_set_wifi_ssid, *s_set_wifi_pass, *s_set_mqtt_uri = "mqtt://10.0.0.5", *s_set_mqtt_user,
@@ -192,6 +197,7 @@ void clu_mqtt_set_enabled(bool on) { L("mqtt(%d)", on); }
 void clu_mqtt_set_online(bool on) { L("online(%d)", on); }
 bool clu_mqtt_connected(void) { return false; }
 void clu_sysinfo_init(void) { L("sysinfo"); }
+void clu_crash_init(void) { L("crash_init"); }
 static clu_ota_cfg_t s_oc;
 bool clu_ota_start(const clu_ota_cfg_t *c) { s_oc = *c; L("ota_start"); return true; }
 void clu_ota_confirm(void) { L("ota_confirm"); }
@@ -223,7 +229,7 @@ int main(void)
     app_main();
     check_log("boot order: NVS, crypto, identity (PIN logged) before the telnet hook, then storage, bus, WiFi "
               "(no wait for an IP), services, TFTP, UDP before Lua",
-              "nvs_init crypto state_load telnet_init time_init mount(/fs,storage,1) config_files " BUS_BOOT
+              "nvs_init crypto state_load telnet_init crash_init time_init mount(/fs,storage,1) config_files " BUS_BOOT
               "netif handler(IP_EVENT,0) handler(IP_EVENT,4) handler(IP_EVENT,1) handler(IP_EVENT,5) net_init(wifi,sta) wifi_init handler(WIFI_EVENT,-1) "
               "wifi_config ps(0) wifi_start txpower(60) sntp telnet_start ota_start mqtt_init " HTTP_BOOT "sysinfo tftp(/fs) udp_start "
               "lua_start ");

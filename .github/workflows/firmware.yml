@@ -26,7 +26,7 @@ jobs:
           - { preset: gate,      target: esp32 }   # Grenton GATE (Ethernet LAN8720A)
           - { preset: f8,        target: esp32s3 } # KinCony F8 (Ethernet W5500)
           - { preset: a8v3,      target: esp32s3 } # KinCony KC868-A8v3 (Ethernet W5500)
-          # MySensors gateway variants (sdkconfig.defaults.mysensors): release images end in -mysensors.bin
+          # MySensors gateway variants (configs/sdkconfig.defaults.mysensors): release images end in -mysensors.bin
           - { preset: waveshare-mysensors, target: esp32s3 }
           - { preset: gate-mysensors,      target: esp32 }
           - { preset: f8-mysensors,        target: esp32s3 }
@@ -172,11 +172,11 @@ jobs:
       matrix:
         include:
           - preset: gate-http
-            build_dir: build-gate-http
+            build_dir: build/gate-http
             flash_size: 16MB
             psram_size: 8M
           - preset: gate-http-low-memory
-            build_dir: build-gate-http-low-memory
+            build_dir: build/gate-http-low-memory
             flash_size: 4MB
             psram_size: 2M
     env:
@@ -299,7 +299,7 @@ jobs:
     env:
       ESP_EMU_VERSION: 1.0.0
       ESP_EMU_SHA256: bbc05bcbee298ac66070cd16d688de51721c828ad4a77f382ab4d4b25e6f42b5
-      BUILD_DIR: build-waveshare-emu
+      BUILD_DIR: build/waveshare-emu
     steps:
       - uses: actions/checkout@v7
 

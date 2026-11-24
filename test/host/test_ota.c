@@ -157,6 +157,34 @@ const esp_app_desc_t *esp_app_get_description(void) { return &s_run_desc; }
 void vTaskDelay(TickType_t t) { s_delayed += t; }
 void esp_restart(void) { s_restarts++; }
 
+// Confirmation timer and restart hook: the test fires them itself.
+static int64_t s_uptime_us;
+int64_t esp_timer_get_time(void) { return s_uptime_us; }
+static esp_timer_create_args_t s_timer_args;
+static esp_err_t s_timer_create_rc;
+static uint64_t s_timer_delay_us;
+static int s_timer_creates;
+esp_err_t esp_timer_create(const esp_timer_create_args_t *a, esp_timer_handle_t *h)
+{
+    s_timer_creates++;
+    if (s_timer_create_rc != ESP_OK) return s_timer_create_rc;
+    s_timer_args = *a;
+    *h = (esp_timer_handle_t)&s_timer_args;
+    return ESP_OK;
+}
+esp_err_t esp_timer_start_once(esp_timer_handle_t h, uint64_t us) { s_timer_delay_us = us; return ESP_OK; }
+static shutdown_handler_t s_shutdown_handler;
+esp_err_t esp_register_shutdown_handler(shutdown_handler_t h) { s_shutdown_handler = h; return ESP_OK; }
+
+/** @brief Forget an armed confirmation, as after a reboot. */
+static void confirm_reset(void)
+{
+    s_confirm_timer = NULL;
+    s_shutdown_handler = NULL;
+    s_timer_creates = 0;
+    s_valid_calls = 0;
+}
+
 // ---------------------------------------------------------------- helpers
 // "Basic " + base64("ota:secret123")
 #define GOOD "Basic b3RhOnNlY3JldDEyMw=="
@@ -319,20 +347,51 @@ int main(void)
     free(img);
 
     // ---- rollback confirmation
+    confirm_reset();
+    s_state = ESP_OTA_IMG_PENDING_VERIFY;
+    s_uptime_us = 10 * 1000000LL;
+    clu_ota_confirm();
+    check("fresh image, network up at 10 s: not valid yet, timer for the remaining 50 s",
+          s_valid_calls == 0 && s_timer_creates == 1 && s_timer_delay_us == 50 * 1000000ULL && s_shutdown_handler);
+    clu_ota_confirm();
+    check("next IP event: already armed", s_timer_creates == 1 && s_valid_calls == 0);
+    s_timer_args.callback(s_timer_args.arg);
+    check("60 s uptime: marked valid", s_valid_calls == 1);
+    s_state = ESP_OTA_IMG_VALID;
+    s_shutdown_handler();
+    check("restart after the confirmation: untouched", s_valid_calls == 1);
+
+    confirm_reset();
     s_state = ESP_OTA_IMG_PENDING_VERIFY;
     clu_ota_confirm();
-    check("fresh OTA image pending verification: marked valid", s_valid_calls == 1);
+    s_shutdown_handler();
+    check("restart on purpose before 60 s (OM reset): marked valid", s_valid_calls == 1);
+
+    confirm_reset();
+    s_uptime_us = 70 * 1000000LL;
+    clu_ota_confirm();
+    check("network up only after 60 s: marked valid at once", s_valid_calls == 1 && s_timer_creates == 0);
+
+    confirm_reset();
+    s_uptime_us = 10 * 1000000LL;
+    s_timer_create_rc = ESP_ERR_NO_MEM;
+    clu_ota_confirm();
+    check("no timer: marked valid at once (never rolls back a working image)", s_valid_calls == 1);
+    s_timer_create_rc = ESP_OK;
+
+    confirm_reset();
     s_state = ESP_OTA_IMG_VALID;
     clu_ota_confirm();
-    check("already valid: untouched", s_valid_calls == 1);
+    check("already valid: untouched, nothing armed", s_valid_calls == 0 && s_timer_creates == 0 && !s_shutdown_handler);
     s_state = ESP_OTA_IMG_PENDING_VERIFY;
     s_state_rc = ESP_FAIL;
     clu_ota_confirm();
-    check("state unknown (no otadata): untouched", s_valid_calls == 1);
+    check("state unknown (no otadata): untouched", s_valid_calls == 0 && s_timer_creates == 0);
     s_state_rc = ESP_OK;
     s_valid_rc = ESP_FAIL;
+    s_uptime_us = 70 * 1000000LL;
     clu_ota_confirm();
-    check("mark-valid failure tolerated", s_valid_calls == 2);
+    check("mark-valid failure tolerated", s_valid_calls == 1);
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

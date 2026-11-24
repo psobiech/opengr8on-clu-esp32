@@ -115,6 +115,10 @@ $(OUT)/sys_%.o: $(MAIN)/%.c sys_host.h $(STUBS) $(HDRS)
 $(OUT)/test_sys: test_sys.c $(SYS_OBJS) $(PROTO)/clu_keys.c $(LUALIB) fake_nvs.h $(STUBS) $(HDRS)
 	$(TCC) $(HOST_CFLAGS) $(SYS_INC) -o $@ test_sys.c $(SYS_OBJS) $(PROTO)/clu_keys.c $(LUALIB) -lm -ldl
 
+# Crash record (main/clu_crash.c, included by the test): panic wrapper, task watchdog hook, next boot.
+$(OUT)/test_crash: test_crash.c $(MAIN)/clu_crash.c $(STUBS) $(HDRS)
+	$(TCC) $(HOST_CFLAGS) -Istubs -I$(MAIN) -o $@ test_crash.c
+
 # TFTP server (clu_tftp.c, included by the test) against a reactive fake peer, files in /tmp.
 $(OUT)/test_tftp: test_tftp.c $(COMP)/clu_tftp/clu_tftp.c $(PROTO)/tftp_proto.c $(STUBS) $(HDRS)
 	$(TCC) $(HOST_CFLAGS) -Istubs -I$(PROTO)/include -I$(COMP)/clu_tftp/include \
@@ -219,7 +223,7 @@ $(OUT)/test_crypto: test_crypto.c $(COMP)/clu_crypto/clu_crypto.c $(PROTO)/clu_k
 
 HAVE_MBEDTLS3 := $(wildcard $(MBEDTLS3_INC)/psa/crypto.h)
 
-C_TESTS := test_proto test_drivers test_master test_udp test_udp_nobus test_uart test_localio test_localio_sensors test_localio_hw test_localio_f8 test_localio_a8v3 test_sys test_tftp test_telnet test_ota test_mqttc test_httpc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_main_gate test_time_nortc test_rtc test_display test_oled test_eth_emac test_eth_w5500
+C_TESTS := test_proto test_drivers test_master test_udp test_udp_nobus test_uart test_localio test_localio_sensors test_localio_hw test_localio_f8 test_localio_a8v3 test_sys test_crash test_tftp test_telnet test_ota test_mqttc test_httpc test_mysensors test_lua test_main test_main_nobus test_main_mysensors test_main_gate test_time_nortc test_rtc test_display test_oled test_eth_emac test_eth_w5500
 C_TESTS := $(addprefix $(OUT)/,$(C_TESTS) $(if $(HAVE_MBEDTLS3),test_crypto))
 
 .PHONY: test test-c clean coverage
@@ -243,6 +247,7 @@ test-c: $(C_TESTS)
 	$(OUT)/test_localio_f8 2>/dev/null
 	$(OUT)/test_localio_a8v3 2>/dev/null
 	$(OUT)/test_sys 2>/dev/null
+	$(OUT)/test_crash 2>/dev/null
 	$(OUT)/test_tftp 2>/dev/null
 	$(OUT)/test_telnet 2>/dev/null
 	$(OUT)/test_ota 2>/dev/null

@@ -2,6 +2,7 @@
 #include "FreeRTOS.h"
 typedef void *TaskHandle_t;
 TaskHandle_t xTaskGetCurrentTaskHandle(void);
+char *pcTaskGetName(TaskHandle_t task); // defined by the test that needs it
 void vTaskDelay(TickType_t t);
 uint32_t ulTaskNotifyTake(BaseType_t clear, TickType_t wait);
 void xTaskNotifyGive(TaskHandle_t t);

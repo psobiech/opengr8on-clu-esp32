@@ -49,6 +49,8 @@ local SYSTEM_ENTITIES = {
     text = true, icon = "mdi:ip-network" },
   { kind = "sensor", group = "system/clu", base = "reset_reason", feature = "reset_reason",
     name = "Last reset", text = true, icon = "mdi:restart-alert" },
+  { kind = "sensor", group = "system/clu", base = "last_crash", feature = "last_crash",
+    name = "Last crash", text = true, icon = "mdi:alert-octagon" },
   { kind = "sensor", group = "system/tfbus", base = "online", feature = "tfbus_online",
     name = "TFBUS modules online", icon = "mdi:lan-connect" },
   { kind = "sensor", group = "system/tfbus", base = "total", feature = "tfbus_total",

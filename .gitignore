@@ -1,10 +1,6 @@
 build/
 doxygen/
-sdkconfig
-sdkconfig.old
-# per-preset configs (CMakePresets.json); the board defaults stay tracked
-/sdkconfig.*
-!/sdkconfig.defaults*
+/sdkconfig*
 managed_components/
 dependencies.lock
 test/host/out/

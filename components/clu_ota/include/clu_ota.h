@@ -39,8 +39,11 @@ typedef struct {
 bool clu_ota_start(const clu_ota_cfg_t *cfg);
 
 /**
- * @brief Mark the running firmware valid if it is a fresh OTA image still pending verification
- * (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE): call once the network is up. An image that restarts
- * before that is rolled back by the bootloader.
+ * @brief Keep a fresh OTA image still pending verification (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE):
+ * call once the network is up (repeated calls are ignored).
+ *
+ * The image is marked valid after 60 s of uptime, or earlier on a restart on purpose
+ * (esp_restart(): OM reset, MQTT restart, the next update). An image that never reaches the
+ * network, or panics / hits a watchdog before then, is rolled back by the bootloader.
  */
 void clu_ota_confirm(void);

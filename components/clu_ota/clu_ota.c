@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "ota_page.h"
@@ -26,9 +27,16 @@ static const char *TAG = "clu_ota";
 #define OTA_REBOOT_DELAY_MS 500  // lets the response leave before the restart
 #define OTA_RECV_RETRIES 3       // consecutive receive timeouts tolerated
 #define OTA_LOG_STEP (256 * 1024)
+#define OTA_CONFIRM_UPTIME_US (60 * 1000000LL) // a new image must run this long (network up) to be kept
 
 static char s_pass[OTA_PASS_MAX + 1];
+static esp_timer_handle_t s_confirm_timer; // clu_ota_confirm() armed: marks the image valid when it fires
 static char s_origin[128]; // CORS: the one origin allowed to call POST /ota from a browser, "" = none
+
+static bool pending_verify(void);
+static void confirm_timer_expired(void *arg);
+static void confirm_on_restart(void);
+static void mark_valid(const char *why);
 
 /** @brief Value of one base64 character, -1 when not in the alphabet. */
 static int b64_val(char character)
@@ -293,9 +301,50 @@ bool clu_ota_start(const clu_ota_cfg_t *cfg)
 
 void clu_ota_confirm(void)
 {
+    if (s_confirm_timer || !pending_verify()) {
+        return; // already armed (every IP event calls this), or nothing to confirm
+    }
+    // A restart on purpose (OM reset after a script upload, MQTT restart, the next update) keeps
+    // the image; only a panic or watchdog reset before the timer rolls it back.
+    if (esp_register_shutdown_handler(confirm_on_restart) != ESP_OK) {
+        ESP_LOGW(TAG, "no shutdown handler slot: a restart before the confirmation rolls back");
+    }
+    int64_t remaining_us = OTA_CONFIRM_UPTIME_US - esp_timer_get_time();
+    const esp_timer_create_args_t timer_args = {.callback = confirm_timer_expired, .name = "ota_confirm"};
+    if (remaining_us <= 0 || esp_timer_create(&timer_args, &s_confirm_timer) != ESP_OK ||
+        esp_timer_start_once(s_confirm_timer, (uint64_t)remaining_us) != ESP_OK) {
+        mark_valid("network up");
+        return;
+    }
+    ESP_LOGW(TAG, "new firmware: confirmed in %d s unless it crashes before (rollback)",
+             (int)(remaining_us / 1000000));
+}
+
+/** @brief True if the running image is a fresh OTA image still pending verification. */
+static bool pending_verify(void)
+{
     esp_ota_img_states_t image_state;
-    if (esp_ota_get_state_partition(esp_ota_get_running_partition(), &image_state) == ESP_OK &&
-        image_state == ESP_OTA_IMG_PENDING_VERIFY && esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
-        ESP_LOGW(TAG, "new firmware confirmed (network up): no rollback");
+    return esp_ota_get_state_partition(esp_ota_get_running_partition(), &image_state) == ESP_OK &&
+           image_state == ESP_OTA_IMG_PENDING_VERIFY;
+}
+
+/** @brief esp_timer callback: the new image ran OTA_CONFIRM_UPTIME_US with the network up. */
+static void confirm_timer_expired(void *arg)
+{
+    (void)arg;
+    mark_valid("ran 60 s with the network up");
+}
+
+/** @brief Shutdown handler (esp_restart, not a panic): the image restarts on purpose. */
+static void confirm_on_restart(void)
+{
+    mark_valid("restart on purpose");
+}
+
+/** @brief Mark the running image valid (no rollback) if it is still pending verification. */
+static void mark_valid(const char *why)
+{
+    if (pending_verify() && esp_ota_mark_app_valid_cancel_rollback() == ESP_OK) {
+        ESP_LOGW(TAG, "new firmware confirmed (%s): no rollback", why);
     }
 }

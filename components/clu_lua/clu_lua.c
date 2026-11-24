@@ -19,6 +19,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -39,7 +40,9 @@ extern const char objects_lua_end[] asm("_binary_objects_lua_end");
 #define REQS_PER_LOOP 8
 #define LUA_STACK     (48 * 1024) // parser/C recursion is bounded by LUAI_MAXCCALLS=120 (lua/CMakeLists)
 #define REQ_BUDGET_MS 2500        // req: calls are aborted after this (UDP caller waits 3 s)
-#define REQ_HOOK_INSNS 10000
+#define HOOK_INSNS    10000       // count_hook period (instructions)
+#define WATCHDOG_FEED_INTERVAL_US 1000000 // the task watchdog times out after 20 s (sdkconfig.defaults)
+#define WAIT_SLICE_MS 1000        // __clu.wait() sleeps in slices, checking in with the watchdog
 
 static clu_lua_cfg_t s_cfg;
 static const clu_class_ops_t *s_classes[MAX_CLASSES];
@@ -332,27 +335,28 @@ static int l_log(lua_State *L)
     return 0;
 }
 
-// Count hook armed while a req: call runs: a runaway script (while true do end) is aborted with a
-// Lua error instead of hanging the runtime. MAIN.LUA's own loop is not limited.
+// Deadline of the req: call running now (count_hook): a runaway script (while true do end) is
+// aborted with a Lua error instead of hanging the runtime. MAIN.LUA's own loop is not limited.
 static int64_t s_req_deadline_us;
 static bool s_req_active;
+static int64_t s_watchdog_fed_us;
+
+static void watchdog_feed(void);
 
 /**
- * @brief Count hook armed while a req: call runs.
+ * @brief Count hook of every Lua thread (set by vm_new(), inherited by coroutines).
  *
- * A runaway script (while true do end) is aborted with a Lua error instead of hanging the
- * runtime. MAIN.LUA's own loop is not limited.
+ * Checks the Lua task in with the task watchdog while Lua code runs, so only a task stuck outside
+ * the interpreter (a C call that never returns) reboots the CLU. While a req: call runs, a script
+ * past the req: time limit is aborted with a Lua error.
  */
-static void req_hook(lua_State *L, lua_Debug *debug_info)
+static void count_hook(lua_State *L, lua_Debug *debug_info)
 {
     (void)debug_info;
-    if (!s_req_active) {
-        // A coroutine started inside a req: (event handler) inherited this hook and was resumed
-        // later, e.g. after a remote CLU reply: no req: limit applies to it any more.
-        lua_sethook(L, NULL, 0, 0);
-        return;
-    }
-    if (esp_timer_get_time() > s_req_deadline_us) {
+    watchdog_feed();
+    // A coroutine started inside a req: (event handler) and resumed later, e.g. after a remote
+    // CLU reply, runs outside it: no req: limit applies to it any more.
+    if (s_req_active && esp_timer_get_time() > s_req_deadline_us) {
         luaL_error(L, "req: time limit (%d ms) exceeded", REQ_BUDGET_MS);
     }
 }
@@ -416,11 +420,12 @@ static void exec_request(lua_State *L, req_t *request)
         goto done;
     }
 
-    // Requests run nested in SYSTEM.Loop (MAIN.LUA): keep the caller's hook state.
+    // Requests run nested in SYSTEM.Loop (MAIN.LUA): keep the caller's hook state, but arm
+    // count_hook for the request even if the script replaced it (debug.sethook).
     lua_Hook prev_hook = lua_gethook(L);
     int prev_mask = lua_gethookmask(L), prev_count = lua_gethookcount(L);
     s_req_deadline_us = esp_timer_get_time() + (int64_t)REQ_BUDGET_MS * 1000;
-    lua_sethook(L, req_hook, LUA_MASKCOUNT, REQ_HOOK_INSNS);
+    lua_sethook(L, count_hook, LUA_MASKCOUNT, HOOK_INSNS);
     lua_pushcfunction(L, req_protected);
     lua_pushlightuserdata(L, request);
     s_req_active = true;
@@ -518,6 +523,7 @@ static int l_loop(lua_State *L)
         lua_sethook(L, reload_hook, LUA_MASKCOUNT, 1);
         return luaL_error(L, "reload");
     }
+    watchdog_feed(); // a near-idle SYSTEM.Loop runs too few instructions for count_hook
     req_t *request;
     if (xQueueReceive(s_reqs, &request, pdMS_TO_TICKS(LOOP_WAIT_MS)) == pdTRUE) {
         exec_request(L, request);
@@ -543,9 +549,9 @@ static int l_init(lua_State *L)
 /** @brief Lua: `__clu.wait([ms])` — sleep the Lua task. */
 static int l_wait(lua_State *L)
 {
-    lua_Integer ms = luaL_optinteger(L, 1, 0);
-    if (ms > 0) {
-        vTaskDelay(pdMS_TO_TICKS(ms));
+    for (lua_Integer remaining_ms = luaL_optinteger(L, 1, 0); remaining_ms > 0; remaining_ms -= WAIT_SLICE_MS) {
+        vTaskDelay(pdMS_TO_TICKS(remaining_ms < WAIT_SLICE_MS ? remaining_ms : WAIT_SLICE_MS));
+        watchdog_feed();
     }
     return 0;
 }
@@ -860,6 +866,7 @@ static lua_State *vm_new(void)
     if (!L) {
         return NULL;
     }
+    lua_sethook(L, count_hook, LUA_MASKCOUNT, HOOK_INSNS); // coroutines inherit it
     lua_atpanic(L, l_panic);
     // Out of memory while setting up must not reach the panic handler (abort -> reboot loop).
     lua_pushcfunction(L, vm_setup);
@@ -1000,6 +1007,7 @@ static void run_vm(void)
         ESP_LOGE(TAG, "cannot create Lua state");
         while (!s_reload) {
             vTaskDelay(pdMS_TO_TICKS(100));
+            watchdog_feed();
         }
         return;
     }
@@ -1012,10 +1020,12 @@ static void run_vm(void)
  */
 static void lua_task(void *arg)
 {
+    esp_task_wdt_add(NULL); // fed by count_hook, SYSTEM.Loop and __clu.wait (watchdog_feed)
     for (;;) {
         run_vm();
         ESP_LOGW(TAG, "reload: Lua VM closed");
         if (s_halt) {
+            esp_task_wdt_delete(NULL);
             xSemaphoreGive(s_reloaded);
             vTaskSuspend(NULL); // reboot follows
         }
@@ -1028,8 +1038,22 @@ static void lua_task(void *arg)
         xSemaphoreGive(s_reloaded);
         if (!s_reload_ok) {
             ESP_LOGE(TAG, "reload: host reset failed, waiting for reboot");
+            esp_task_wdt_delete(NULL);
             vTaskSuspend(NULL);
         }
+    }
+}
+
+/**
+ * @brief Check the Lua task in with the task watchdog, at most once per
+ *        WATCHDOG_FEED_INTERVAL_US (count_hook runs every HOOK_INSNS instructions).
+ */
+static void watchdog_feed(void)
+{
+    int64_t now_us = esp_timer_get_time();
+    if (now_us - s_watchdog_fed_us >= WATCHDOG_FEED_INTERVAL_US) {
+        s_watchdog_fed_us = now_us;
+        esp_task_wdt_reset();
     }
 }
 

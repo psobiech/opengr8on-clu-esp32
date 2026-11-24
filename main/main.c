@@ -17,6 +17,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "clu_crash.h"
 #include "clu_crypto.h"
 #include "clu_eth.h"
 #if CONFIG_CLU_HTTP
@@ -40,11 +41,16 @@
 #endif
 #include "clu_telnet.h"
 #include "clu_tftp.h"
+#include "esp_app_desc.h"
 #include "esp_event.h"
+#include "esp_flash.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
+#if CONFIG_SPIRAM
+#include "esp_psram.h"
+#endif
 #if CONFIG_PM_ENABLE
 #include "esp_pm.h"
 #endif
@@ -104,7 +110,7 @@ static void on_ip(void *arg, esp_event_base_t base, int32_t id, void *data)
     udp_server_net_up();
     esp_sntp_restart(); // first poll now instead of at the next retry after a failed early one
     net_state(id == IP_EVENT_STA_GOT_IP ? CLU_NET_WIFI : CLU_NET_ETH, true);
-    clu_ota_confirm(); // a fresh OTA image that reached the network is kept (no rollback)
+    clu_ota_confirm(); // a fresh OTA image is kept once it also ran 60 s without crashing
 }
 
 #if CONFIG_CLU_NET_DIAG_INTERVAL > 0
@@ -378,11 +384,18 @@ static void on_lua_init(void)
     clu_mqtt_start();
 }
 
+static void log_memory_sizes(void);
 static void power_save_start(void);
 
 /** @brief ESP-IDF entry point: bring up all subsystems in dependency order. */
 void app_main(void)
 {
+    // Startup logs before app_main run at Warning (sdkconfig.defaults: quiet boot); the app logs Info.
+    esp_log_level_set("*", ESP_LOG_INFO);
+    const esp_app_desc_t *app_description = esp_app_get_description();
+    ESP_LOGI(TAG, "%.32s %.32s", app_description->project_name, app_description->version);
+    log_memory_sizes();
+
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -401,6 +414,7 @@ void app_main(void)
     };
     clu_telnet_init(&telnet_config);
 #endif
+    clu_crash_init(); // after the telnet hook: its log line stays in the console history
     clu_time_init();
     storage_mount();
     clu_state_write_config_files();
@@ -502,6 +516,24 @@ void app_main(void)
     };
     clu_lua_start(&lua_config);
     power_save_start(); // boot ran at full speed; from now on idle drops the clock
+}
+
+/**
+ * @brief Log the flash and PSRAM sizes at Info. The quiet boot (sdkconfig.defaults) hides the
+ * bootloader's "SPI Flash Size" and esp_psram's "Found ... PSRAM device"; this line replaces them
+ * (test/emulator/boot checks it). PSRAM 0 = not built in or not found.
+ */
+static void log_memory_sizes(void)
+{
+    uint32_t flash_size_bytes = 0;
+    esp_flash_get_size(NULL, &flash_size_bytes);
+    size_t psram_size_bytes = 0;
+#if CONFIG_SPIRAM
+    if (esp_psram_is_initialized()) {
+        psram_size_bytes = esp_psram_get_size();
+    }
+#endif
+    ESP_LOGI(TAG, "flash %uMB, PSRAM %uMB", (unsigned)(flash_size_bytes >> 20), (unsigned)(psram_size_bytes >> 20));
 }
 
 /**

@@ -11,8 +11,7 @@ from pathlib import Path
 def boot_markers(flash_size: str = "16MB", psram_size: str = "8M") -> tuple[str, ...]:
     psram_megabytes = psram_size.removesuffix("M")
     return (
-        f"SPI Flash Size : {flash_size}",
-        f"Found {psram_megabytes}MB PSRAM device",
+        f"flash {flash_size}, PSRAM {psram_megabytes}MB",
         "storage mounted at /fs",
         "HttpListener on TCP port 80",
         "no /fs/a/MAIN.LUA, idle",
@@ -44,10 +43,9 @@ def assess_boot(
         if marker not in output:
             failures.append(f"missing boot marker: {marker}")
     expected_psram = f"{psram_size.removesuffix('M')}MB"
-    for actual_flash in re.findall(r"SPI Flash Size\s*:\s*(\d+MB)", output):
+    for actual_flash, actual_psram in re.findall(r"flash (\d+MB), PSRAM (\d+MB)", output):
         if actual_flash != flash_size:
             failures.append(f"unexpected flash size marker: {actual_flash}")
-    for actual_psram in re.findall(r"Found (\d+MB) PSRAM device", output):
         if actual_psram != expected_psram:
             failures.append(f"unexpected PSRAM size marker: {actual_psram}")
     for pattern in FAILURE_PATTERNS:

@@ -27,13 +27,13 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .ccache
-          key: ccache-firmware-${{ runner.os }}-${{ runner.arch }}-esp-idf-v6.1.1-${{ inputs.target }}-${{ inputs.preset }}-${{ hashFiles('CMakePresets.json', 'sdkconfig.defaults*', 'sdkconfig.*', 'dependencies.lock', 'components/**/idf_component.yml', 'main/idf_component.yml') }}-${{ github.sha }}
+          key: ccache-firmware-${{ runner.os }}-${{ runner.arch }}-esp-idf-v6.1.1-${{ inputs.target }}-${{ inputs.preset }}-${{ hashFiles('CMakePresets.json', 'configs/**', 'dependencies.lock', 'components/**/idf_component.yml', 'main/idf_component.yml') }}-${{ github.sha }}
           restore-keys: |
-            ccache-firmware-${{ runner.os }}-${{ runner.arch }}-esp-idf-v6.1.1-${{ inputs.target }}-${{ inputs.preset }}-${{ hashFiles('CMakePresets.json', 'sdkconfig.defaults*', 'sdkconfig.*', 'dependencies.lock', 'components/**/idf_component.yml', 'main/idf_component.yml') }}-
+            ccache-firmware-${{ runner.os }}-${{ runner.arch }}-esp-idf-v6.1.1-${{ inputs.target }}-${{ inputs.preset }}-${{ hashFiles('CMakePresets.json', 'configs/**', 'dependencies.lock', 'components/**/idf_component.yml', 'main/idf_component.yml') }}-
 
       - name: Use release compiler settings
         # appended to base defaults -> later lines override CONFIG_COMPILER_OPTIMIZATION_DEBUG for every preset
-        run: cat sdkconfig.defaults.release >> sdkconfig.defaults
+        run: cat configs/sdkconfig.defaults.release >> configs/sdkconfig.defaults
 
       - name: ESP-IDF build
         if: ${{ !inputs.capture-build-log }}
@@ -83,7 +83,7 @@ jobs:
              "$bdir/flash_args" "$bdir/flasher_args.json" "$out/"
           cp tools/mknvs.py "$out/"
           echo "${{ inputs.target }}" > "$out/CHIP"
-          git checkout -- sdkconfig.defaults  # undo release append so --dirty stays clean
+          git checkout -- configs/sdkconfig.defaults  # undo release append so --dirty stays clean
           git describe --tags --always --dirty > "$out/VERSION"
           ls -lR "$out"
 

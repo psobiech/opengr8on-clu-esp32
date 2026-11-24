@@ -1,6 +1,9 @@
 idf_component_register(
-    SRCS "main.c" "clu_state.c" "udp_server.c" "clu_time.c" "clu_net.c" "clu_diag.c" "clu_sysinfo.c" "clu_eth.c" "clu_status_display.c"
+    SRCS "main.c" "clu_state.c" "udp_server.c" "clu_time.c" "clu_net.c" "clu_diag.c" "clu_sysinfo.c" "clu_eth.c" "clu_status_display.c" "clu_crash.c"
     INCLUDE_DIRS "."
     REQUIRES clu_proto clu_crypto clu_rtc clu_tftp clu_lua clu_mqtt clu_http clu_ota clu_telnet clu_mysensors tfbus_uart tfbus_master tfbus_drivers clu_localio clu_display
-             nvs_flash esp_wifi esp_eth esp_netif esp_event fatfs wear_levelling lwip esp_system esp_timer esp_driver_gpio esp_driver_spi
+             nvs_flash esp_wifi esp_eth esp_netif esp_event fatfs wear_levelling lwip esp_system esp_timer esp_driver_gpio esp_driver_spi esp_app_format spi_flash esp_psram
 )
+
+# clu_crash.c records every panic (cause, task, PC) in RTC memory before ESP-IDF's handler runs.
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler")

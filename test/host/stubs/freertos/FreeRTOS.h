@@ -8,6 +8,7 @@ typedef unsigned UBaseType_t;
 #define pdFALSE 0
 #define pdPASS pdTRUE
 #define portMAX_DELAY 0xffffffffu
+#define configMAX_TASK_NAME_LEN 16
 #define pdMS_TO_TICKS(ms) ((TickType_t)(ms))
 typedef int portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0

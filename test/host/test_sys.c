@@ -13,6 +13,7 @@
 
 #include "clu_diag.h"
 #include "clu_keys.h"
+#include "clu_localio.h"
 #include "clu_lua.h"
 #include "clu_mqtt.h"
 #include "clu_net.h"
@@ -235,6 +236,20 @@ static tfbus_device_t s_devs[3];
 static int s_ndevs;
 int tfbus_master_count(void) { return s_nmods; }
 tfbus_module_t *tfbus_master_get(int i) { return i >= 0 && i < s_nmods ? &s_mods[i] : NULL; }
+// On-board modules: sn 7 = GPIO input module (DIN1 + DIN3), sn 8 = analog module (2 inputs + hub).
+bool clu_localio_channels(uint32_t serial_number, localio_channels_t *channels)
+{
+    if (serial_number == 7) {
+        *channels = (localio_channels_t){.digital_inputs = 0x05};
+        return true;
+    }
+    if (serial_number == 8) {
+        *channels = (localio_channels_t){.analog_inputs = 0x03, .onewire_hubs = 1};
+        return true;
+    }
+    return false;
+}
+
 tfbus_module_t *tfbus_master_find_sn(uint32_t sn)
 {
     for (int i = 0; i < s_nmods; i++) {
@@ -706,6 +721,14 @@ static const char *field_str(const char *k)
     return v;
 }
 
+static lua_Integer field_class(int object_class)
+{
+    lua_rawgeti(L, -1, object_class);
+    lua_Integer v = lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    return v;
+}
+
 static void test_sysinfo(void)
 {
     clu_sysinfo_init();
@@ -764,6 +787,17 @@ static void test_sysinfo(void)
                                                        field_int("addr") == 1 && field_int("hw_type") == 0x1e));
     lua_pop(L, 1);
     check("tfbus_module(unknown sn) -> nil", call("tfbus_module", 1, 99) == LUA_TNIL);
+    lua_pop(L, 1);
+
+    call("local_channels", 1, 7);
+    check("local_channels(GPIO module): DIN mask, no DOUT", field_class(3) == 0x05 && field_class(4) == 0 &&
+                                                              field_class(12) == 0 && field_class(73) == 0);
+    lua_pop(L, 1);
+    call("local_channels", 1, 8);
+    check("local_channels(analog module): AnalogIN + hub", field_class(12) == 0x03 && field_class(73) == 1 &&
+                                                             field_class(3) == 0 && field_class(13) == 0);
+    lua_pop(L, 1);
+    check("local_channels(other sn) -> nil", call("local_channels", 1, 1) == LUA_TNIL);
     lua_pop(L, 1);
 
     s_timer_fail = 1;

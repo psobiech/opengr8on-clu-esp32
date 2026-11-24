@@ -68,6 +68,16 @@ bool clu_localio_sensors_start(uint32_t analog_serial_number)
     return true;
 }
 
+// clu_localio_channels() of the analog module: answered for the serial it was started with.
+bool clu_localio_sensors_channels(uint32_t serial_number, localio_channels_t *channels)
+{
+    if (s_sensors_starts == 0 || serial_number != s_sensors_serial) {
+        return false;
+    }
+    *channels = (localio_channels_t){.analog_inputs = 0x01};
+    return true;
+}
+
 // GPIO: pins set up by gpio_config; a pin reads low when the outside world pulls it low.
 static uint64_t s_gpio_configured_mask, s_gpio_pulled_low;
 static bool s_gpio_pull_up;
@@ -212,11 +222,26 @@ int main(void)
               analog_module_serial != gpio_module_serial);
     bus(tfbus_addr_assign(f, sizeof f, gpio_module_serial, 2));
     check("only two modules", bus(tfbus_discover(f, sizeof f)) == 0);
+    localio_channels_t channels;
+    check("channels: expander module, all 8 relays + 8 inputs",
+          clu_localio_channels(sn, &channels) && channels.digital_inputs == 0xff && channels.digital_outputs == 0xff &&
+              channels.analog_inputs == 0 && channels.onewire_hubs == 0);
+    check("channels: GPIO module, DIN1/3/5 only (DIN2/4 on 1-Wire buses, DIN6-8 unused), no outputs",
+          clu_localio_channels(gpio_module_serial, &channels) && channels.digital_inputs == 0x15 &&
+              channels.digital_outputs == 0);
+    check("channels: analog module from the sensors glue",
+          clu_localio_channels(analog_module_serial, &channels) && channels.analog_inputs == 0x01 &&
+              channels.digital_inputs == 0);
+    check("channels: other serial -> not on-board", !clu_localio_channels(12345, &channels));
 #else
     check("only one module", bus(tfbus_discover(f, sizeof f)) == 0);
     check("no analog / 1-Wire module, no serial for it",
           s_sensors_starts == 0 && nvs_get_u32(1, "sn3", &sn) != ESP_OK);
     nvs_get_u32(1, "sn1", &sn);
+    localio_channels_t channels;
+    check("channels: expander module, all 8 relays + 8 inputs",
+          clu_localio_channels(sn, &channels) && channels.digital_inputs == 0xff && channels.digital_outputs == 0xff);
+    check("channels: other serial -> not on-board", !clu_localio_channels(sn + 1, &channels));
 #endif
 
     // ---------------- relays: DOUT channel k -> relay k+1, active low; input half stays high

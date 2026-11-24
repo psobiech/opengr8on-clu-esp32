@@ -11,6 +11,7 @@
 #if CONFIG_CLU_LOCAL_IO
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "clu_crypto.h"
 #include "clu_i2c.h"
@@ -43,6 +44,8 @@ static i2c_master_dev_handle_t s_dev;
 static bool s_write_ok = true, s_read_ok = true; // last result, to log only changes
 static gpio_num_t s_gpio_inputs[GPIO_INPUTS_MAX];   // module 2 DIN1.. pins (GPIO_NUM_NC: the 1-Wire bus)
 static int s_gpio_input_count;
+static uint32_t s_serial_numbers[LOCALIO_MAX_MODULES];
+static int s_module_count; // modules on the bus (0 until clu_localio_start() set them up)
 
 static uint8_t read_gpio_inputs(void);
 static int setup_gpio_inputs(const char *pin_list);
@@ -188,12 +191,33 @@ void clu_localio_start(void)
 
     localio_setup(serial_numbers, module_count, &s_hw); // relays off, input pins high
     tfbus_uart_add_local(localio_frame);
+    memcpy(s_serial_numbers, serial_numbers, module_count * sizeof serial_numbers[0]);
+    s_module_count = module_count;
     ESP_LOGI(TAG, "on-board IO: IO_MODULE_DIN_8 sn=%lu (PCF8575 0x%02x)", (unsigned long)serial_numbers[0],
              CONFIG_CLU_LOCAL_IO_ADDR);
     if (module_count == 2) {
         ESP_LOGI(TAG, "on-board IO: IO_MODULE_DIN_8 sn=%lu (%d GPIO inputs: %s)", (unsigned long)serial_numbers[1],
                  s_gpio_input_count, CONFIG_CLU_LOCAL_IO_GPIO_INPUTS);
     }
+}
+
+bool clu_localio_channels(uint32_t serial_number, localio_channels_t *channels)
+{
+    *channels = (localio_channels_t){0};
+    if (s_module_count > 0 && serial_number == s_serial_numbers[0]) {
+        channels->digital_inputs = 0xff; // PCF8575: 8 relays + 8 inputs
+        channels->digital_outputs = 0xff;
+        return true;
+    }
+    if (s_module_count > 1 && serial_number == s_serial_numbers[1]) {
+        for (int i = 0; i < s_gpio_input_count; i++) {
+            if (s_gpio_inputs[i] != GPIO_NUM_NC) {
+                channels->digital_inputs |= (uint8_t)(1u << i);
+            }
+        }
+        return true; // its outputs drive nothing
+    }
+    return clu_localio_sensors_channels(serial_number, channels);
 }
 
 /**
@@ -249,5 +273,10 @@ static int setup_gpio_inputs(const char *pin_list)
 #else
 
 void clu_localio_start(void) {}
+
+bool clu_localio_channels(uint32_t serial_number, localio_channels_t *channels)
+{
+    return false;
+}
 
 #endif // CONFIG_CLU_LOCAL_IO

@@ -5,10 +5,12 @@ local MODULE_MODELS = {
   [0x15] = "RELAY DIN 4",
   [0x17] = "ROLLER SH DIN",
   [0x18] = "LED RGBW DIN",
+  [0x19] = "ANALOG DIN",
   [0x1a] = "DIMMER MOSFET DIN",
   [0x1c] = "TOUCH PANEL FM 4",
   [0x1e] = "IO MODULE DIN 8",
   [0x2a] = "ROLLER SH DIN 3",
+  [0xff] = "ONE WIRE",
 }
 
 local DEFAULTS = {
@@ -32,6 +34,7 @@ local DEFAULTS = {
   [18] = { { kind = "climate" } },                                                  -- Thermostat v2
   [20] = { { kind = "sensor", device_class = "temperature", unit = "°C" } },        -- PANELSENSTEMP
   [21] = { { kind = "sensor", unit = "%", icon = "mdi:brightness-5" } },            -- PANELSENSLIGHT
+  [23] = { { kind = "sensor", device_class = "temperature", unit = "°C" } },        -- ONEW_SENSOR
   [24] = { { kind = "cover" } },                                                    -- ROLLER_SHUTTER
   [30] = { { kind = "event" } },                                                    -- PANEL_BUTTON
   [40] = { { kind = "binary_sensor", feature = 2, device_class = "occupancy" },
@@ -40,3 +43,9 @@ local DEFAULTS = {
   [72] = { { kind = "light" } },                                                    -- LED_CCT
 }
 
+-- Module hwType -> classes mapped differently on that module than in DEFAULTS.
+local MODULE_DEFAULTS = {
+  -- ANALOG_DIN: class 12 is AnalogIN (Value = RawValue x Scale), not PowerSupplyVoltage: the unit
+  -- depends on the input and its Scale.
+  [0x19] = { [12] = { { kind = "sensor" } } },
+}

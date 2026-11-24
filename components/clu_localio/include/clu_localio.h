@@ -37,6 +37,19 @@ typedef struct {
 } localio_hw_t;
 
 /**
+ * @brief Channels of an on-board module that have hardware behind them (bit n = OM channel n).
+ *
+ * An emulated module shows OM all the objects of its interface; the other objects of these
+ * modules (PowerSupplyVoltage, AnalogOUT) have no hardware at all.
+ */
+typedef struct {
+    uint8_t digital_inputs;  /**< IO_MODULE_DIN_8 DIN (class 3) */
+    uint8_t digital_outputs; /**< IO_MODULE_DIN_8 DOUT (class 4) */
+    uint8_t analog_inputs;   /**< ANALOG_DIN AnalogIN (class 12) */
+    uint8_t onewire_hubs;    /**< ANALOG_DIN ONE_WIRE_HUB (class 73) */
+} localio_channels_t;
+
+/**
  * @brief Set the module serials and the hardware; all modules unaddressed, outputs off.
  * @param serial_numbers Serial numbers (non-zero, distinct), @p module_count of them.
  * @param module_count   Number of modules (1..LOCALIO_MAX_MODULES).
@@ -67,6 +80,17 @@ void clu_localio_start(void);
  * @return false if neither is configured / both failed to start.
  */
 bool clu_localio_sensors_start(uint32_t analog_serial_number);
+
+/**
+ * @brief Which channels of on-board module @p serial_number have hardware behind them (relays and
+ * expander inputs; GPIO inputs except 1-Wire bus pins; configured analog inputs; the 1-Wire hub if
+ * a bus is set up). The GPIO input module's DOUT and its DIN past the pin list have none.
+ * @return false if @p serial_number is not an on-board IO_MODULE_DIN_8 / ANALOG_DIN module.
+ */
+bool clu_localio_channels(uint32_t serial_number, localio_channels_t *channels);
+
+/** @brief clu_localio_channels() of the ANALOG_DIN module (clu_localio_sensors.c). */
+bool clu_localio_sensors_channels(uint32_t serial_number, localio_channels_t *channels);
 
 #ifdef __cplusplus
 }

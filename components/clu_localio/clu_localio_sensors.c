@@ -58,6 +58,7 @@ typedef struct {
 static adc_oneshot_unit_handle_t s_adc_unit;
 static analog_input_t s_analog_inputs[TFBUS_ANALOG_INPUTS];
 static int s_analog_input_count;
+static uint32_t s_analog_serial_number; // 0 until the ANALOG_DIN module is on the bus
 /** @brief Which bus a sensor was found on (MATCH ROM goes to that bus only). */
 typedef struct {
     uint64_t rom_code;
@@ -94,11 +95,24 @@ bool clu_localio_sensors_start(uint32_t analog_serial_number)
     s_wake = xSemaphoreCreateBinary();
     localio_sensors_setup(analog_serial_number, have_onewire ? request_search : NULL);
     tfbus_uart_add_local(localio_sensors_frame);
+    s_analog_serial_number = analog_serial_number;
     if (xTaskCreate(sensor_task, "localio_sens", TASK_STACK, NULL, TASK_PRIORITY, NULL) != pdPASS) {
         ESP_LOGE(TAG, "no memory for the sensor task: inputs and 1-Wire sensors read 0");
     }
     ESP_LOGI(TAG, "on-board IO: ANALOG_DIN sn=%lu (%d analog input(s), %d 1-Wire bus(es): %s)",
              (unsigned long)analog_serial_number, s_analog_input_count, s_onewire_bus_count, LOCALIO_ONEWIRE_GPIOS);
+    return true;
+}
+
+bool clu_localio_sensors_channels(uint32_t serial_number, localio_channels_t *channels)
+{
+    if (s_analog_serial_number == 0 || serial_number != s_analog_serial_number) {
+        return false;
+    }
+    *channels = (localio_channels_t){
+        .analog_inputs = (uint8_t)((1u << s_analog_input_count) - 1),
+        .onewire_hubs = s_onewire_bus_count > 0 ? 1 : 0,
+    };
     return true;
 }
 

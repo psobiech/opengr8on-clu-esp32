@@ -47,6 +47,12 @@ __clu = {
     if sn == 0x13ab6c81 then return { online = true, fails = 0 } end
     if sn == 0x20c85581 then return { online = false, fails = 9 } end
   end,
+  -- On-board modules: GPIO input module (DIN1 + DIN3 wired, DOUT drive nothing), ANALOG_DIN
+  -- (AnalogIN 1 set up, 1-Wire hub); the ONE_WIRE sensor module and the rest are not restricted.
+  local_channels = function(sn)
+    if sn == 0x0a000001 then return { [3] = 0x05, [4] = 0, [12] = 0, [73] = 0 } end
+    if sn == 0x0a000002 then return { [3] = 0, [4] = 0, [12] = 0x01, [73] = 1 } end
+  end,
   sys_restart = function() restarts = restarts + 1 end,
   mqtt_state = function() return connected, gen end,
   mqtt_publish = function(t, p, r, q)
@@ -79,6 +85,7 @@ __clu = nil
 
 -- USER.LUA-style override before the objects exist
 MQTT.expose("DOU0002", { kind = "light", name = "Ceiling" })
+MQTT.expose("LDO0002", "switch") -- on-board output without hardware, exposed on purpose
 
 assert(loadfile(here .. "fixtures/om.lua"))()
 DIM0001 = OBJECT:new(5, mm_550000001, 0, "DIM0001")
@@ -89,6 +96,18 @@ TMR0001 = OBJECT:new(6, "TMR0001")
 SCH0001 = OBJECT:new(16, "SCH0001")
 THE0001 = OBJECT:new(18, "THE0001")
 PRE0001 = OBJECT:new(40, "PRE0001")
+mm_gpio = OBJECT:new(2, 0x0a000001, 0x1e, "0a000001")
+LDI0001 = OBJECT:new(3, mm_gpio, 0, "LDI0001")   -- GPIO input
+LDI0002 = OBJECT:new(3, mm_gpio, 1, "LDI0002")   -- 1-Wire bus pin
+LDO0001 = OBJECT:new(4, mm_gpio, 0, "LDO0001")
+LDO0002 = OBJECT:new(4, mm_gpio, 1, "LDO0002")
+LPO0001 = OBJECT:new(12, mm_gpio, 0, "LPO0001")  -- PowerSupplyVoltage
+mm_analog = OBJECT:new(2, 0x0a000002, 0x19, "0a000002")
+AIN0001 = OBJECT:new(12, mm_analog, 0, "AIN0001")
+AIN0002 = OBJECT:new(12, mm_analog, 1, "AIN0002") -- not set up
+AOU0001 = OBJECT:new(13, mm_analog, 0, "AOU0001")
+mm_onewire = OBJECT:new(2, 0x0a000003, 0xff, "0a000003")
+ONS0001 = OBJECT:new(23, mm_onewire, 0, "ONS0001")
 TMR0001:set(0, 60000)
 TMR0001:execute(0)
 SYSTEM.Init()
@@ -131,6 +150,8 @@ CCT0001._f[0], CCT0001._f[2] = 4600, 0
 POW0001._f[0] = 23.8
 SCH0001._f[1], SCH0001._f[2] = 1, 42
 THE0001._f[3], THE0001._f[14] = 21.5, 20.25
+AIN0001._f[0] = 3.3
+ONS0001._f[0] = 21.5
 CLU100000001._f[0], CLU100000001._f[2] = 120, 1 -- Uptime, State (C hooks on the device)
 connected, gen = true, 1
 run()
@@ -179,6 +200,23 @@ local voltage = find(CFG .. "sensor" .. NODE .. "POW0001/config")
 check("PowerSupplyVoltage -> voltage sensor", voltage and voltage.p:find('"device_class":"voltage"', 1, true)
   and voltage.p:find('"unit_of_measurement":"V"', 1, true)
   and (find("grenton/CLU100000001/POW0001/state") or {}).p == "23.8")
+check("on-board input with hardware -> binary_sensor + event",
+  find(CFG .. "binary_sensor" .. NODE .. "LDI0001/config") ~= nil and find(CFG .. "event" .. NODE .. "LDI0001_event/config") ~= nil)
+check("on-board channels without hardware -> no entities",
+  find(CFG .. "binary_sensor" .. NODE .. "LDI0002/config") == nil and find(CFG .. "event" .. NODE .. "LDI0002_event/config") == nil
+  and find(CFG .. "switch" .. NODE .. "LDO0001/config") == nil and find(CFG .. "sensor" .. NODE .. "LPO0001/config") == nil
+  and find(CFG .. "sensor" .. NODE .. "AIN0002/config") == nil
+  and count("grenton/CLU100000001/LDO0001") == 0 and count("grenton/CLU100000001/LPO0001") == 0)
+check("USER.LUA override exposes an on-board channel without hardware", find(CFG .. "switch" .. NODE .. "LDO0002/config") ~= nil)
+local analog_in = find(CFG .. "sensor" .. NODE .. "AIN0001/config")
+check("ANALOG_DIN AnalogIN -> sensor without voltage class / unit", analog_in
+  and not analog_in.p:find('"device_class"', 1, true) and not analog_in.p:find('"unit_of_measurement"', 1, true)
+  and analog_in.p:find('"name":"ANALOG DIN 167772162"', 1, true) ~= nil
+  and (find("grenton/CLU100000001/AIN0001/state") or {}).p == "3.3")
+local onewire = find(CFG .. "sensor" .. NODE .. "ONS0001/config")
+check("ONEW_SENSOR -> temperature sensor", onewire and onewire.p:find('"device_class":"temperature"', 1, true)
+  and onewire.p:find('"unit_of_measurement":"°C"', 1, true)
+  and (find("grenton/CLU100000001/ONS0001/state") or {}).p == "21.5")
 local timer = find(CFG .. "sensor" .. NODE .. "TMR0001/config")
 check("Timer -> remaining duration sensor", timer and timer.p:find('"device_class":"duration"', 1, true)
   and timer.p:find('"unit_of_measurement":"s"', 1, true)

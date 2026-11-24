@@ -53,6 +53,25 @@ local function module_device(module)
   return module_dev
 end
 
+-- Default entities of an object: per its module type (MODULE_DEFAULTS), else per its class.
+local function default_entities(object)
+  local module = object._module
+  local module_defaults = type(module) == "table" and MODULE_DEFAULTS[module._hwType]
+  return module_defaults and module_defaults[object._class] or DEFAULTS[object._class]
+end
+
+-- false for a channel of an on-board module (clu_localio) with no hardware behind it: OM sees
+-- every object of the emulated module's interface (DOUT of the GPIO input module, its unused DIN,
+-- unset analog inputs, PowerSupplyVoltage, AnalogOUT), these get no default entities.
+local function has_hardware(object)
+  local module = object._module
+  if type(module) ~= "table" or module._sn == nil or not clu.local_channels then return true end
+  local channel_masks = clu.local_channels(module._sn)
+  if not channel_masks then return true end
+  local channel = math.tointeger(object._channel)
+  return channel ~= nil and channel >= 0 and ((channel_masks[object._class] or 0) >> channel) & 1 == 1
+end
+
 local function build()
   if not labels then load_labels() end
   device = {
@@ -112,9 +131,10 @@ local function build()
   for name in pairs(objects) do names[#names + 1] = name end
   table.sort(names)
   for _, name in ipairs(names) do
+    local object = objects[name]
     local list = overrides[name]
-    if list == nil then list = DEFAULTS[objects[name]._class] end
-    add(name, objects[name], list)
+    if list == nil and has_hardware(object) then list = default_entities(object) end
+    add(name, object, list)
   end
 
   if cfg.diag_ms and overrides[SYS_NAME] ~= false then

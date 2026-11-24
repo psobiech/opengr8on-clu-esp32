@@ -531,9 +531,17 @@ które zniknęły po zmianie OM.LUA, są czyszczone (lista w `a:\STORAGE.DAT`).
 | BUTTON (7), PANEL_BUTTON (30) | `event` (press, release, short_press, long_press, hold, click) | — |
 | ROLLER_SHUTTER (24) | `cover` (0 zamknięta … 100 otwarta) | OPEN/CLOSE → HoldUp/HoldDown, STOP, pozycja → SetPosition |
 | PANELSENSTEMP (20) / PANELSENSLIGHT (21) | `sensor` °C / % | — |
+| PowerSupplyVoltage (12) | `sensor` V | — |
+| AnalogIN (12, moduł ANALOG_DIN) | `sensor` Value (bez jednostki: zależy od wejścia i `Scale`) | — |
+| ONEW_SENSOR (23) | `sensor` °C | — |
 | lokalna CLU (0)¹ | `sensor` czas startu i stan (starting/ok/emergency), `event` time_change | — |
 | moduł TF-Bus (2)¹ | `binary_sensor` connectivity | — |
 | firmware (`system`)¹ | `sensor` heap / min. heap / PSRAM / pamięć Lua (KiB), RSSI, IP, przyczyna resetu, moduły online / łącznie / pominięte odpytania; `button` Restart | — |
+
+Kanały modułów płytki (on-board IO), za którymi nie ma sprzętu, nie dostają domyślnych encji: OM
+widzi wszystkie obiekty emulowanego modułu, a np. DOUT modułu wejść GPIO niczego nie sterują,
+jego DIN poza listą pinów lub na pinie magistrali 1-Wire są zawsze nieaktywne, nieustawione wejścia
+AnalogIN, PowerSupplyVoltage i AnalogOUT nie mają sprzętu. `MQTT.expose` w USER.LUA nadal je wystawia.
 
 ¹ `CLU_MQTT_DIAGNOSTICS`, sekcja „Diagnostic” w HA. Heap, PSRAM, pamięć Lua, RSSI i pominięte
 odpytania próbkowane co `CLU_MQTT_DIAG_INTERVAL` s, reszta przy zwykłym skanowaniu; publikowane

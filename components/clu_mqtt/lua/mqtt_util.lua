@@ -1,7 +1,9 @@
 -- @file mqtt_util.lua
 -- MQTT state/commands + Home Assistant discovery. Loaded after objects.lua (component clu_mqtt).
 -- C side (clu_mqtt.c): connection, LWT "<root>/status", subscriptions, inbound queue. Here:
---   * entities: objects declared by OM.LUA, mapped per class (DEFAULTS) or by USER.LUA overrides
+--   * entities: objects declared by OM.LUA, mapped per class (DEFAULTS, MODULE_DEFAULTS per module
+--     type) or by USER.LUA overrides; channels of on-board modules without hardware behind them
+--     (__clu.local_channels) get no default entities
 --   * discovery: retained "<prefix>/<component>/opengr8on_CLU<sn>/<id>/config", resent on every
 --     (re)connect and on Home Assistant's "online"; configs of entities that disappeared are cleared
 --   * state: polled every scan_ms, published retained on change only

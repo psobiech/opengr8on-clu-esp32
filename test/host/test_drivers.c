@@ -1641,8 +1641,10 @@ int main(void)
         posts_reset();
         status(t, SENSOR("01", "1c0c"));
         check_posts("back: Status 1 + OnConnect", "T1[4]=1 T1!4 ");
+        // 32-bit Lua (CLU_LUA_32BITS) keeps only the low 32 bits of the 48-bit serial, like the driver's cast.
         check("HubSerialNumber / SensorSerialNumber (48-bit ROM serial) exact",
-              lua_get_int(t, 23, 0, 5) == 0x19000001 && lua_get_int(t, 23, 0, 6) == 0x001234567890LL);
+              lua_get_int(t, 23, 0, 5) == 0x19000001 &&
+                  lua_get_int(t, 23, 0, 6) == (lua_Integer)0x001234567890LL);
         check("other features: stored value", lua_get_int(t, 23, 0, 0) == -1);
 
         // hub counts: declared sensors whose status names this hub

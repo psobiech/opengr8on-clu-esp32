@@ -6,10 +6,14 @@
  *                                else WiFi), reset_reason,
  *                                tfbus_total, tfbus_online, tfbus_fails}
  * - `__clu.tfbus_module(sn)` -> {online, fails, polls, addr, hw_type} | nil
+ * - `__clu.local_channels(sn)` -> {[OM class] = bit mask of the channels with hardware behind them}
+ *                                for an on-board module (clu_localio), nil for any other; classes left
+ *                                out have none
  * - `__clu.sys_restart()`    -> reboots ~1 s later (lets the MQTT/UDP reply go out first)
  */
 #include "clu_sysinfo.h"
 
+#include "clu_localio.h"
 #include "clu_lua.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -23,6 +27,11 @@
 #endif
 
 static const char *TAG = "sysinfo";
+
+/** @brief OM object classes of the on-board module channels (clu_localio). */
+enum { OM_CLASS_DIN = 3, OM_CLASS_DOUT = 4, OM_CLASS_ANALOG_IN = 12, OM_CLASS_ONE_WIRE_HUB = 73 };
+
+static void set_class_channels(lua_State *L, int object_class, uint8_t channel_mask);
 
 /** @brief Last reset reason as a short string. */
 static const char *reset_reason(void)
@@ -112,6 +121,28 @@ static int l_tfbus_module(lua_State *L)
     return 1;
 }
 
+/** @brief Lua: `__clu.local_channels(sn)` — see the file comment. */
+static int l_local_channels(lua_State *L)
+{
+    localio_channels_t channels;
+    if (!clu_localio_channels((uint32_t)luaL_checkinteger(L, 1), &channels)) {
+        return 0;
+    }
+    lua_newtable(L);
+    set_class_channels(L, OM_CLASS_DIN, channels.digital_inputs);
+    set_class_channels(L, OM_CLASS_DOUT, channels.digital_outputs);
+    set_class_channels(L, OM_CLASS_ANALOG_IN, channels.analog_inputs);
+    set_class_channels(L, OM_CLASS_ONE_WIRE_HUB, channels.onewire_hubs);
+    return 1;
+}
+
+/** @brief t[object_class] = channel_mask on the table on top of the stack. */
+static void set_class_channels(lua_State *L, int object_class, uint8_t channel_mask)
+{
+    lua_pushinteger(L, channel_mask);
+    lua_rawseti(L, -2, object_class);
+}
+
 /** @brief esp_timer callback: reboot. */
 static void do_restart(void *arg)
 {
@@ -137,6 +168,7 @@ static int l_sys_restart(lua_State *L)
 static const luaL_Reg s_fns[] = {
     {"sys_info", l_sys_info},
     {"tfbus_module", l_tfbus_module},
+    {"local_channels", l_local_channels},
     {"sys_restart", l_sys_restart},
     {NULL, NULL},
 };

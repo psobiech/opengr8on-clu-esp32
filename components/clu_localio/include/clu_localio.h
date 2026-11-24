@@ -52,10 +52,21 @@ int localio_frame(const uint8_t *request_frame, size_t request_length, uint8_t *
 
 /**
  * @brief Board glue (Kconfig CLU_LOCAL_IO): serials from NVS / menuconfig, one PCF8575 on
- * I2C (module 1), optional GPIO inputs (CLU_LOCAL_IO_GPIO_INPUTS, module 2), local endpoint
- * installed in tfbus_uart. Call after nvs_flash_init(), before the bus starts.
+ * I2C (module 1), optional GPIO inputs (CLU_LOCAL_IO_GPIO_INPUTS, module 2), optional analog
+ * inputs / 1-Wire sensors (clu_localio_sensors_start()), local endpoints installed in tfbus_uart.
+ * Call after nvs_flash_init(), before the bus starts.
  */
 void clu_localio_start(void);
+
+/**
+ * @brief Analog inputs (CLU_LOCAL_IO_ANALOG_INPUTS) and 1-Wire sensors (CLU_LOCAL_IO_ONEWIRE_GPIOS,
+ * KinCony F8: CLU_LOCAL_IO_F8_DINx_MODE)
+ * as an ANALOG_DIN module + ONE_WIRE modules (localio_sensors.h): ADC, 1-Wire bus, measuring task,
+ * local endpoint. Called by clu_localio_start().
+ * @param analog_serial_number ANALOG_DIN module serial.
+ * @return false if neither is configured / both failed to start.
+ */
+bool clu_localio_sensors_start(uint32_t analog_serial_number);
 
 #ifdef __cplusplus
 }

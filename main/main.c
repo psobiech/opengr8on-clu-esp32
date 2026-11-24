@@ -45,6 +45,9 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
+#if CONFIG_PM_ENABLE
+#include "esp_pm.h"
+#endif
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_vfs_fat.h"
@@ -375,6 +378,8 @@ static void on_lua_init(void)
     clu_mqtt_start();
 }
 
+static void power_save_start(void);
+
 /** @brief ESP-IDF entry point: bring up all subsystems in dependency order. */
 void app_main(void)
 {
@@ -496,4 +501,24 @@ void app_main(void)
         .on_time_set = clu_time_store,
     };
     clu_lua_start(&lua_config);
+    power_save_start(); // boot ran at full speed; from now on idle drops the clock
+}
+
+/**
+ * @brief Dynamic frequency scaling (CONFIG_PM_ENABLE): CPU at CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ while
+ * any task runs (ESP-IDF holds a CPU-max lock outside the idle task), 80 MHz when both cores idle.
+ * 80 MHz keeps APB at 80 MHz, so UART / RMT / I2C / EMAC timing never changes. No light sleep:
+ * Ethernet, RS485 RX and the 1 ms tick need the clocks running.
+ */
+static void power_save_start(void)
+{
+#if CONFIG_PM_ENABLE
+    const esp_pm_config_t power_config = {
+        .max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+        .min_freq_mhz = 80,
+        .light_sleep_enable = false,
+    };
+    esp_err_t err = esp_pm_configure(&power_config);
+    if (err != ESP_OK) ESP_LOGW(TAG, "power save off: %s", esp_err_to_name(err));
+#endif
 }

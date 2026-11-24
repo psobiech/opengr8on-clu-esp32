@@ -55,6 +55,8 @@ extern const tfbus_driver_t tfbus_drv_relay_din4;
 extern const tfbus_driver_t tfbus_drv_roller_sh_din;
 extern const tfbus_driver_t tfbus_drv_dimmer_mosfet_din;
 extern const tfbus_driver_t tfbus_drv_led_rgbw_din;
+extern const tfbus_driver_t tfbus_drv_analog_din;
+extern const tfbus_driver_t tfbus_drv_one_wire;
 /** @} */
 
 /**
@@ -65,6 +67,12 @@ extern const tfbus_driver_t tfbus_drv_led_rgbw_din;
 static inline int32_t drv_centi(float value)
 {
     return !(value == value) ? 0 : value >= 2e7f ? 2000000000 : value <= -2e7f ? -2000000000 : (int32_t)lroundf(value * 100.0f);
+}
+
+/** @brief Lua number -> thousandths (0.01 -> 10), rounded; NaN -> 0, saturated at +-2e9 (see drv_centi()). */
+static inline int32_t drv_milli(float value)
+{
+    return !(value == value) ? 0 : value >= 2e6f ? 2000000000 : value <= -2e6f ? -2000000000 : (int32_t)lroundf(value * 1000.0f);
 }
 
 #ifdef __cplusplus

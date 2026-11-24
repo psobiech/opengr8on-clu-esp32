@@ -14,7 +14,7 @@
  *   STATUS_POLL    : the type's status payload (or no reply: module offline)
  *   anything else  : the type's command hook, ACK
  * @endverbatim
- * A module type (IO_MODULE_DIN_8 now; dimmer, roller, LED RGBW later) supplies the identity,
+ * A module type (IO_MODULE_DIN_8, ANALOG_DIN, ONE_WIRE) supplies the identity,
  * the status payload and the command handling (tfbus_vmod_ops_t). Pure C: host-tested.
  */
 #pragma once
@@ -73,6 +73,46 @@ void tfbus_din8_status(uint8_t inputs, uint8_t outputs, uint8_t status_buffer[TF
  * @return false if the payload does not parse.
  */
 bool tfbus_din8_cmd(const uint8_t *payload, size_t plen, uint8_t *out);
+/** @} */
+
+/** @name ANALOG_DIN (hwType 0x19) and ONE_WIRE sensors (hwType 0xff) as emulated by the firmware
+ * The real modules' wire format is not known. These records are this firmware's own, used only
+ * between its emulated modules (on-board analog inputs and 1-Wire sensors) and its drivers:
+ * @verbatim
+ *   ANALOG_DIN status  : 02 | 20 0e 00 [7 x u16 LE input, 1/1000] | 21 02 00 [found, searches]
+ *   ANALOG_DIN command : MODULE_CMD record 22 (no data): search the 1-Wire bus again
+ *   ONE_WIRE status    : 01 | 23 0f 00 [state] [i16 LE 1/100 °C] [hub SN u32 LE] [ROM u64 LE]
+ * @endverbatim
+ * `found` = sensors found by the last search, `searches` = searches done (mod 256): a change
+ * means a search finished. `state` is the ONEW_SENSOR Status: 0 disconnected, 1 connected
+ * (temperature valid), 2 reset state (found, not read yet). A ONE_WIRE module's fwType is its
+ * sensor's 1-Wire family code.
+ * @{ */
+#define TFBUS_ANALOG_HW_TYPE      0x19
+#define TFBUS_ANALOG_FW_TYPE      2
+#define TFBUS_ANALOG_FW_API_VER   2
+#define TFBUS_ANALOG_INPUTS       7     /**< AnalogIN objects of the interface (fv02). */
+#define TFBUS_ANALOG_REC_INPUTS   0x20  /**< Status record: input values. */
+#define TFBUS_ANALOG_REC_HUB      0x21  /**< Status record: 1-Wire search results. */
+#define TFBUS_ANALOG_REC_REFRESH  0x22  /**< MODULE_CMD record: search the 1-Wire bus. */
+/** @brief ANALOG_DIN status payload length. */
+#define TFBUS_ANALOG_STATUS_LEN   (1 + 3 + 2 * TFBUS_ANALOG_INPUTS + 3 + 2)
+
+#define TFBUS_ONEWIRE_HW_TYPE     0xff
+#define TFBUS_ONEWIRE_REC_SENSOR  0x23  /**< Status record: sensor reading. */
+#define TFBUS_ONEWIRE_DISCONNECTED 0    /**< Sensor state: not answering. */
+#define TFBUS_ONEWIRE_CONNECTED    1    /**< Sensor state: temperature valid. */
+#define TFBUS_ONEWIRE_NOT_READ     2    /**< Sensor state: found, no temperature yet. */
+/** @brief ONE_WIRE status payload length. */
+#define TFBUS_ONEWIRE_STATUS_LEN  (1 + 3 + 1 + 2 + 4 + 8)
+
+/** @brief ANALOG_DIN STATUS_POLL payload (see above). */
+void tfbus_analog_status(const uint16_t input_values[TFBUS_ANALOG_INPUTS], uint8_t found_sensors,
+                         uint8_t searches_done, uint8_t status_buffer[TFBUS_ANALOG_STATUS_LEN]);
+
+/** @brief ONE_WIRE STATUS_POLL payload (see above). */
+void tfbus_onewire_status(uint8_t sensor_state, int16_t centi_celsius, uint32_t hub_serial_number, uint64_t rom_code,
+                          uint8_t status_buffer[TFBUS_ONEWIRE_STATUS_LEN]);
 /** @} */
 
 #ifdef __cplusplus

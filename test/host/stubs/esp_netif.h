@@ -29,3 +29,16 @@ esp_netif_t *esp_netif_get_handle_from_ifkey(const char *key);
 char *esp_ip4addr_ntoa(const esp_ip4_addr_t *a, char *buf, int len);
 esp_err_t esp_netif_init(void);
 esp_netif_t *esp_netif_create_default_wifi_sta(void);
+// Interface creation (clu_eth.c)
+typedef struct {
+    int route_prio;
+} esp_netif_inherent_config_t;
+#define ESP_NETIF_INHERENT_DEFAULT_ETH() {.route_prio = 50}
+#define ESP_NETIF_NETSTACK_DEFAULT_ETH ((const void *)"eth")
+typedef struct {
+    const esp_netif_inherent_config_t *base;
+    const void *stack;
+} esp_netif_config_t;
+esp_netif_t *esp_netif_new(const esp_netif_config_t *config);
+void esp_netif_destroy(esp_netif_t *netif);
+esp_err_t esp_netif_attach(esp_netif_t *netif, void *driver_handle);

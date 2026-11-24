@@ -251,7 +251,7 @@ pierwszym `req_set_key`. Linia z PIN-em trafia tylko na UART, nie na telnet.
 | `components/clu_ota` | aktualizacja firmware przez HTTP z hasłem (`POST /ota`), potwierdzanie nowego obrazu |
 | `components/clu_rtc` | zegar RTC PCF85063 albo DS3231 na I2C (podtrzymywany bateryjnie) |
 | `components/clu_i2c` | wspólne magistrale I2C (jedna na parę pinów: RTC + ekspander IO) |
-| `components/clu_localio` | IO płytki (PCF8575) jako moduł IO_MODULE_DIN_8 odpowiadający na ramki TF-Bus |
+| `components/clu_localio` | IO płytki (PCF8575) jako moduł IO_MODULE_DIN_8, wejścia analogowe i czujniki 1-Wire jako ANALOG_DIN + ONE_WIRE, odpowiadające na ramki TF-Bus |
 | `tools/mknvs.py` | obraz partycji `cfg` z ustawieniami dla gotowych obrazów (seryjny, PIN, WiFi, MQTT) |
 | `web/` | flasher w przeglądarce (GitHub Pages): obraz z Releases + ustawienia generowane na stronie (`web/nvs.js`) |
 
@@ -260,10 +260,11 @@ z `mknvs.py`, firmware tylko je czyta), dwie partycje aplikacji po 4 MB, FAT 6 M
 (projekt, CONFIG.JSON, STORAGE.DAT, certyfikaty).
 Dla `gate-http-N8R8`: `partitions_8mb.csv`, dwie partycje aplikacji po 3 MB i FAT 1920 KB.
 
-> **Pokrycie testami** (`make -C test/host coverage`, mierzone też w CI): ok. 98% linii całego kodu C
-> firmware (każdy plik `components/` i `main/` ma testy hosta; bez zewnętrznej biblioteki Lua) i ok.
-> 97% kodu Lua (prelude, obiekty wirtualne, MQTT). Testy hosta zastępują ESP-IDF zaślepkami: nie
-> sprawdzają WiFi, FAT, UART ani zegarów na prawdziwym sprzęcie.
+> **Pokrycie testami** (make -C test/host coverage, mierzone też w CI): 97,1% linii (77% gałęzi)
+> całego kodu C i 97,8% kodu Lua; razem 97,2%.
+> Testy hosta zastępują ESP-IDF zaślepkami: nie sprawdzają WiFi, FAT, UART ani zegarów na
+> prawdziwym sprzęcie. Uzupełniają je testy emulatora ([test/emulator](test/emulator/README.md),
+> w CI): prawdziwy obraz ESP32-S3 w `esp-emu`.
 
 ## Zgodność z CLU_ZWAVE_2
 
@@ -308,6 +309,7 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 | LED_RGBW_DIN (0x18) | 🟡 | LEDRGB, LED_CHANNEL ×4, LED_CCT ×2, PowerSupplyVoltage; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](docs/TFBUS.md#led_rgbw_din) |
 | Pozostałe moduły TF-Bus (ściemniacze FM, LED FM, analogowe itd.) | ❌ | brak sterowników |
 | Wbudowane IO płytki (PCF8575) jako IO_MODULE_DIN_8 | 🟡 | [KinCony F8](docs/devices/kincony-f8.md) (sprawdzone na sprzęcie), [KC868-A8v3](docs/devices/kincony-kc868-a8v3.md) (sprawdzone na sprzęcie) |
+| Wbudowane wejścia analogowe i czujniki 1-Wire (DS18B20 / DS18S20) jako ANALOG_DIN + ONE_WIRE | 🟡 | [KinCony F8](docs/devices/kincony-f8.md#wejścia-analogowe-i-czujniki-1-wire) (niesprawdzone na sprzęcie) |
 
 ### Czego brakuje względem CLU_ZWAVE_2
 
@@ -422,6 +424,9 @@ Podmenu **RS485 bus (TF-Bus / MySensors)**.
 | `CLU_LOCAL_IO_OUT_PINS` | P10–P17 | przekaźniki na P10–P17 (wejścia P00–P07, F8) albo P00–P07 (wejścia P10–P17, A8v3) |
 | `CLU_LOCAL_IO_OUT_ACTIVE_LOW` / `IN_ACTIVE_LOW` | y / y | polaryzacja wyjść / wejść |
 | `CLU_LOCAL_IO_SN` | losowy | numer seryjny modułu (dziesiętnie), zapisywany w NVS |
+| `CLU_LOCAL_IO_ANALOG_INPUTS` | pusta (F8: `5:1.51,7:1.51,6:6.667,4:6.667`) | piny ADC1 jako AnalogIN modułu ANALOG_DIN (`GPIO:współczynnik`), zob. [KinCony F8](docs/devices/kincony-f8.md#wejścia-analogowe-i-czujniki-1-wire) |
+| `CLU_LOCAL_IO_ONEWIRE_GPIOS` | pusta | piny magistral 1-Wire, do 4 (DS18B20 / DS18S20 jako moduły ONE_WIRE); F8: osobno dla każdego zacisku DIN1–DIN4 w `CLU_LOCAL_IO_F8_DINx_MODE` |
+| `CLU_LOCAL_IO_SN3` | losowy | numer seryjny modułu ANALOG_DIN, zapisywany w NVS |
 | `CLU_RTC` | y (n na `esp32`) | zegar RTC (brak układu jest logowany i pomijany) |
 | `CLU_RTC_CHIP` | PCF85063 | układ: PCF85063 (Waveshare) albo DS3231 (KinCony F8, KC868-A8v3) |
 | `CLU_RTC_SDA_GPIO` / `SCL_GPIO` | 39 / 38 | piny I2C zegara RTC (mogą być wspólne z ekspanderem IO) |
@@ -617,6 +622,7 @@ make -C test/host coverage                        # pokrycie C (gcov) i Lua; FAI
 | `test_udp` | serwer UDP (`main/udp_server.c`): discovery, klucze, `req:`, TFTP/diagnostyka, reset, wywołania zdalnych CLU, okno konfiguracji i przycisk |
 | `test_uart` | transport RS485 (`tfbus_uart.c`) na symulowanym sterowniku UART: echo, odpowiedzi dzielone, timeouty, lokalne moduły |
 | `test_localio` | emulacja IO_MODULE_DIN_8 (`localio.c`): DISCOVER, adresowanie, odpytywanie, ACTIVATE/DEACTIVATE, debouncing, awarie ekspandera, RESET |
+| `test_localio_sensors` | wejścia analogowe / czujniki 1-Wire jako moduły (`localio_sensors.c`): DISCOVER, status, lista czujników przy przeszukaniach, błędy odczytu, CRC8, dekodowanie DS18B20 / DS18S20 |
 | `test_localio_f8` / `test_localio_a8v3` | IO płytki (`clu_localio.c`) na symulowanym PCF8575: mapowanie pinów F8 / A8v3, numer seryjny w NVS |
 | `test_sys` | `main/`: statyczne IP i DNS, strefa czasu, SNTP i odtwarzanie czasu z RTC, tożsamość i klucze (NVS), CONFIG.JSON / config.txt, pakiet diagnostyczny, `sys_info` |
 | `test_tftp` | serwer TFTP: pobieranie / wysyłanie (octet, netascii), utrata pakietów, obce hosty, limity, błędy |
@@ -627,7 +633,7 @@ make -C test/host coverage                        # pokrycie C (gcov) i Lua; FAI
 | `test_rtc` | RTC PCF85063 i DS3231: kodowanie BCD ↔ epoch (lata przestępne, zakres 2000–2099, flagi OS / OSF, tryb 12h), sterownik I2C na symulowanych układach, wspólna magistrala I2C |
 | `test_main` | kolejność startu, konfiguracja modułów, zdarzenia WiFi, mapowanie cech CLU (NTP, strefa, DNS, UseCloud); `test_main_nobus` / `test_main_mysensors`: bez magistrali / z MySensors |
 
-`make coverage` zapisuje też `test/host/coverage/summary.md` (tabela Markdown) i `coverage.json`;
+`make coverage` zapisuje też `test/host/out/coverage/summary.md` (tabela Markdown) i `coverage.json`;
 wymaga tylko `gcc`/`gcov`, `python3` i `luac$(LUA)`.
 
 ## Bezpieczeństwo

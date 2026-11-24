@@ -49,6 +49,9 @@ struct host_queue {
     uint8_t *buf;
 };
 static int s_queue_fail;
+static QueueHandle_t s_created_queues[64]; // freed by free_queues() at the end
+static int s_created_queue_count;
+static void free_queues(void);
 QueueHandle_t xQueueCreate(UBaseType_t len, UBaseType_t item)
 {
     if (s_queue_fail) {
@@ -58,6 +61,9 @@ QueueHandle_t xQueueCreate(UBaseType_t len, UBaseType_t item)
     q->item = item;
     q->cap = len;
     q->buf = calloc(len, item);
+    if (s_created_queue_count < (int)(sizeof s_created_queues / sizeof s_created_queues[0])) {
+        s_created_queues[s_created_queue_count++] = q;
+    }
     return q;
 }
 BaseType_t xQueueSend(QueueHandle_t q, const void *item, TickType_t wait)
@@ -1301,6 +1307,17 @@ int main(void)
     test_rs485_proto();
     test_gateway();
     test_vmod();
+    free_queues();
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
+/** @brief Free every fake queue (the firmware creates its queues once at boot and keeps them). */
+static void free_queues(void)
+{
+    for (int i = 0; i < s_created_queue_count; i++) {
+        free(s_created_queues[i]->buf);
+        free(s_created_queues[i]);
+    }
+    s_created_queue_count = 0;
 }

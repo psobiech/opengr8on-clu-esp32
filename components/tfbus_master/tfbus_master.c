@@ -619,12 +619,24 @@ static feature_type_t feature_type(int object_class, int idx);
 static const clu_class_ops_t s_io_ops = {.on_new = io_on_new, .get = io_get, .set = io_set, .execute = io_execute};
 
 /**
- * @brief IO class hook get: a feature with no value yet (before the first status, never set) reads
- *        its type's zero on every object hosted on a module: "" for str, false for confirmation
- *        (boolean), 0 for the rest (num). Stored values go the generic way.
+ * @brief IO class hook get: the driver's computed value (tfbus_driver_t::io_get) if it has one;
+ *        else a feature with no value yet (before the first status, never set) reads its type's
+ *        zero on every object hosted on a module: "" for str, false for confirmation (boolean),
+ *        0 for the rest (num). Stored values go the generic way.
  */
 static bool io_get(lua_State *L, int obj, int idx)
 {
+    int channel_index;
+    tfbus_module_t *module = io_module(L, obj, &channel_index);
+    if (module && module->drv->io_get) {
+        int object_class = clu_obj_class(L, obj);
+        xSemaphoreTake(s_drv_lock, portMAX_DELAY);
+        bool pushed = module->drv->io_get(module, L, object_class, channel_index, idx);
+        xSemaphoreGive(s_drv_lock);
+        if (pushed) {
+            return true;
+        }
+    }
     lua_getfield(L, obj, "_module");
     bool hosted_on_module = lua_istable(L, -1);
     lua_pop(L, 1);

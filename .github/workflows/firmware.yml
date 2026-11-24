@@ -123,8 +123,8 @@ jobs:
       - name: Coverage summary
         if: always()
         run: |
-          if [ -f test/host/coverage/summary.md ]; then
-            { echo "## Host test coverage"; echo; cat test/host/coverage/summary.md; } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f test/host/out/coverage/summary.md ]; then
+            { echo "## Host test coverage"; echo; cat test/host/out/coverage/summary.md; } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload coverage report
@@ -133,8 +133,8 @@ jobs:
         with:
           name: coverage
           path: |
-            test/host/coverage/summary.md
-            test/host/coverage/coverage.json
+            test/host/out/coverage/summary.md
+            test/host/out/coverage/coverage.json
           if-no-files-found: ignore
 
   # C host tests for every Lua build variant (coverage above runs the default 5.3 / float build).

@@ -8,6 +8,8 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 
 # Use the maximum CPU frequency supported by ESP32 and ESP32-S3 boards.
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# Dynamic frequency scaling after boot (main.c power_save_start): 240 MHz busy, 80 MHz idle.
+CONFIG_PM_ENABLE=y
 
 # Keep local builds debuggable; CI appends sdkconfig.defaults.release for release firmware.
 CONFIG_COMPILER_OPTIMIZATION_DEBUG=y

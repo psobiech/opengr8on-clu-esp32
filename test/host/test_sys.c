@@ -492,10 +492,14 @@ static void test_provisioned(void)
     check("provisioned: serial and PIN from the cfg partition, stored in nvs, factory key from the PIN",
           g_clu.sn == 221010155u && !strcmp(g_clu.pin, "QWER5678") && nvs_u32("clu", "sn") == 221010155u &&
               !strcmp(nvs_str("clu", "pin"), "QWER5678") && !memcmp(g_clu.project.key, k, 16) && nvs_part_inits == 2);
+    // Stored values are heap copies kept for the program's lifetime: the test frees them.
+    char *stored_ssid = (char *)clu_state_setting("wifi_ssid", "dflt");
+    char *stored_uri = (char *)clu_state_setting("mqtt_uri", NULL);
     check("setting: provisioned values win, other keys fall back",
-          !strcmp(clu_state_setting("wifi_ssid", "dflt"), "NvsNet") &&
-              !strcmp(clu_state_setting("mqtt_uri", NULL), "mqtts://broker.lan:8883") &&
+          !strcmp(stored_ssid, "NvsNet") && stored_uri && !strcmp(stored_uri, "mqtts://broker.lan:8883") &&
               !strcmp(clu_state_setting("wifi_pass", "pw"), "pw") && !clu_state_setting("mqtt_user", NULL));
+    free(stored_ssid);
+    free(stored_uri);
     nvs_open_from_partition("cfg", "cfg", NVS_READWRITE, &h);
     nvs_set_str(h, "mqtt_uri", "");
     check("setting: empty value in the cfg partition = unset, falls back",
@@ -608,10 +612,13 @@ static void test_config_files(void)
               "{\"sn\":330017203,\"mac\":\"24:6f:28:ab:cd:ef\",\"hwType\":19,\"hwVer\":1,\"fwType\":3,"
               "\"fwApiVer\":5,\"fwVer\":\"1.0.0\",\"status\":\"OK\",\"tfbusDevices\":["
               "{\"sn\":252017533,\"hwType\":3,\"hwVer\":1,\"fwType\":3,\"fwApiVer\":4,\"fwVer\":\"0.0.0\",\"status\":\"OK\"},"
-              "{\"sn\":330001537,\"hwType\":30,\"hwVer\":3,\"fwType\":2,\"fwApiVer\":2,\"fwVer\":\"2.2.4\",\"status\":\"OK\"}]}");
+              "{\"sn\":330001537,\"hwType\":30,\"hwVer\":3,\"fwType\":2,\"fwApiVer\":2,\"fwVer\":\"2.2.4\",\"status\":\"OK\"},"
+              // CLU_DEBUG_EXTRA_MODULES (stub): two fake modules, parsing stops at "bad"
+              "{\"sn\":419430401,\"hwType\":25,\"hwVer\":1,\"fwType\":2,\"fwApiVer\":2,\"fwVer\":\"0.0.0\",\"status\":\"OK\"},"
+              "{\"sn\":671088641,\"hwType\":255,\"hwVer\":1,\"fwType\":40,\"fwApiVer\":3,\"fwVer\":\"0.0.0\",\"status\":\"OK\"}]}");
     check_str("CONFIG.TXT: LF-only identity lines + one line per bus module", slurp("a/CONFIG.TXT"),
               "00000000\n13aba9b3\n24:6f:28:ab:cd:ef\n00000003\n00000005\n00000013\n00000001\n"
-              "0f057b7d:03:03:04\n13ab6c81:1e:02:02\n");
+              "0f057b7d:03:03:04\n13ab6c81:1e:02:02\n19000001:19:02:02\n28000001:ff:28:03\n");
     check_str("OM.LUA kept", slurp("a/OM.LUA"), "-- project\n");
     check_str("USER.LUA placeholder created", slurp("a/USER.LUA"), "");
     check("CLOUD-PUBLIC.CRT placeholder (skips Grenton cloud enrollment)",

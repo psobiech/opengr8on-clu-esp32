@@ -119,3 +119,41 @@ bool tfbus_din8_cmd(const uint8_t *command_payload, size_t plen, uint8_t *out)
     }
     return true;
 }
+
+void tfbus_analog_status(const uint16_t input_values[TFBUS_ANALOG_INPUTS], uint8_t found_sensors,
+                         uint8_t searches_done, uint8_t status_buffer[TFBUS_ANALOG_STATUS_LEN])
+{
+    size_t offset = 0;
+    status_buffer[offset++] = 2; // records
+    status_buffer[offset++] = TFBUS_ANALOG_REC_INPUTS;
+    status_buffer[offset++] = 2 * TFBUS_ANALOG_INPUTS;
+    status_buffer[offset++] = 0;
+    for (int i = 0; i < TFBUS_ANALOG_INPUTS; i++) {
+        status_buffer[offset++] = (uint8_t)input_values[i];
+        status_buffer[offset++] = (uint8_t)(input_values[i] >> 8);
+    }
+    status_buffer[offset++] = TFBUS_ANALOG_REC_HUB;
+    status_buffer[offset++] = 2;
+    status_buffer[offset++] = 0;
+    status_buffer[offset++] = found_sensors;
+    status_buffer[offset++] = searches_done;
+}
+
+void tfbus_onewire_status(uint8_t sensor_state, int16_t centi_celsius, uint32_t hub_serial_number, uint64_t rom_code,
+                          uint8_t status_buffer[TFBUS_ONEWIRE_STATUS_LEN])
+{
+    size_t offset = 0;
+    status_buffer[offset++] = 1; // records
+    status_buffer[offset++] = TFBUS_ONEWIRE_REC_SENSOR;
+    status_buffer[offset++] = TFBUS_ONEWIRE_STATUS_LEN - 4;
+    status_buffer[offset++] = 0;
+    status_buffer[offset++] = sensor_state;
+    status_buffer[offset++] = (uint8_t)centi_celsius;
+    status_buffer[offset++] = (uint8_t)((uint16_t)centi_celsius >> 8);
+    for (int i = 0; i < 4; i++) {
+        status_buffer[offset++] = (uint8_t)(hub_serial_number >> (8 * i));
+    }
+    for (int i = 0; i < 8; i++) {
+        status_buffer[offset++] = (uint8_t)(rom_code >> (8 * i));
+    }
+}

@@ -1,7 +1,8 @@
 /**
  * @file clu_localio.c
  * @brief On-board IO glue: module serials (NVS / menuconfig), one PCF8575 (8 relays + 8 inputs,
- * module 1), optional ESP32 GPIO inputs (CLU_LOCAL_IO_GPIO_INPUTS, DIN of module 2), tfbus_uart hook.
+ * module 1), optional ESP32 GPIO inputs (CLU_LOCAL_IO_GPIO_INPUTS, DIN of module 2), optional
+ * analog inputs / 1-Wire sensors (clu_localio_sensors.c), tfbus_uart hook.
  */
 #include "clu_localio.h"
 
@@ -16,6 +17,7 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "esp_log.h"
+#include "localio_onewire_pins.h"
 #include "nvs.h"
 #include "tfbus_uart.h"
 
@@ -31,10 +33,15 @@ static const char *TAG = "localio";
 #else
 #define LOCAL_IO_SN2 ""
 #endif
+#ifdef CONFIG_CLU_LOCAL_IO_SN3
+#define LOCAL_IO_SN3 CONFIG_CLU_LOCAL_IO_SN3
+#else
+#define LOCAL_IO_SN3 ""
+#endif
 
 static i2c_master_dev_handle_t s_dev;
 static bool s_write_ok = true, s_read_ok = true; // last result, to log only changes
-static gpio_num_t s_gpio_inputs[GPIO_INPUTS_MAX];   // module 2 DIN1.. pins
+static gpio_num_t s_gpio_inputs[GPIO_INPUTS_MAX];   // module 2 DIN1.. pins (GPIO_NUM_NC: the 1-Wire bus)
 static int s_gpio_input_count;
 
 static uint8_t read_gpio_inputs(void);
@@ -96,7 +103,7 @@ static uint8_t read_gpio_inputs(void)
 {
     uint8_t active_inputs = 0;
     for (int i = 0; i < s_gpio_input_count; i++) {
-        if (gpio_get_level(s_gpio_inputs[i]) == 0) {
+        if (s_gpio_inputs[i] != GPIO_NUM_NC && gpio_get_level(s_gpio_inputs[i]) == 0) {
             active_inputs |= (uint8_t)(1u << i);
         }
     }
@@ -148,8 +155,15 @@ void clu_localio_start(void)
     if (module_count == 2) {
         serial_numbers[1] = serial(nvs_handle, "sn2", LOCAL_IO_SN2);
     }
+    int onewire_pins[LOCALIO_ONEWIRE_BUSES_MAX];
+    const bool want_sensors = CONFIG_CLU_LOCAL_IO_ANALOG_INPUTS[0] != 0 ||
+                              localio_onewire_pins(onewire_pins, LOCALIO_ONEWIRE_BUSES_MAX) > 0;
+    const uint32_t analog_serial_number = want_sensors ? serial(nvs_handle, "sn3", LOCAL_IO_SN3) : 0;
     nvs_commit(nvs_handle);
     nvs_close(nvs_handle);
+    if (want_sensors) {
+        clu_localio_sensors_start(analog_serial_number); // own hardware: independent of the PCF8575 below
+    }
 
     i2c_master_bus_handle_t bus = clu_i2c_bus(CONFIG_CLU_LOCAL_IO_SDA_GPIO, CONFIG_CLU_LOCAL_IO_SCL_GPIO);
     if (!bus) {
@@ -184,6 +198,7 @@ void clu_localio_start(void)
 
 /**
  * @brief Parse @p pin_list ("48,47,21") into s_gpio_inputs and make the pins inputs with pull-up.
+ * A 1-Wire bus pin (localio_onewire_pins.h) keeps its channel but is left alone.
  * @return Number of pins; 0 if the list is empty or invalid (no second module).
  */
 static int setup_gpio_inputs(const char *pin_list)
@@ -201,8 +216,12 @@ static int setup_gpio_inputs(const char *pin_list)
             ESP_LOGE(TAG, "GPIO inputs \"%s\": invalid pin list, GPIO input module disabled", pin_list);
             return 0;
         }
-        s_gpio_inputs[pin_count++] = (gpio_num_t)pin_number;
-        pin_mask |= 1ULL << pin_number;
+        if (localio_is_onewire_pin(pin_number)) {
+            s_gpio_inputs[pin_count++] = GPIO_NUM_NC; // the 1-Wire bus: channel kept, always inactive
+        } else {
+            s_gpio_inputs[pin_count++] = (gpio_num_t)pin_number;
+            pin_mask |= 1ULL << pin_number;
+        }
         cursor = after_number;
         while (*cursor == ',' || *cursor == ' ') {
             cursor++;
@@ -210,6 +229,9 @@ static int setup_gpio_inputs(const char *pin_list)
     }
     if (pin_count == 0) {
         return 0;
+    }
+    if (pin_mask == 0) {
+        return pin_count;
     }
     const gpio_config_t input_config = {
         .pin_bit_mask = pin_mask,

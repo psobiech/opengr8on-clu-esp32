@@ -5,6 +5,7 @@
 #include "esp_err.h"
 
 typedef int gpio_num_t;
+#define GPIO_NUM_NC (-1)
 #define GPIO_IS_VALID_OUTPUT_GPIO(n) ((n) >= 0 && (n) < 34)
 #define GPIO_IS_VALID_GPIO(n) ((n) >= 0 && (n) < 49)
 typedef enum { GPIO_MODE_INPUT = 1 } gpio_mode_t;
@@ -16,3 +17,4 @@ typedef struct {
 } gpio_config_t;
 esp_err_t gpio_config(const gpio_config_t *c);
 int gpio_get_level(gpio_num_t gpio);
+esp_err_t gpio_install_isr_service(int intr_alloc_flags);

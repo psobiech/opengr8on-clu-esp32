@@ -1,0 +1,4 @@
+dependencies:
+  # 1-Wire bus over RMT for the DS18B20 / DS18S20 sensors (CLU_LOCAL_IO_ONEWIRE_GPIO).
+  espressif/onewire_bus:
+    version: "^1.1.2"

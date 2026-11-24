@@ -84,6 +84,10 @@ typedef struct tfbus_driver {
      *  method is unknown. */
     int (*io_execute)(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel, int idx,
                       int first, int nargs);
+    /** Feature get: push a value the driver computes (counts, 64-bit serials, ...) and return true;
+     *  false = the stored value as usual. Optional; Lua task, driver lock held, must not raise a
+     *  Lua error. */
+    bool (*io_get)(tfbus_module_t *module, lua_State *L, int cls, int channel, int idx);
 } tfbus_driver_t;
 
 /**

@@ -548,7 +548,8 @@ menu "RS485 bus (TF-Bus / MySensors)"
                     = DIN1). Internal pull-up on; an input is active when pulled low (contact to
                     GND). The second module's DOUT channels drive nothing. Empty = no second module.
                     KinCony F8: the four 1-Wire terminals (GPIO48, 47, 21, 15, pull-up on the board)
-                    and the free GPIO14 terminal; they cannot be used for 1-Wire at the same time.
+                    and the free GPIO14 terminal; a terminal set to 1-Wire bus (CLU_LOCAL_IO_F8_DINx_MODE)
+                    keeps its channel, always inactive.
 
             config CLU_LOCAL_IO_SN2
                 string "GPIO input module serial (decimal, empty = random, stored in NVS)"
@@ -556,6 +557,106 @@ menu "RS485 bus (TF-Bus / MySensors)"
                 default ""
                 help
                     Like CLU_LOCAL_IO_SN, for the module with the GPIO inputs.
+
+            config CLU_LOCAL_IO_ANALOG_INPUTS
+                string "Analog inputs as AnalogIN of an ANALOG_DIN module (GPIO:factor, comma-separated)"
+                default "5:1.51,7:1.51,6:6.667,4:6.667" if CLU_BOARD_KINCONY_F8
+                default ""
+                help
+                    ESP32 ADC1 pins read as AnalogIN1.. of an emulated ANALOG_DIN module (up to 7; the
+                    module's 4 AnalogOUT drive nothing). Each pin's voltage [V] times its factor is the
+                    AnalogIN RawValue: with the input divider / sense resistor of the board in the
+                    factor, the value at the terminal. Factor 1 if left out ("5,7"). Empty = none.
+                    KinCony F8: A1 GPIO5 and A2 GPIO7 (0-5 V, factor 1.51 -> volts), A3 GPIO6 and A4
+                    GPIO4 (4-20 mA over 150 ohm, factor 6.667 -> milliamps). Readings are approximate
+                    (12 dB attenuation, factory calibration); A1/A2 saturate at about 4.7 V.
+
+            choice CLU_LOCAL_IO_F8_DIN1_MODE
+                prompt "Terminal GPIO48 (DIN1): digital input or 1-Wire bus"
+                depends on CLU_BOARD_KINCONY_F8
+                default CLU_LOCAL_IO_F8_DIN1_INPUT
+                help
+                    The 1-wire terminal GPIO48 (pull-up on the board) is DIN1 of the GPIO input
+                    module, or a 1-Wire bus for DS18B20 / DS18S20 temperature sensors (VCC, GND, DATA;
+                    several sensors may share it). As a 1-Wire bus, DIN1 stays in the module but
+                    always reads inactive. Several terminals may be 1-Wire buses.
+
+                config CLU_LOCAL_IO_F8_DIN1_INPUT
+                    bool "Digital input DIN1"
+                config CLU_LOCAL_IO_F8_DIN1_ONEWIRE
+                    bool "1-Wire bus (DS18B20 / DS18S20 sensors)"
+            endchoice
+
+            choice CLU_LOCAL_IO_F8_DIN2_MODE
+                prompt "Terminal GPIO47 (DIN2): digital input or 1-Wire bus"
+                depends on CLU_BOARD_KINCONY_F8
+                default CLU_LOCAL_IO_F8_DIN2_INPUT
+                help
+                    The 1-wire terminal GPIO47 (pull-up on the board) is DIN2 of the GPIO input
+                    module, or a 1-Wire bus for DS18B20 / DS18S20 temperature sensors (VCC, GND, DATA;
+                    several sensors may share it). As a 1-Wire bus, DIN2 stays in the module but
+                    always reads inactive. Several terminals may be 1-Wire buses.
+
+                config CLU_LOCAL_IO_F8_DIN2_INPUT
+                    bool "Digital input DIN2"
+                config CLU_LOCAL_IO_F8_DIN2_ONEWIRE
+                    bool "1-Wire bus (DS18B20 / DS18S20 sensors)"
+            endchoice
+
+            choice CLU_LOCAL_IO_F8_DIN3_MODE
+                prompt "Terminal GPIO21 (DIN3): digital input or 1-Wire bus"
+                depends on CLU_BOARD_KINCONY_F8
+                default CLU_LOCAL_IO_F8_DIN3_INPUT
+                help
+                    The 1-wire terminal GPIO21 (pull-up on the board) is DIN3 of the GPIO input
+                    module, or a 1-Wire bus for DS18B20 / DS18S20 temperature sensors (VCC, GND, DATA;
+                    several sensors may share it). As a 1-Wire bus, DIN3 stays in the module but
+                    always reads inactive. Several terminals may be 1-Wire buses.
+
+                config CLU_LOCAL_IO_F8_DIN3_INPUT
+                    bool "Digital input DIN3"
+                config CLU_LOCAL_IO_F8_DIN3_ONEWIRE
+                    bool "1-Wire bus (DS18B20 / DS18S20 sensors)"
+            endchoice
+
+            choice CLU_LOCAL_IO_F8_DIN4_MODE
+                prompt "Terminal GPIO15 (DIN4): digital input or 1-Wire bus"
+                depends on CLU_BOARD_KINCONY_F8
+                default CLU_LOCAL_IO_F8_DIN4_INPUT
+                help
+                    The 1-wire terminal GPIO15 (pull-up on the board) is DIN4 of the GPIO input
+                    module, or a 1-Wire bus for DS18B20 / DS18S20 temperature sensors (VCC, GND, DATA;
+                    several sensors may share it). As a 1-Wire bus, DIN4 stays in the module but
+                    always reads inactive. Several terminals may be 1-Wire buses.
+
+                config CLU_LOCAL_IO_F8_DIN4_INPUT
+                    bool "Digital input DIN4"
+                config CLU_LOCAL_IO_F8_DIN4_ONEWIRE
+                    bool "1-Wire bus (DS18B20 / DS18S20 sensors)"
+            endchoice
+
+            config CLU_LOCAL_IO_ONEWIRE_GPIOS
+                string "1-Wire bus GPIOs for DS18B20 / DS18S20 sensors (comma-separated, up to 4)" if !CLU_BOARD_KINCONY_F8
+                default ""
+                help
+                    Each pin is a 1-Wire bus; the temperature sensors on them appear as ONE_WIRE modules
+                    (one per sensor, ONEW_SENSOR object) behind the ONE_WIRE_HUB of the ANALOG_DIN
+                    module. The buses are searched at startup, on OM "Clear CLU" (refresh) and by
+                    ONE_WIRE_HUB RefreshSensors; sensors are read every 2 s. External power only (no
+                    parasite power); an external pull-up (4.7 kohm) is needed, the internal one is too
+                    weak for long wires. A pin also in CLU_LOCAL_IO_GPIO_INPUTS keeps its DIN channel,
+                    which then always reads inactive. Empty = no 1-Wire.
+                    KinCony F8: chosen per terminal (CLU_LOCAL_IO_F8_DINx_MODE) instead.
+
+            config CLU_LOCAL_IO_SN3
+                string "ANALOG_DIN module serial (decimal, empty = random, stored in NVS)"
+                depends on CLU_LOCAL_IO_ANALOG_INPUTS != "" || CLU_LOCAL_IO_ONEWIRE_GPIOS != "" || \
+                           CLU_LOCAL_IO_F8_DIN1_ONEWIRE || CLU_LOCAL_IO_F8_DIN2_ONEWIRE || \
+                           CLU_LOCAL_IO_F8_DIN3_ONEWIRE || CLU_LOCAL_IO_F8_DIN4_ONEWIRE
+                default ""
+                help
+                    Like CLU_LOCAL_IO_SN, for the analog input / 1-Wire hub module. The 1-Wire sensors'
+                    module serials come from their ROM codes.
 
         endif
 
@@ -672,6 +773,16 @@ config CLU_SETUP_BUTTON_GPIO
         boards: press it while the CLU runs (held during reset it enters download mode).
         ESP32 default GPIO34 = the reset button of the Grenton GATE (input-only pin: needs the
         board's external pull-up; GPIO0 is the RMII clock there).
+
+config CLU_DEBUG_EXTRA_MODULES
+    string "Debug: fake modules in CONFIG.JSON / config.txt"
+    default ""
+    help
+        Extra tfbusDevices entries appended after the modules found on the bus, for trying how
+        Object Manager handles module types the bus does not have (e.g. ANALOG_DIN, ONE_WIRE).
+        Space-separated "sn:hwType:fwType:fwApiVer" in hex, like the config.txt lines, e.g.
+        "19000001:19:02:02 28000001:ff:28:03". The CLU does not talk to them: their objects in
+        OM.LUA have no hardware behind them. Leave empty for normal use.
 
 menu "Lua"
 

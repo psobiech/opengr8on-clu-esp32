@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Coverage report for the host tests (run by `make coverage`; stdlib only).
 
-C: gcov JSON for every .gcda in this directory, merged per source file (a source compiled into
+C: gcov JSON for every .gcda in out/, merged per source file (a source compiled into
 several test binaries counts a line as covered if any of them ran it). Lua: line hits written by
 lua_cov.lua, measured against the lines `luac -l` reports as executable.
 
 Firmware sources (components/, main/) that no test compiles are listed as untested; the Lua VM
 (components/lua) is third-party and excluded.
 
-Outputs: table on stdout, coverage/summary.md, coverage/coverage.json.
+Outputs: table on stdout, out/coverage/summary.md, out/coverage/coverage.json.
 """
 import argparse
 import glob
@@ -22,7 +22,8 @@ from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
-OUT = os.path.join(HERE, "coverage")
+BUILD = os.path.join(HERE, "out")  # Makefile OUT: objects and gcov data
+OUT = os.path.join(BUILD, "coverage")
 
 
 def mqtt_parts():
@@ -60,14 +61,14 @@ def c_coverage():
     lines = defaultdict(dict)
     branches = defaultdict(dict)
     funcs = defaultdict(dict)
-    gcdas = sorted(glob.glob(os.path.join(HERE, "*.gcda")))
+    gcdas = sorted(glob.glob(os.path.join(BUILD, "*.gcda")))
     if not gcdas:
         return {}
     tmp = os.path.join(OUT, "gcov")
     os.makedirs(tmp, exist_ok=True)
     for f in glob.glob(os.path.join(tmp, "*")):
         os.remove(f)
-    subprocess.run(["gcov", "-b", "-j", "-o", HERE] + gcdas, cwd=tmp, check=True,
+    subprocess.run(["gcov", "-b", "-j", "-o", BUILD] + gcdas, cwd=tmp, check=True,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for path in glob.glob(os.path.join(tmp, "*.gcov.json.gz")):
         with gzip.open(path) as gcov_file:

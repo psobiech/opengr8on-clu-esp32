@@ -206,12 +206,36 @@ static void timers_advance(int64_t us)
     run_deferred();
 }
 
+// ---------------------------------------------------------------- stubs: registry (ONE_WIRE_HUB counts)
+static tfbus_module_t *s_registry[8];
+static int s_registry_count;
+int tfbus_master_count(void) { return s_registry_count; }
+tfbus_module_t *tfbus_master_get(int i) { return i >= 0 && i < s_registry_count ? s_registry[i] : NULL; }
+
 // ---------------------------------------------------------------- helpers
 static lua_State *L;
+
+// io_get(cls, ch, idx) as an integer; -1 if the driver left it to the stored value.
+static lua_Integer lua_get_int(tfbus_module_t *m, int cls, int ch, int idx)
+{
+    int top = lua_gettop(L);
+    bool pushed = m->drv->io_get(m, L, cls, ch, idx);
+    lua_Integer v = pushed && lua_isinteger(L, -1) ? lua_tointeger(L, -1) : -1;
+    lua_settop(L, top);
+    return v;
+}
+
+static tfbus_module_t *s_created_modules[64]; // released by release_modules() at the end
+static int s_created_module_count;
+static void release_modules(void);
+static void reset_module(tfbus_module_t *reset_target);
 
 static tfbus_module_t *module(const tfbus_driver_t *drv, uint8_t addr)
 {
     tfbus_module_t *m = calloc(1, sizeof *m);
+    if (s_created_module_count < (int)(sizeof s_created_modules / sizeof s_created_modules[0])) {
+        s_created_modules[s_created_module_count++] = m;
+    }
     m->drv = drv;
     m->addr = addr;
     strcpy(m->name, "mod");
@@ -417,7 +441,7 @@ int main(void)
         // Lua reload: deinit stops and deletes pending timers (the master frees the context)
         lua_exec(m, 4, 2, 1, 1, 1500);
         frames_reset();
-        m->drv->deinit(m);
+        reset_module(m);
         timers_advance(2000000);
         check_frames("DOUT deinit: pending revert never fires", "");
     }
@@ -785,7 +809,7 @@ int main(void)
 
         lua_exec(m, 24, 2, 0, 1, 3000); // MoveUp(3000) pending at reload
         frames_reset();
-        m->drv->deinit(m);
+        reset_module(m);
         timers_advance(5000000);
         check_frames("roller deinit: pending stop never fires", "");
     }
@@ -844,13 +868,13 @@ int main(void)
     // ---------------- driver table + queue helpers
     tfbus_drivers_register_all();
     {
-        bool distinct = s_nregistered == 8;
+        bool distinct = s_nregistered == 10;
         for (int i = 0; i < s_nregistered; i++) {
             for (int j = 0; j < i; j++) {
                 distinct = distinct && s_registered[i]->hw_type != s_registered[j]->hw_type;
             }
         }
-        check("register_all: 8 drivers, one per hwType", distinct);
+        check("register_all: 10 drivers, one per hwType", distinct);
     }
     {
         tfbus_module_t *m = module(&tfbus_drv_io_module_din8, 9);
@@ -994,7 +1018,7 @@ int main(void)
         status(m, "02 01 01 02 00 16 03 00 07 32 00"); // position of an unknown channel
         check("roller status: blocked channel keeps its state, unknown channel ignored",
               !strstr(s_posts, "Q1[") && !strstr(s_posts, "[7]"));
-        m->drv->deinit(m);
+        reset_module(m);
     }
 
     // ---------------- ROLLER_SH_DIN (old firmware): no timing configuration on the wire
@@ -1216,15 +1240,13 @@ int main(void)
         lua_set(m, 5, 0, 0, 0);
         timers_advance(5000000);
         check("dimmer last value: switching off does not overwrite it", nvs_commits == 1);
-        m->drv->deinit(m);
-        free(m->drv_ctx);
-        m->drv_ctx = NULL;
+        reset_module(m);
         m->drv->io_new(m, 5, 0, "DIM"); // CLU restart: state rebuilt, last value from NVS
         frames_reset();
         lua_execn(m, 5, 0, 2, 3, (lua_Number[]){0, 0, 1}); // SwitchOn LastValue
         check_frames("dimmer last value survives a restart (SwitchOn LastValue -> 0.27)", D_R0 D_L("0e0152"));
         lua_set(m, 5, 0, 0, 0.5);
-        m->drv->deinit(m);
+        reset_module(m);
         check("dimmer deinit flushes a pending last-value save", nvs_commits == 2);
 #undef D_L
     }
@@ -1554,14 +1576,118 @@ int main(void)
         check_frames("LED_CCT SetValue(0) from the module's 71 + 111, RampTime 1000 == capture",
                      T_OUT("02", "0001", "00", "47") T_OUT("03", "a300", "00", "e5"));
 #undef T_OUT
-        m->drv->deinit(m);
+        reset_module(m);
 #undef R_RAMP
 #undef R_0
 #undef R_V
     }
 
+    // ---------------- ANALOG_DIN (emulated on-board analog inputs + 1-Wire hub, tfbus_vmod.h format)
+    {
+        tfbus_module_t *m = module(&tfbus_drv_analog_din, 0x14);
+        m->sn = 0x19000001;
+        m->drv->io_new(m, 12, 0, "AIN1");
+        m->drv->io_new(m, 12, 1, "AIN2");
+        m->drv->io_new(m, 73, 0, "HUB");
+        lua_set(m, 12, 0, 2, 2);  // Scale 2
+        lua_set(m, 12, 0, 6, 10); // MaxValue 10 (Sensitivity default 0.01 V)
+        posts_reset();
+        status(m, "02 20 0e 00 dc05 0000 0000 0000 0000 0000 0000 21 02 00 01 01");
+        check_posts("ANALOG_DIN first status: Value = Raw x Scale, Value%, RawValue; no events",
+                    "AIN1[0]=3 AIN1[1]=30 AIN1[4]=1.5 AIN2[0]=0 AIN2[1]=0 AIN2[4]=0 ");
+        posts_reset();
+        status(m, "02 20 0e 00 e105 0000 0000 0000 0000 0000 0000 21 02 00 01 01");
+        check_posts("change below Sensitivity: values only", "AIN1[0]=3.01 AIN1[1]=30.1 AIN1[4]=1.505 ");
+        posts_reset();
+        status(m, "02 20 0e 00 ec13 0000 0000 0000 0000 0000 0000 21 02 00 01 01");
+        check_posts("above MaxValue: OnValueChange + OnValueRise, OnOutOfRange, OnSwitchOn",
+                    "AIN1[0]=10.2 AIN1[1]=102 AIN1[4]=5.1 AIN1!0 AIN1!2 AIN1!3 AIN1!4 ");
+        posts_reset();
+        status(m, "02 20 0e 00 0000 0000 0000 0000 0000 0000 0000 21 02 00 01 01");
+        check_posts("down to 0: OnValueChange + OnValueLower, OnInRange, OnSwitchOff",
+                    "AIN1[0]=0 AIN1[1]=0 AIN1[4]=0 AIN1!0 AIN1!1 AIN1!6 AIN1!5 ");
+        posts_reset();
+        status(m, "02 20 0e 00 0000 0000 0000 0000 0000 0000 0000 21 02 00 02 02");
+        check_posts("hub: a finished search fires OnRefreshCompleted", "HUB!0 ");
+        frames_reset();
+        lua_exec(m, 73, 0, 0, 0, 0);
+        check("hub RefreshSensors -> MODULE_CMD record 22", count_frames(s_frames, "aa14f0050122") == 1);
+        check("AnalogOUT methods: no hardware, not implemented", lua_execn(m, 13, 0, 8, 0, NULL) == -1);
+
+        // ---------------- ONE_WIRE sensor on that hub
+        tfbus_module_t *t = module(&tfbus_drv_one_wire, 0x15);
+        tfbus_module_t *undeclared = module(&tfbus_drv_one_wire, 0x16);
+        undeclared->name[0] = 0; // found on the bus, not in OM.LUA
+        t->drv->io_new(t, 23, 0, "T1");
+        lua_set(t, 23, 0, 1, 0.5); // Threshold
+        lua_set(t, 23, 0, 2, -55);
+        lua_set(t, 23, 0, 3, 30);  // MaxValue
+#define SENSOR(state, temp) "01 23 0f 00 " state " " temp " 01000019 289078563412005a"
+        posts_reset();
+        status(t, SENSOR("02", "0000"));
+        check_posts("ONE_WIRE found, not read yet: Status 2, no value", "T1[4]=2 ");
+        posts_reset();
+        status(t, SENSOR("01", "6608"));
+        check_posts("first reading: Status 1 + Value, no OnConnect", "T1[4]=1 T1[0]=21.5 ");
+        posts_reset();
+        status(t, SENSOR("01", "8408"));
+        check_posts("change below Threshold: value only", "T1[0]=21.8 ");
+        posts_reset();
+        status(t, SENSOR("01", "1c0c"));
+        check_posts("above MaxValue: OnValueChange + OnValueRise + OnOutOfRange", "T1[0]=31 T1!0 T1!1 T1!3 ");
+        posts_reset();
+        status(t, SENSOR("00", "1c0c"));
+        check_posts("sensor not answering: Status 0 + OnDisconnect", "T1[4]=0 T1!5 ");
+        posts_reset();
+        status(t, SENSOR("01", "1c0c"));
+        check_posts("back: Status 1 + OnConnect", "T1[4]=1 T1!4 ");
+        check("HubSerialNumber / SensorSerialNumber (48-bit ROM serial) exact",
+              lua_get_int(t, 23, 0, 5) == 0x19000001 && lua_get_int(t, 23, 0, 6) == 0x001234567890LL);
+        check("other features: stored value", lua_get_int(t, 23, 0, 0) == -1);
+
+        // hub counts: declared sensors whose status names this hub
+        status(undeclared, SENSOR("01", "1c0c"));
+        t->online = undeclared->online = true;
+        s_registry[0] = m;
+        s_registry[1] = t;
+        s_registry[2] = undeclared;
+        s_registry_count = 3;
+        check("hub: ConfiguredSensors 1, ActiveSensors 1, InactiveSensors 0, ReportedSensors 2",
+              lua_get_int(m, 73, 0, 0) == 1 && lua_get_int(m, 73, 0, 1) == 1 && lua_get_int(m, 73, 0, 2) == 0 &&
+                  lua_get_int(m, 73, 0, 3) == 2);
+        posts_reset();
+        t->drv->on_online(t, false);
+        t->online = false;
+        check_posts("module unreachable: Status 3 + OnDisconnect", "T1[4]=3 T1!5 ");
+        check("hub: unreachable sensor counts as inactive",
+              lua_get_int(m, 73, 0, 1) == 0 && lua_get_int(m, 73, 0, 2) == 1);
+        s_registry_count = 0;
+#undef SENSOR
+    }
+
+    release_modules();
     lua_close(L);
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
+/** @brief Free every module module() created, as a registry reset would: driver deinit, then its state. */
+static void release_modules(void)
+{
+    for (int i = 0; i < s_created_module_count; i++) {
+        reset_module(s_created_modules[i]);
+        free(s_created_modules[i]);
+    }
+    s_created_module_count = 0;
+}
+
+/** @brief What the master does on a registry reset (Lua reload): driver deinit, then its state freed. */
+static void reset_module(tfbus_module_t *reset_target)
+{
+    if (reset_target->drv_ctx && reset_target->drv->deinit) {
+        reset_target->drv->deinit(reset_target);
+    }
+    free(reset_target->drv_ctx);
+    reset_target->drv_ctx = NULL;
 }

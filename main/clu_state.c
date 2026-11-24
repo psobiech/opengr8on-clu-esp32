@@ -18,6 +18,8 @@
 
 static const char *TAG = "clu_state";
 static const char *NVS_NAMESPACE = "clu";
+
+static int append_debug_modules(tfbus_device_t *devices, int device_count, int capacity);
 #define CFG_PART "cfg" // provisioning partition and its namespace (tools/mknvs.py)
 
 clu_state_t g_clu;
@@ -227,8 +229,9 @@ void clu_state_write_config_files(void)
     // tfbusDevices: modules found by the last bus discovery, in the real CLU's format, e.g.
     // {"sn":252017533,"hwType":3,"hwVer":1,"fwType":3,"fwApiVer":4,"fwVer":"0.0.0","status":"OK"}
     // config.txt below carries the same list in the format OM actually imports.
-    static tfbus_device_t dev[TFBUS_MAX_MODULES];
+    static tfbus_device_t dev[TFBUS_MAX_MODULES + 8];
     int ndev = tfbus_master_devices(dev, TFBUS_MAX_MODULES);
+    ndev = append_debug_modules(dev, ndev, sizeof dev / sizeof dev[0]);
     FILE *config_file = fopen(CLU_FS_ROOT "/a/CONFIG.JSON", "w");
     if (config_file) {
         fprintf(config_file,
@@ -294,4 +297,39 @@ void clu_state_write_config_files(void)
             ESP_LOGW(TAG, "cannot create a:\\CLOUD-PUBLIC.CRT (FAT long names off?)");
         }
     }
+}
+
+/**
+ * @brief Append the fake modules of CLU_DEBUG_EXTRA_MODULES to @p devices, so OM can be tried
+ * with module types the bus does not have. Entries are "sn:hwType:fwType:fwApiVer" (hex, the
+ * config.txt line format), separated by spaces; hwVer is 1, fwVer "0.0.0". Parsing stops at the
+ * first malformed entry.
+ * @return New number of entries.
+ */
+static int append_debug_modules(tfbus_device_t *devices, int device_count, int capacity)
+{
+#ifdef CONFIG_CLU_DEBUG_EXTRA_MODULES
+    const char *cursor = CONFIG_CLU_DEBUG_EXTRA_MODULES;
+    while (*cursor == ' ') {
+        cursor++;
+    }
+    while (*cursor && device_count < capacity) {
+        unsigned long serial_number;
+        unsigned hw_type, fw_type, fw_api_ver;
+        int consumed_length = 0;
+        if (sscanf(cursor, "%lx:%x:%x:%x%n", &serial_number, &hw_type, &fw_type, &fw_api_ver,
+                   &consumed_length) != 4 || consumed_length == 0 || hw_type > 0xff || fw_type > 0xff ||
+            fw_api_ver > 0xff) {
+            ESP_LOGW(TAG, "CLU_DEBUG_EXTRA_MODULES: bad entry at \"%s\"", cursor);
+            break;
+        }
+        devices[device_count++] = (tfbus_device_t){.sn = (uint32_t)serial_number, .hw_type = hw_type, .hw_ver = 1,
+                                                   .fw_type = fw_type, .fw_api_ver = fw_api_ver};
+        cursor += consumed_length;
+        while (*cursor == ' ') {
+            cursor++;
+        }
+    }
+#endif
+    return device_count;
 }

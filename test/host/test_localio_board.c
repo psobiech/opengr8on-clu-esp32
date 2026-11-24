@@ -1,7 +1,8 @@
 // Host tests for the on-board IO board glue (clu_localio.c, included: state is static): module
 // serial in NVS / menuconfig, and the PCF8575 pin mapping of one board, against a fake expander.
 // Built twice: -DBOARD_F8 (relays P10-P17, inputs P00-P07, 0x24, plus the GPIO input module on
-// GPIO48/47/21/15/14) and -DBOARD_A8V3 (relays P00-P07, inputs P10-P17, 0x22, no GPIO inputs).
+// GPIO48/47/21/15/14, GPIO47 and GPIO15 taken by 1-Wire buses, one analog input) and -DBOARD_A8V3 (relays
+// P00-P07, inputs P10-P17, 0x22, no GPIO inputs, no analog / 1-Wire module).
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,11 +21,15 @@ static const char *cfg_sn = "";
 #define CONFIG_CLU_LOCAL_IO_GPIO_INPUTS "48,47,21,15,14"
 #define CONFIG_CLU_LOCAL_IO_SN2 cfg_sn2
 static const char *cfg_sn2 = "";
+#define CONFIG_CLU_LOCAL_IO_ANALOG_INPUTS "5:1.51"
+#define CONFIG_CLU_LOCAL_IO_ONEWIRE_GPIOS "47, 15"
 #define BOARD "F8"
 #else
 #define CONFIG_CLU_LOCAL_IO_ADDR 0x22
 #define CONFIG_CLU_LOCAL_IO_OUT_P0 1
 #define CONFIG_CLU_LOCAL_IO_GPIO_INPUTS ""
+#define CONFIG_CLU_LOCAL_IO_ANALOG_INPUTS ""
+#define CONFIG_CLU_LOCAL_IO_ONEWIRE_GPIOS ""
 #define BOARD "A8v3"
 #endif
 
@@ -51,6 +56,16 @@ void clu_random(uint8_t *out, size_t len)
         out[i] = (uint8_t)(s_rand >> (8 * (i % 4)));
     }
     s_rand = s_rand * 1103515245u + 12345u; // next call: another serial
+}
+
+// Analog / 1-Wire glue (clu_localio_sensors.c, tested on its own): records the serial it got.
+static int s_sensors_starts;
+static uint32_t s_sensors_serial;
+bool clu_localio_sensors_start(uint32_t analog_serial_number)
+{
+    s_sensors_starts++;
+    s_sensors_serial = analog_serial_number;
+    return true;
 }
 
 // GPIO: pins set up by gpio_config; a pin reads low when the outside world pulls it low.
@@ -188,12 +203,20 @@ int main(void)
           n > 0 && tfbus_parse_response(rx, (size_t)n, &pl, &plen) && tfbus_parse_discover(pl, plen, &id) &&
               nvs_get_u32(1, "sn2", &gpio_module_serial) == ESP_OK && id.sn == gpio_module_serial &&
               gpio_module_serial != sn && id.hw_type == 0x1e);
-    check("GPIO48/47/21/15/14 inputs with pull-up",
-          s_gpio_pull_up && s_gpio_configured_mask == (1ULL << 48 | 1ULL << 47 | 1ULL << 21 | 1ULL << 15 | 1ULL << 14));
+    check("GPIO48/21/14 inputs with pull-up, GPIO47 / GPIO15 (1-Wire buses) left alone",
+          s_gpio_pull_up && s_gpio_configured_mask == (1ULL << 48 | 1ULL << 21 | 1ULL << 14));
+    uint32_t analog_module_serial;
+    check("analog / 1-Wire module started with its own serial stored in NVS",
+          s_sensors_starts == 1 && nvs_get_u32(1, "sn3", &analog_module_serial) == ESP_OK &&
+              s_sensors_serial == analog_module_serial && analog_module_serial != sn &&
+              analog_module_serial != gpio_module_serial);
     bus(tfbus_addr_assign(f, sizeof f, gpio_module_serial, 2));
     check("only two modules", bus(tfbus_discover(f, sizeof f)) == 0);
 #else
     check("only one module", bus(tfbus_discover(f, sizeof f)) == 0);
+    check("no analog / 1-Wire module, no serial for it",
+          s_sensors_starts == 0 && nvs_get_u32(1, "sn3", &sn) != ESP_OK);
+    nvs_get_u32(1, "sn1", &sn);
 #endif
 
     // ---------------- relays: DOUT channel k -> relay k+1, active low; input half stays high
@@ -221,6 +244,11 @@ int main(void)
     poll(2, &in, &out);
     s_now += LOCALIO_SAMPLE_US;
     check("GPIO48 + GPIO14 low -> module 2 inputs 0x11", poll(2, &in, &out) && in == 0x11);
+    s_gpio_pulled_low = 1ULL << 47 | 1ULL << 15; // 1-Wire traffic
+    s_now += LOCALIO_SAMPLE_US;
+    poll(2, &in, &out);
+    s_now += LOCALIO_SAMPLE_US;
+    check("GPIO47 / GPIO15 (1-Wire buses) low -> DIN2 / DIN4 stay inactive", poll(2, &in, &out) && in == 0x00);
     check("  module 1 inputs unaffected", poll(1, &in, &out) && in == 0x00);
     uint16_t latch_before = s_latch;
     check("module 2 ACTIVATE: acknowledged, drives nothing", cmd(2, 0x08, 0x01) > 0 && s_latch == latch_before);

@@ -506,6 +506,7 @@ void app_main(void)
         .fw_version = CLU_FW_VERSION,
         .gate = CLU_IS_GATE,
         .reset_reason = boot_reset_reason(),
+        .skip_main_script = clu_crash_lua_boot_loop(),
         .report = udp_server_send_report,
         .on_init = on_lua_init,
         .remote = udp_server_remote_exec,

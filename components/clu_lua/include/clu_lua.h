@@ -49,6 +49,9 @@ typedef struct {
     /** GATE ResetReason (26) after a chip boot: 0 power-on, 1 external, 2 software, 3 exception.
      *  A soft reset (clu_lua_reload) reports 2 (configuration reload). */
     int         reset_reason;
+    /** MAIN.LUA crashed the chip on the last boots (clu_crash_lua_boot_loop()): the first VM treats it
+     *  as failed (BAD_M.LUA, emergency mode) instead of running it. A soft reset runs MAIN.LUA again. */
+    bool        skip_main_script;
     /** Send an unsolicited clientReport (body after "resp:0.0.0.0:00000000:"). */
     void (*report)(const char *addr, int port, const char *body);
     /** Called from SYSTEM.Init(), after OM.LUA declared all objects and before OnInit fires. */

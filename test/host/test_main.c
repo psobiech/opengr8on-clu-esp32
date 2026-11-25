@@ -198,6 +198,7 @@ void clu_mqtt_set_online(bool on) { L("online(%d)", on); }
 bool clu_mqtt_connected(void) { return false; }
 void clu_sysinfo_init(void) { L("sysinfo"); }
 void clu_crash_init(void) { L("crash_init"); }
+bool clu_crash_lua_boot_loop(void) { return true; } // MAIN.LUA crashed the previous boots
 static clu_ota_cfg_t s_oc;
 bool clu_ota_start(const clu_ota_cfg_t *c) { s_oc = *c; L("ota_start"); return true; }
 void clu_ota_confirm(void) { L("ota_confirm"); }
@@ -269,6 +270,7 @@ int main(void)
               s_lc.on_init == on_lua_init && s_lc.on_reload == on_lua_reload && s_lc.clu_feature == on_clu_feature &&
               s_lc.on_time_set == clu_time_store);
     check("Lua: device type, power-on reset reason", s_lc.gate == CLU_IS_GATE && s_lc.reset_reason == 0);
+    check("Lua: a boot loop of MAIN.LUA crashes skips it", s_lc.skip_main_script);
 #if CONFIG_CLU_HTTP
     check("GATE HTTP objects: port / body limit / listener timeout from Kconfig",
           s_hc.port == 80 && s_hc.max_body == 16384 && s_hc.listener_timeout_ms == 10000);

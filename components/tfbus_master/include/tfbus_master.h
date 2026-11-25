@@ -175,7 +175,7 @@ void tfbus_master_on_refresh(void (*refresh_callback)(void));
  *
  * Registry modules not found on the bus are dropped (tfbus_master_get() / find NULL); their entry
  * keeps the address, reused if the module comes back.
- * Not from the bus task.
+ * Not from the bus task. A caller subscribed to the task watchdog is checked in while it waits.
  *
  * @param timeout_ms Max wait.
  * @return false on timeout.

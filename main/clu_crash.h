@@ -8,6 +8,8 @@
  */
 #pragma once
 
+#include <stdbool.h>
+
 /**
  * @brief Take over the record of the previous boot (call once, early in app_main).
  *
@@ -22,3 +24,12 @@ void clu_crash_init(void);
  * @return NULL when this boot did not follow a recorded crash.
  */
 const char *clu_crash_last(void);
+
+/**
+ * @brief True when the last boots in a row each crashed early (within 2 minutes) in the Lua task:
+ *        it panicked, stopped checking in with the task watchdog, or starved its core (IDLE1).
+ *
+ * MAIN.LUA then must not run again (clu_lua_cfg_t::skip_main_script): a script that hangs or
+ * busy-loops would otherwise reboot the CLU forever. Valid after clu_crash_init().
+ */
+bool clu_crash_lua_boot_loop(void);

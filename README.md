@@ -674,7 +674,8 @@ wymaga tylko `gcc`/`gcov`, `python3` i `luac$(LUA)`.
   odliczanie rusza, gdy WiFi po raz pierwszy dostanie IP) albo od
   wciśnięcia przycisku konfiguracji (`CLU_SETUP_BUTTON_GPIO`, domyślnie BOOT/GPIO0, przytrzymanie ≥100 ms
   w trakcie pracy — przytrzymany podczas resetu włącza tryb wgrywania), a w trybie awaryjnym
-  (MAIN.LUA zawiódł, działa EMERGNCY.LUA) bez limitu czasu, aż CLU z niego wyjdzie — CLU odpowiada na
+  (MAIN.LUA zawiódł: błąd skryptu albo dwa starty z rzędu zakończone wyjątkiem / watchdogiem w zadaniu
+  Lua w ciągu 2 min — MAIN.LUA zostaje jako BAD_M.LUA, działa EMERGNCY.LUA) bez limitu czasu, aż CLU z niego wyjdzie — CLU odpowiada na
   discovery (`req_discovery_clu`), przyjmuje `req_set_key`, `req_set_clu_ip`, `req_start_ftp` i
   `req_diagnostic_refresh` oraz w ogóle próbuje klucza PIN/tymczasowego. Później discovery i
   broadcastowy `req_set_clu_ip` są ignorowane bez odpowiedzi, pozostałe dostają `resp:ERROR`,

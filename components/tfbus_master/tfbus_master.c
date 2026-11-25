@@ -1308,7 +1308,19 @@ bool tfbus_master_refresh(uint32_t timeout_ms)
     s_discover = true;
     s_restart = true;
     xTaskNotifyGive(s_task);
-    return xSemaphoreTake(s_scan_done, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+    // The wait may outlast the task watchdog (req_refresh_modules waits 25 s): a caller subscribed
+    // to it (the UDP task) checks in between slices.
+    bool caller_watched = esp_task_wdt_status(NULL) == ESP_OK;
+    for (uint32_t waited_ms = 0; waited_ms < timeout_ms; waited_ms += WATCHDOG_SLICE_MS) {
+        uint32_t slice_ms = timeout_ms - waited_ms < WATCHDOG_SLICE_MS ? timeout_ms - waited_ms : WATCHDOG_SLICE_MS;
+        if (xSemaphoreTake(s_scan_done, pdMS_TO_TICKS(slice_ms)) == pdTRUE) {
+            return true;
+        }
+        if (caller_watched) {
+            esp_task_wdt_reset();
+        }
+    }
+    return false;
 }
 
 int tfbus_master_devices(tfbus_device_t *out, int max)

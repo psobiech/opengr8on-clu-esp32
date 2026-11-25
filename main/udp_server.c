@@ -659,7 +659,8 @@ static void udp_task(void *arg)
     ESP_LOGI(TAG, "listening on udp/%d", CLU_UDP_PORT);
 
     // Wake up every second without traffic to check in with the task watchdog. The longest
-    // dispatch (req_reset: Lua reload 10 s, then halt 3 s) stays below its 20 s timeout.
+    // dispatch (req_reset: Lua reload 10 s, then halt 3 s) stays below its 20 s timeout;
+    // req_refresh_modules (up to 25 s) checks in while it waits (tfbus_master_refresh()).
     struct timeval receive_timeout = {.tv_sec = 1};
     setsockopt(s_sock, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout, sizeof receive_timeout);
     esp_task_wdt_add(NULL);

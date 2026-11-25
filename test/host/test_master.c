@@ -963,6 +963,13 @@ int main(void)
     s_bus_on_notify = false;
     xSemaphoreGive(s_scan_done); // completion left over from an earlier scan
     check("refresh: bus task not answering -> timeout (stale completion ignored)", !tfbus_master_refresh(10));
+    host_task_wdt_resets = 0;
+    check("refresh: unwatched caller (discovery task) -> no watchdog check-in",
+          !tfbus_master_refresh(25000) && host_task_wdt_resets == 0);
+    host_task_wdt_subscribed = true;
+    check("refresh: watched caller (UDP task) checks in every second of a 25 s wait",
+          !tfbus_master_refresh(25000) && host_task_wdt_resets == 25);
+    host_task_wdt_subscribed = false;
     {
         TaskHandle_t saved_task = s_task;
         s_task = NULL;

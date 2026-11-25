@@ -346,9 +346,11 @@ static void watchdog_feed(void);
 /**
  * @brief Count hook of every Lua thread (set by vm_new(), inherited by coroutines).
  *
- * Checks the Lua task in with the task watchdog while Lua code runs, so only a task stuck outside
- * the interpreter (a C call that never returns) reboots the CLU. While a req: call runs, a script
- * past the req: time limit is aborted with a Lua error.
+ * Checks the Lua task in with the task watchdog while Lua code runs, so a long script is not taken
+ * for a task stuck outside the interpreter (a C call that never returns). A script that never
+ * blocks still starves IDLE1 and reboots the CLU; after repeated early reboots MAIN.LUA is skipped
+ * (clu_lua_cfg_t::skip_main_script). While a req: call runs, a script past the req: time limit is
+ * aborted with a Lua error.
  */
 static void count_hook(lua_State *L, lua_Debug *debug_info)
 {
@@ -952,6 +954,7 @@ static void idle_loop(lua_State *L)
             if (!s_reload) {
                 ESP_LOGE(TAG, "SYSTEM.Loop: %s", lua_tostring(L, -1));
                 vTaskDelay(pdMS_TO_TICKS(100));
+                watchdog_feed(); // a SYSTEM.Loop failing before __clu.loop() never checks in
             }
             lua_pop(L, 1);
         }
@@ -984,9 +987,12 @@ static void run_vm(void)
     s_state = CLU_LUA_STARTING;
     lua_State *L = vm_new();
     if (L && file_exists(main_path)) {
-        if (run_script(L, main_path) && !s_reload) {
+        if (s_cfg.skip_main_script) {
+            ESP_LOGE(TAG, "main.lua crashed the CLU on the last boots, not run");
+        } else if (run_script(L, main_path) && !s_reload) {
             idle_loop(L);
         }
+        s_cfg.skip_main_script = false; // first VM after the boot only
         if (!s_reload) {
             // Fatal error: same as the CLU firmware, keep the script as bad_m.lua and go emergency.
             ESP_LOGE(TAG, "main.lua failed -> emergency mode");

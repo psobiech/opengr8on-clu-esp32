@@ -292,6 +292,13 @@ static bool exists(const char *name)
     return access(p, F_OK) == 0;
 }
 
+static void unlink_file(const char *name)
+{
+    char path[128];
+    snprintf(path, sizeof path, "%s/%s", s_root, name);
+    unlink(path);
+}
+
 static int rm_entry(const char *path, const struct stat *st, int flag, struct FTW *ftw) { return remove(path); }
 
 // ---------------------------------------------------------------- part 1 helpers
@@ -837,6 +844,21 @@ static void test_task(void)
     check("emergency: state EMERGENCY, MAIN.LUA kept as BAD_M.LUA",
           wait_state(CLU_LUA_EMERGENCY) && exists("BAD_M.LUA") && !exists("MAIN.LUA"));
     check_str("emergency: EMERGNCY.LUA answers", call("checkAlive()", 3000, NULL), "emerg");
+
+    // ---- MAIN.LUA crashed the chip on the last boots (clu_crash_lua_boot_loop()): not run
+    unlink_file("BAD_M.LUA");
+    put("MAIN.LUA", "function checkAlive() return 'looping' end\n");
+    s_cfg.skip_main_script = true;
+    check("reload with MAIN.LUA in a boot loop", clu_lua_reload(5000));
+    // Served by the new VM only: the state was already EMERGENCY before the reload.
+    check_str("boot loop: EMERGNCY.LUA answers, the script never ran", call("checkAlive()", 3000, NULL), "emerg");
+    check("boot loop: emergency, MAIN.LUA kept as BAD_M.LUA, flag consumed",
+          clu_lua_state() == CLU_LUA_EMERGENCY && exists("BAD_M.LUA") && !exists("MAIN.LUA") &&
+              !s_cfg.skip_main_script);
+    put("MAIN.LUA", "function checkAlive() return 'fixed' end\n");
+    check("reload after the boot loop (new MAIN.LUA from OM)", clu_lua_reload(5000));
+    check_str("boot loop: a soft reset runs MAIN.LUA again", call("checkAlive()", 3000, NULL), "fixed");
+    unlink_file("MAIN.LUA");
 
     // ---- no MAIN.LUA: idle VM with the default checkAlive()
     check("reload without MAIN.LUA", clu_lua_reload(5000));

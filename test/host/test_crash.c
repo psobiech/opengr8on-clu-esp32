@@ -25,6 +25,9 @@ void __real_esp_panic_handler(panic_info_t *info) { (void)info; s_real_handler_c
 static esp_reset_reason_t s_reset_reason;
 esp_reset_reason_t esp_reset_reason(void) { return s_reset_reason; }
 
+static int64_t s_uptime_us = 5 * 1000000; // when the panic hits
+int64_t esp_timer_get_time(void) { return s_uptime_us; }
+
 static int s_task_handle_storage;
 static const char *s_current_task = "clu_lua"; // NULL: the scheduler has not started
 TaskHandle_t xTaskGetCurrentTaskHandle(void) { return s_current_task ? &s_task_handle_storage : NULL; }
@@ -76,7 +79,9 @@ static void check_str(const char *name, const char *got, const char *want)
 int main(void)
 {
     memset(&s_record, 0xa5, sizeof s_record); // power-on: RTC memory holds garbage
+    s_lua_boot_crashes = 0xa5a5a5a5;
     check_str("power-on with garbage in RTC memory: no crash", reboot(ESP_RST_POWERON), "(none)");
+    check("power-on with garbage in RTC memory: no Lua boot loop", !clu_crash_lua_boot_loop());
 
     panic_at("LoadProhibited", 0x400d1234);
     check("exception: ESP-IDF's handler still runs", s_real_handler_calls == 1);
@@ -124,6 +129,58 @@ int main(void)
     memset(&s_record, 'A', sizeof s_record); // a record without terminators (ASan checks the reads)
     s_record.magic = RECORD_MAGIC;
     check("unterminated record: read within bounds", strlen(reboot(ESP_RST_PANIC)) < sizeof s_last_crash);
+
+    // ---- Lua boot loop: MAIN.LUA busy-loops core 1 right after every boot
+    reboot(ESP_RST_SW);
+    s_uptime_us = 35 * 1000000;
+    s_current_task = "clu_lua"; // the watchdog aborts on the starved core, interrupting the script
+    s_stuck_tasks[0] = "IDLE1";
+    esp_task_wdt_isr_user_handler();
+    g_panic_abort = true;
+    panic_at(NULL, 0x400d2000);
+    reboot(ESP_RST_TASK_WDT);
+    check("Lua boot loop: one early Lua watchdog crash is not a loop yet", !clu_crash_lua_boot_loop());
+    esp_task_wdt_isr_user_handler();
+    g_panic_abort = true;
+    panic_at(NULL, 0x400d2000);
+    reboot(ESP_RST_TASK_WDT);
+    check("Lua boot loop: two in a row -> MAIN.LUA skipped", clu_crash_lua_boot_loop());
+    esp_task_wdt_isr_user_handler();
+    g_panic_abort = true;
+    panic_at(NULL, 0x400d2000);
+    reboot(ESP_RST_TASK_WDT);
+    check("Lua boot loop: further early crashes keep it", clu_crash_lua_boot_loop() && s_lua_boot_crashes == 2);
+    reboot(ESP_RST_SW);
+    check("Lua boot loop: a restart on purpose ends it", !clu_crash_lua_boot_loop());
+
+    s_current_task = "tfbus"; // only the starved idle task names core 1
+    for (int i = 0; i < 2; i++) {
+        esp_task_wdt_isr_user_handler();
+        g_panic_abort = true;
+        panic_at(NULL, 0x400d2000);
+        reboot(ESP_RST_TASK_WDT);
+    }
+    check("Lua boot loop: IDLE1 starved twice counts too", clu_crash_lua_boot_loop());
+    s_stuck_tasks[0] = NULL;
+
+    s_current_task = "clu_lua";
+    s_uptime_us = 300 * 1000000LL;
+    panic_at("LoadProhibited", 0x400d1234);
+    reboot(ESP_RST_PANIC);
+    check("Lua boot loop: a Lua crash long after the boot ends the streak", !clu_crash_lua_boot_loop());
+    s_uptime_us = 35 * 1000000;
+    panic_at("LoadProhibited", 0x400d1234);
+    reboot(ESP_RST_PANIC);
+    s_current_task = "clu_udp";
+    panic_at("LoadProhibited", 0x400d1234);
+    reboot(ESP_RST_PANIC);
+    check("Lua boot loop: an early crash of another task ends the streak", !clu_crash_lua_boot_loop());
+    s_current_task = "clu_lua";
+    panic_at("LoadProhibited", 0x400d1234);
+    reboot(ESP_RST_PANIC);
+    panic_at("LoadProhibited", 0x400d1234);
+    reboot(ESP_RST_POWERON);
+    check("Lua boot loop: a power cut ends the streak (RTC memory lost)", !clu_crash_lua_boot_loop());
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

@@ -38,11 +38,19 @@ static const char *TAG = "tfbus"; // tfbus_master_set_log_tag()
 #define ACK_TIMEOUT_MS      20
 #define CMD_TRIES           3
 #define OFFLINE_AFTER       3      // missed polls
-#define OFFLINE_POLL_EVERY  20     // poll offline modules once per N rounds
-#define RESET_SETTLE_MS     2000   // RESET -> SEEK gap seen on the real CLU
+// Offline / unaddressed module: one ADDR_ASSIGN try every REJOIN_FAST_MS during the first
+// REJOIN_FAST_WINDOW_MS after a discovery RESET, then every REJOIN_SLOW_MS (real CLU, empty bus:
+// ~42 ms for ~60 s after boot, then 3.01 s).
+#define REJOIN_FAST_MS        40
+#define REJOIN_SLOW_MS        3000
+#define REJOIN_FAST_WINDOW_MS 60000
+#define RESET_SETTLE_MS     1000   // boot RESET -> SEEK on the real CLU: 0.96-1.04 s
+#define SEEK_TRIES          4      // real CLU, nothing answering: 4 SEEKs ~40-48 ms apart
+#define SEEK_TIMEOUT_MS     40
 #define REFRESH_SETTLE_MS   1200   // req_refresh_modules: RESET -> first ADDR_ASSIGN (real CLU)
 #define MAX_DRIVERS         32
-#define DISCOVER_TIMEOUT_MS 40
+// Real modules answer DISCOVER ~576 ms late; the real CLU keeps each DISCOVER open ~1 s.
+#define DISCOVER_TIMEOUT_MS 1000
 #define DISCOVER_RETRIES    3
 #define SUMMARY_EVERY_MS    600000 // "round N: x/y online" heartbeat (also logged on change)
 #define WATCHDOG_SLICE_MS   1000   // idle / parked bus: wake up this often to check in with the task watchdog
@@ -85,6 +93,10 @@ static volatile bool s_parked;
 // SYSTEM.Init ran in this Lua VM: module configuration known, drivers may init the modules.
 static volatile bool s_started;
 static volatile bool s_reinit; // run driver init for all modules before the next poll round
+// Rejoin pacing (bus task only): tick of the last discovery RESET, and whether its fast window is
+// still open (latched off, so the tick counter wrapping does not reopen it).
+static uint32_t s_reset_tick;
+static bool s_rejoin_fast;
 static const tfbus_driver_t *s_drivers[MAX_DRIVERS];
 static int s_ndrivers;
 
@@ -742,13 +754,14 @@ static void set_online(tfbus_module_t *module, bool on)
     }
 }
 
-/** @brief ADDR_ASSIGN the module's SN to its address; true if ACKed (up to CMD_TRIES). */
-static bool assign(tfbus_module_t *module)
+/** @brief ADDR_ASSIGN the module's SN to its address; true if ACKed (up to @p tries). */
+static bool assign(tfbus_module_t *module, int tries)
 {
     uint8_t assign_frame[TFBUS_MAX_FRAME], reply_frame[TFBUS_MAX_FRAME];
     size_t frame_length = tfbus_addr_assign(assign_frame, sizeof assign_frame, module->sn, module->addr);
     module->assigned = false;
-    for (int t = 0; t < CMD_TRIES && !module->assigned; t++) {
+    module->assign_tick = (uint32_t)xTaskGetTickCount();
+    for (int t = 0; t < tries && !module->assigned; t++) {
         int response_length = tfbus_uart_transact(assign_frame, frame_length, reply_frame, sizeof reply_frame, ACK_TIMEOUT_MS);
         module->assigned = is_ack(reply_frame, response_length);
     }
@@ -756,6 +769,7 @@ static bool assign(tfbus_module_t *module)
 }
 
 static void poll_module(tfbus_module_t *module);
+static bool rejoin_due(const tfbus_module_t *module);
 
 /** @brief Find or append the s_dev entry for @p sn; NULL if the table is full. */
 static tfbus_device_t *dev_get(uint32_t serial_number)
@@ -791,6 +805,7 @@ static bool scan(void)
     int garbled = 0;
     bool added = false;
     for (int found = 0; found < TFBUS_MAX_MODULES;) {
+        esp_task_wdt_reset(); // up to DISCOVER_TIMEOUT_MS per round, one round per module
         int response_length = tfbus_uart_transact(discovery_frame, frame_length, reply_frame, sizeof reply_frame, DISCOVER_TIMEOUT_MS);
         const uint8_t *response_payload;
         size_t plen;
@@ -835,7 +850,7 @@ static bool scan(void)
             ESP_LOGW(TAG, "DISCOVER: no free address");
             break;
         }
-        if (!assign(module)) {
+        if (!assign(module, CMD_TRIES)) {
             break; // it would answer the next DISCOVER again
         }
     }
@@ -905,8 +920,10 @@ static int dev_cmp(const void *left_device, const void *right_device)
 /**
  * @brief Full bus discovery; rebuilds s_dev, adds new modules to the registry (saved).
  *
- * Boot: RESET, SEEK, DISCOVER loop, then ADDR_ASSIGN by SN for the registry modules that did not
- * answer DISCOVER.
+ * Boot: RESET, ~1 s, SEEK, ADDR_ASSIGN by SN for the registry modules (real CLU: SEEK, then
+ * ADDR_ASSIGN, no DISCOVER), then the DISCOVER loop for new modules, then the rest again. Real
+ * modules answer DISCOVER only after ~576 ms, so known ones are addressed first: otherwise all of
+ * them would answer the same DISCOVER at once.
  *
  * Refresh (req_refresh_modules, OM "Clear CLU"): what the real CLU sends (capture
  * test/host/fixtures/capture_refresh_modules_clu2.txt): RESET, ~1.2 s, no SEEK, ADDR_ASSIGN by
@@ -927,13 +944,17 @@ static void discover(bool refresh)
     ESP_LOGI(TAG, "%s: %d module(s) in the registry", refresh ? "refresh" : "discovery", s_nmod);
     frame_length = tfbus_reset(request_frame, sizeof request_frame, TFBUS_BROADCAST);
     tfbus_uart_send(request_frame, frame_length);
+    s_reset_tick = (uint32_t)xTaskGetTickCount();
+    s_rejoin_fast = true;
     vTaskDelay(pdMS_TO_TICKS(refresh ? REFRESH_SETTLE_MS : RESET_SETTLE_MS));
 
     if (!refresh) {
         frame_length = tfbus_seek(request_frame, sizeof request_frame);
-        int response_length = tfbus_uart_transact(request_frame, frame_length, reply_frame, sizeof reply_frame, ACK_TIMEOUT_MS * 5);
-        ESP_LOGI(TAG, "SEEK %s", response_length > 0 ? "acked" : "no reply");
-        (void)response_length; // log-only
+        int response_length = 0;
+        for (int t = 0; t < SEEK_TRIES && response_length <= 0; t++) {
+            response_length = tfbus_uart_transact(request_frame, frame_length, reply_frame, sizeof reply_frame, SEEK_TIMEOUT_MS);
+        }
+        ESP_LOGI(TAG, "SEEK %s", response_length > 0 ? "acked" : "no reply"); // log-only
     }
 
     for (int i = 0; i < s_nmod; i++) {
@@ -946,8 +967,7 @@ static void discover(bool refresh)
         module->status_len = 0;
         module->assigned = false;
     }
-    // Identity from the previous scan. On refresh the registry modules are addressed before
-    // DISCOVER, so they never report hwType/fwType/fwApiVer, and old SMART_PANELs (fwApiVer < 5)
+    // Identity from the previous scan. The registry modules are addressed before DISCOVER, so they never report hwType/fwType/fwApiVer, and old SMART_PANELs (fwApiVer < 5)
     // do not answer VERSION_QUERY either: without this, config.txt would say fwApiVer 0 and OM
     // finds no device interface ("fv00"). The real CLU keeps reporting 03:03:04 after a refresh.
     static tfbus_device_t prev[TFBUS_MAX_MODULES];
@@ -956,18 +976,16 @@ static void discover(bool refresh)
     memcpy(prev, s_dev, (size_t)nprev * sizeof *prev);
     s_ndev = 0;
     xSemaphoreGive(s_lock);
-    if (refresh) {
-        for (int i = 0; i < s_nmod; i++) {
-            if (live(&s_mod[i])) {
-                assign(&s_mod[i]); // failures retried after DISCOVER
-            }
+    for (int i = 0; i < s_nmod; i++) {
+        if (live(&s_mod[i])) {
+            assign(&s_mod[i], CMD_TRIES); // failures retried after DISCOVER
         }
     }
     bool changed = scan();
-    // Registry modules that did not answer DISCOVER (e.g. real Grenton modules): by SN, as before.
+    // Registry modules still unaddressed (missed their ADDR_ASSIGN above): by SN once more.
     for (int i = 0; i < s_nmod; i++) {
         tfbus_module_t *module = &s_mod[i];
-        if (live(module) && !module->assigned && !assign(module)) {
+        if (live(module) && !module->assigned && !assign(module, CMD_TRIES)) {
             ESP_LOGW(TAG, "ADDR_ASSIGN sn=%lu addr=%u: no ACK", (unsigned long)module->sn, module->addr);
         }
     }
@@ -1016,11 +1034,11 @@ static void discover(bool refresh)
  * Offline module (absent at discovery, power-cycled, or lost its address after a RESET): it
  * answers nothing until it is addressed again. Re-send ADDR_ASSIGN (only the module with that
  * SN reacts, an addressed one just re-takes the same address) and re-run the driver init, since
- * a module that rebooted has lost its configuration.
+ * a module that rebooted has lost its configuration. One try per call, paced by rejoin_due().
  */
 static void rejoin(tfbus_module_t *module)
 {
-    if (!assign(module)) {
+    if (!assign(module, 1)) {
         return;
     }
     poll_module(module);
@@ -1107,9 +1125,9 @@ static void poll_module(tfbus_module_t *module)
  *
  * Runs from tfbus_master_init(), whatever Lua does. Driver init runs once SYSTEM.Init gave the
  * module configuration (tfbus_master_start()), and again after every discovery (RESET) from then
- * on. Queued commands and deferred driver calls are serviced between polls; offline modules get a
- * rejoin attempt every OFFLINE_POLL_EVERY rounds. Parked only while tfbus_master_reset() frees
- * the driver state.
+ * on. Queued commands and deferred driver calls are serviced between polls; offline and
+ * unaddressed modules are not polled but get rejoin attempts paced by rejoin_due(). Parked only
+ * while tfbus_master_reset() frees the driver state.
  */
 static void bus_task(void *arg)
 {
@@ -1133,9 +1151,10 @@ static void bus_task(void *arg)
                 s_scan_cb();
             }
             xSemaphoreGive(s_scan_done);
-            // First round before init, like the real CLU.
+            // First round before init, like the real CLU; it never polls a module whose
+            // ADDR_ASSIGN went unanswered.
             for (int i = 0; i < s_nmod; i++) {
-                if (live(&s_mod[i])) {
+                if (live(&s_mod[i]) && s_mod[i].assigned) {
                     poll_module(&s_mod[i]);
                 }
             }
@@ -1171,8 +1190,8 @@ static void bus_task(void *arg)
                 if (!live(module)) {
                     continue; // dropped by a refresh
                 }
-                if (!module->online && module->fails >= OFFLINE_AFTER) {
-                    if (round % OFFLINE_POLL_EVERY == 0) {
+                if (!module->assigned || (!module->online && module->fails >= OFFLINE_AFTER)) {
+                    if (rejoin_due(module)) {
                         rejoin(module);
                     }
                     continue;
@@ -1200,6 +1219,21 @@ static void bus_task(void *arg)
             vTaskDelay(1); // let lower-priority tasks run between rounds
         }
     }
+}
+
+/**
+ * @brief Whether an offline / unaddressed module is due its next ADDR_ASSIGN try.
+ *
+ * Every REJOIN_FAST_MS within REJOIN_FAST_WINDOW_MS of the last discovery RESET, else every
+ * REJOIN_SLOW_MS, counted from the module's last ADDR_ASSIGN attempt.
+ */
+static bool rejoin_due(const tfbus_module_t *module)
+{
+    uint32_t now = (uint32_t)xTaskGetTickCount();
+    if (s_rejoin_fast && now - s_reset_tick >= pdMS_TO_TICKS(REJOIN_FAST_WINDOW_MS)) {
+        s_rejoin_fast = false;
+    }
+    return now - module->assign_tick >= pdMS_TO_TICKS(s_rejoin_fast ? REJOIN_FAST_MS : REJOIN_SLOW_MS);
 }
 
 /** @brief Block the bus task until it is notified, checking in with the task watchdog meanwhile. */

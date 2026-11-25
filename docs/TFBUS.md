@@ -17,6 +17,11 @@ niezweryfikowana. Stan modułów: [README](../README.md#moduły-tf-bus).
   (RampTime, StartLevel, korekcje, DistributedLogicGroup, …) idą na magistralę z `set()` w
   `OnInit` OM.LUA. Firmware robi tak samo, a dodatkowo po ponownym zaadresowaniu modułu (powrót
   online) wysyła mu ostatni stan ustawiony ze skryptów.
+- Moduł nieobecny (bez ACK na ADDR_ASSIGN albo 3 nieodebrane odpytania) nie jest odpytywany;
+  dostaje jedną próbę ADDR_ASSIGN co ok. 40 ms przez 60 s od RESET-u wykrywania, potem co 3 s.
+  Gdy nic nie odpowiada, SEEK jest wysyłany 4 razy.
+- Moduły odpowiadają na DISCOVER dopiero po ok. 576 ms, więc DISCOVER czeka do 1 s. Przy starcie
+  moduły z rejestru są adresowane po SN przed DISCOVER, który szuka tylko nowych.
 - `Switch*` z `Time > 0` po upływie czasu przywraca poprzednią wartość.
 - `Hold*` (wywoływane z OnHold przycisku): przerwa dłuższa niż ok. 0,5 s zaczyna nowe
   przytrzymanie w przeciwnym kierunku (od końca zakresu zawsze w stronę środka).
@@ -112,6 +117,11 @@ Module support status: [README](../README.md#moduły-tf-bus).
   (RampTime, StartLevel, corrections, DistributedLogicGroup, …) go onto the bus from `set()` in
   OM.LUA's `OnInit`. The firmware does the same, and additionally sends the last script-set state
   after re-addressing a module (coming back online).
+- An absent module (ADDR_ASSIGN not ACKed, or 3 missed polls) is not polled; it gets one
+  ADDR_ASSIGN try about every 40 ms for 60 s after the discovery RESET, then every 3 s. With nothing
+  answering, SEEK is sent 4 times.
+- Modules answer DISCOVER only after about 576 ms, so DISCOVER waits up to 1 s. At boot the registry
+  modules are addressed by SN before DISCOVER, which then only looks for new ones.
 - `Switch*` with `Time > 0` restores the previous value once the timer expires.
 - `Hold*` (called from a button's OnHold): a gap longer than approx. 0.5 s starts a new hold in the
   opposite direction (from either end of the range, always toward the middle).

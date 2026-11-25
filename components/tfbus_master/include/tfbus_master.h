@@ -40,6 +40,7 @@ typedef struct tfbus_module {
     uint8_t  addr;            /**< 1..48: lowest free when first found; persistent. */
     char     name[24];        /**< Lua global name, e.g. "mm_330017203" ("" = not in OM.LUA). */
     bool     assigned;        /**< ACKed ADDR_ASSIGN. */
+    uint32_t assign_tick;     /**< Tick of the last ADDR_ASSIGN attempt (paces rejoin attempts). */
     bool     gone;            /**< Dropped by a refresh: address kept for when it comes back. */
     bool     online;          /**< Answering polls. */
     uint8_t  fails;           /**< Consecutive missed polls. */

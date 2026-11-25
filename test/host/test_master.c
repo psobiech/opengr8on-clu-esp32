@@ -76,6 +76,7 @@ static void run_bus(int rounds)
 TaskHandle_t xTaskGetCurrentTaskHandle(void) { return s_in_bus ? s_task : NULL; }
 void vTaskDelay(TickType_t t)
 {
+    host_ticks += t; // a polling round (vTaskDelay(1)) takes one tick
     if (s_in_bus && t == 1 && --s_rounds_left <= 0) {
         longjmp(s_bus_escape, 1);
     }
@@ -540,11 +541,14 @@ int main(void)
                            .status = {1, 0x00, 1, 1, 0x07}, .status_len = 5};
     log_reset();
     discover(false);
-    static const char *want_disc = "aaff0752 aaff2a7f aaff085d aaff02816cab130103 "
+    static const char *want_disc = "aaff0752 aaff2a7f aaff02816cab130103 "
                                    "aaff02111111110255 aaff02111111110255 aaff02111111110255 "
-                                   "aaff02222222220354 aaff02222222220354 aa01f952 aa03f950 ";
-    check("discovery sequence: RESET, SEEK, DISCOVER (silent), ADDR_ASSIGN per module (3 tries max), "
-          "VERSION_QUERY per assigned module",
+                                   "aaff02222222220354 aaff02222222220354 "
+                                   "aaff085d "
+                                   "aaff02111111110255 aaff02111111110255 aaff02111111110255 "
+                                   "aa01f952 aa03f950 ";
+    check("discovery sequence: RESET, SEEK, ADDR_ASSIGN per registry module (3 tries max), DISCOVER "
+          "(silent), the unaddressed ones again, VERSION_QUERY per assigned module",
           strcmp(s_log, want_disc) == 0);
     if (strcmp(s_log, want_disc) != 0) {
         printf("  got  %s\n", s_log);
@@ -565,6 +569,7 @@ int main(void)
     s_sim[0].ver_len = 4;
     memcpy(s_sim[0].ver, (const uint8_t[]){0x02, 0x02, 0x04, 0x03}, 4);
     s_sim[1].discover = true;
+    s_sim[1].nack_assign = 3; // misses the ADDR_ASSIGN before DISCOVER: found by DISCOVER instead
     memcpy(s_sim[1].ident, (const uint8_t[]){0x03, 0x03, 0x04}, 3);
     s_sim[2] = (sim_mod_t){.sn = 0x0f05f123, .present = true, .discover = true, .ident = {0x03, 0x03, 0x04}};
     for (int i = 0; i < s_nsim; i++) {
@@ -573,13 +578,15 @@ int main(void)
     log_reset();
     discover(false);
     static const char *want_scan = "aaff0752 aaff2a7f "
+                                   "aaff02816cab130103 "          // A by SN
+                                   "aaff02111111110255 aaff02111111110255 aaff02111111110255 " // B absent
+                                   "aaff02222222220354 aaff02222222220354 aaff02222222220354 " // C ignores
                                    "aaff085d aaff02222222220354 " // C answers -> its OM.LUA address 3
                                    "aaff085d aaff0223f1050f048b " // new panel -> next free address 4
                                    "aaff085d "                    // silence: done
-                                   "aaff02816cab130103 "          // A (no DISCOVER) by SN
-                                   "aaff02111111110255 aaff02111111110255 aaff02111111110255 "
+                                   "aaff02111111110255 aaff02111111110255 aaff02111111110255 " // B again
                                    "aa01f952 ";                   // VQ for A only (panels fwApiVer 4)
-    check("DISCOVER loop: found modules addressed (OM.LUA or next free), then ADDR_ASSIGN for the rest",
+    check("registry by SN first, then the DISCOVER loop (OM.LUA or next free address), then the rest again",
           strcmp(s_log, want_scan) == 0);
     if (strcmp(s_log, want_scan) != 0) {
         printf("  got  %s\n", s_log);
@@ -904,25 +911,41 @@ int main(void)
               "init:1 init:3 init:5 status:1:5:01 status:3:5:01 status:5:5:01 ");
     check("start: deferred call run by the bus task", strcmp(s_deferred, "mm_C:t1:7 ") == 0);
 
-    // ---- module gone: offline after 3 missed polls, then only rejoin attempts every 20 rounds
-    // (rounds 20..500 = 25 x 3 ADDR_ASSIGN tries); the "x/y online" summary runs at round 500
+    // ---- module gone: offline after 3 missed polls, then single ADDR_ASSIGN tries only, every
+    // 40 ms within 60 s of the discovery RESET (one round = one tick here); the "x/y online"
+    // summary runs at round 500
     s_sim[2].present = false;
     tfbus_module_t *mods[5];
     for (int i = 0; i < 5; i++) {
         mods[i] = &s_mod[i];
     }
     mods[0]->drv = mods[4]->drv = NULL; // keep the driver log small: only C reports
+    s_reset_tick = host_ticks;
+    s_rejoin_fast = true;
+    mods[2]->assign_tick = host_ticks;
+    uint32_t fails_before = mods[2]->fails_total;
     drv_reset();
     log_reset();
     s_bus_rounds = 501;
     s_bus_on_notify = true;
     xTaskNotifyGive(s_task);
-    check("absent module: 3 missed polls, then a rejoin attempt every 20 rounds",
-          s_tx_count[TFBUS_T_ADDR_ASSIGN] == 25 * 3 && !mods[2]->online && mods[2]->fails == 3);
+    check("absent module, fast window: 3 missed polls, then one ADDR_ASSIGN every 40 ticks (rounds 40..480)",
+          s_tx_count[TFBUS_T_ADDR_ASSIGN] == 12 && !mods[2]->online && mods[2]->fails == 3 &&
+              !mods[2]->assigned && mods[2]->fails_total - fails_before == 3);
     check_drv("absent module: offline once, no init while it is gone", "offline:3 ");
+    // after the 60 s window: one ADDR_ASSIGN every 3 s, still no polls
+    host_ticks = s_reset_tick + 60000;
+    mods[2]->assign_tick = host_ticks;
+    fails_before = mods[2]->fails_total;
+    log_reset();
+    s_bus_rounds = 6001;
+    xTaskNotifyGive(s_task);
+    check("absent module, after 60 s: one ADDR_ASSIGN every 3000 ticks, not polled",
+          s_tx_count[TFBUS_T_ADDR_ASSIGN] == 2 && !s_rejoin_fast && mods[2]->fails_total == fails_before);
 
     // ---- driver init while a module is offline: none for it then, once when it answers again
-    mods[2]->fails = 0; // polled normally (no rejoin), still not answering
+    mods[2]->fails = 0; // addressed and polled normally (no rejoin), still not answering
+    mods[2]->assigned = true;
     drv_reset();
     s_bus_rounds = 1;
     tfbus_master_start();
@@ -1023,6 +1046,13 @@ int main(void)
     log_reset();
     discover(false);
     check("DISCOVER: garbled replies retried 3x, then given up", s_tx_count[TFBUS_T_DISCOVER] == 4 && !s_sim[0].addr);
+
+    // ---- nothing answering: SEEK tried 4 times, like the real CLU on an empty bus
+    s_sim[0].present = false;
+    log_reset();
+    discover(false);
+    check("empty bus: SEEK x4", s_tx_count[TFBUS_T_SEEK] == 4);
+    s_sim[0].present = true;
 
     // ---- registry edge cases
     lua_newtable(L);

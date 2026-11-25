@@ -147,7 +147,7 @@ static void on_status(tfbus_module_t *module, const uint8_t *status_payload, siz
         switch (status_records[i].type) {
         case 0x02: panel_sensor_update(&panel_state->temp, record_value); break;
         case 0x07: panel_sensor_update(&panel_state->light, record_value); break;
-        case 0x08: panel_button_event(panel_state->btn, BTN, &panel_state->btn_value, NULL, status_records[i].data[0]); break;
+        case 0x08: panel_button_event(panel_state->btn, BTN, &panel_state->btn_value, status_records[i].data[0]); break;
         default: break;
         }
     }

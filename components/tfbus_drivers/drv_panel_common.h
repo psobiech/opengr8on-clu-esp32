@@ -27,20 +27,14 @@ typedef struct {
  */
 void panel_sensor_update(panel_sensor_t *sensor, int32_t new_value);
 
-/** @brief PANEL_BUTTON feature 1 Mode (SMART_PANEL_FM_4 interface). */
-enum { PANEL_MODE_MONOSTABLE = 0, PANEL_MODE_BISTABLE = 1, PANEL_MODE_LOCKED = 2 };
-
 /**
- * @brief Handle a panel button event.
+ * @brief Apply a panel button event record (TOUCH_PANEL_FM_4: TLV 0x08, VAL = button*7 + event).
  *
- * Bistable is implemented here, in the CLU: each press toggles Value and fires
- * OnSwitchOn/OnSwitchOff + OnChange; Locked drops all events.
+ * OnSwitchOn / OnSwitchOff also update Value.
  *
- * @param btn_names Array of button_count names (empty = not declared).
+ * @param btn_names   Button object names (empty = not declared).
  * @param button_count Number of buttons.
- * @param values    Button state bitmask.
- * @param modes     Per-button Mode (NULL = all monostable).
+ * @param values      Button state bitmask.
  * @param event_value Panel event value: button*7 + event.
  */
-void panel_button_event(char (*btn_names)[24], int button_count, uint32_t *values, const uint8_t *modes,
-                        int event_value);
+void panel_button_event(char (*btn_names)[24], int button_count, uint32_t *values, int event_value);

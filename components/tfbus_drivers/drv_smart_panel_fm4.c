@@ -28,10 +28,13 @@
  * ShowButtons 0x03 [0,0,0,0], ClearScreen 0x04, PrintText 0x0a, DisplayContent 0x09, Draw 0x19,
  * SetBeep 0x0f; PANEL set(4..7, 10..21) re-sends its frame.
  *
- * Status: as touch panel (06 baseline, 02 temp, 07 light raw, 08 button VAL), plus the non-TLV
- * 13-byte sensor frame (record count 0) the real SMART_PANEL_FM_4 sends when a value changes:
- * `00 | 00 00 00 | temp_lo temp_hi | s1(2) | 00 00 00 00 | s2(2)`, temp LE int16 in 0.1 C.
- * The real CLU takes the temperature only from this frame; s1 / s2 are not decoded.
+ * Status: the real SMART_PANEL_FM_4 answers a poll with a bare ACK, or with the 13-byte state
+ * frame the real CLU reads by position (firmware.bin 0xb14a2 PANEL_BUTTON, 0xb1526 sensors):
+ * `changed(LE16) | values(LE16) | temp(LE16, 0.1 C) | s1(2) | 00 00 | ext 00 | s2(2)`.
+ * A button's Value is taken from `values` only while its bit in `changed` is set; the CLU derives
+ * the button events from Value itself (the panel sends none). Bistable / Locked are done by the
+ * panel from the Mode in class frame 0x17 [mask16, mode]. ext (bits 7..5) = gesture / page /
+ * proximity records, not decoded. TLV records 02 temp / 07 light raw are still accepted.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +43,7 @@
 #include "clu_lua.h"
 #include "drv_panel_common.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "lauxlib.h"
 #include "tfbus_drivers.h"
 #include "tfbus_master.h"
@@ -82,11 +86,20 @@ enum { REG_PAGENR = 5 }; // index of PageNr in k_regs
 /** @brief PANEL features 4..7 (GestureIconUp/Down/Left/Right) -> DISPLAY_BLOCK sub-type. */
 static const uint8_t k_icon_sub[4] = {0x04, 0x05, 0x02, 0x03};
 
+/** @brief PANEL_BUTTON feature 1 Mode, sent to the panel in class frame 0x17 (the panel applies it). */
+enum { MODE_MONOSTABLE = 0, MODE_BISTABLE = 1, MODE_LOCKED = 2 };
+/** @brief PANEL_BUTTON events. */
+enum { EV_CHANGE = 0, EV_ON = 1, EV_OFF = 2, EV_SHORT = 3, EV_LONG = 4, EV_HOLD = 5, EV_CLICK = 6 };
+
 /** @brief Driver state per module (drv_ctx). */
 typedef struct {
     char btn[BTN][24];
-    uint32_t btn_value;
-    uint8_t mode[BTN]; // PANEL_BUTTON Mode (feature 1), applied by the CLU (wire format unknown)
+    uint16_t btn_value;            // Value bits as last reported by the panel
+    uint8_t mode[BTN];             // PANEL_BUTTON Mode (feature 1)
+    uint16_t hold_delay[BTN];      // ms (feature 2)
+    uint16_t hold_interval[BTN];   // ms (feature 3)
+    int64_t pressed_at[BTN];       // us, 0 = not held (monostable only)
+    int64_t next_hold[BTN];        // us
     panel_sensor_t temp, light;
     uint16_t reg[NREGS];
     char icon[4][ICON_LEN + 1];
@@ -95,6 +108,7 @@ typedef struct {
 } sp4_t;
 
 static void led(tfbus_module_t *module, int button_index, uint8_t cmd);
+static void send_mode(tfbus_module_t *module, int button_index);
 
 /** @brief Driver state of @p module, allocated (with sensor / register defaults) on first use. */
 static sp4_t *ctx(tfbus_module_t *module)
@@ -108,6 +122,10 @@ static sp4_t *ctx(tfbus_module_t *module)
         panel_state->light = (panel_sensor_t){.threshold = 50, .min = 0, .max = 10000};
         for (size_t i = 0; i < NREGS; i++) {
             panel_state->reg[i] = k_regs[i].def;
+        }
+        for (int b = 0; b < BTN; b++) {
+            panel_state->hold_delay[b] = 1000;
+            panel_state->hold_interval[b] = 100;
         }
         module->drv_ctx = panel_state;
     }
@@ -143,8 +161,7 @@ static void send_icon(tfbus_module_t *module, int icon_index)
  */
 static void send_button(tfbus_module_t *module, int button_index, bool led_commit)
 {
-    uint16_t mask = (uint16_t)(1u << button_index);
-    drv_queue_frame(module, 0x17, (uint8_t[]){(uint8_t)mask, (uint8_t)(mask >> 8), 0}, 3);
+    send_mode(module, button_index);
     if (led_commit) {
         drv_queue_frame(module, 0x18, (uint8_t[]){0x00, 0x00, 0x02}, 3);
     }
@@ -153,6 +170,13 @@ static void send_button(tfbus_module_t *module, int button_index, bool led_commi
         uint8_t blk[22] = {(uint8_t)button_index, subs[i]};
         drv_queue_frame(module, 0x30, blk, sizeof blk);
     }
+}
+
+/** @brief Send one button's Mode: class frame 0x17 [mask16 LE, mode] (byte 3 = Mode, seen on a real CLU). */
+static void send_mode(tfbus_module_t *module, int button_index)
+{
+    uint16_t mask = (uint16_t)(1u << button_index);
+    drv_queue_frame(module, 0x17, (uint8_t[]){(uint8_t)mask, (uint8_t)(mask >> 8), ctx(module)->mode[button_index]}, 3);
 }
 
 /** @brief Send a PANEL_PAGE field header (TFBUS_CMD 0x12 [p, field, slot]). */
@@ -278,14 +302,19 @@ static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int c
         page_set(module, L, channel_index, idx, val);
         return false;
     }
-    if (cls == CLS_BUTTON && channel_index >= 0 && channel_index < BTN && idx == 1) { // Mode / SetMode
-        lua_Integer configured_value = luaL_optinteger(L, val, 0);
-        panel_state->mode[channel_index] = configured_value >= 0 && configured_value <= 2 ? (uint8_t)configured_value : 0;
-        if (panel_state->mode[channel_index] != PANEL_MODE_BISTABLE && (panel_state->btn_value & (1u << channel_index))) {
-            panel_state->btn_value &= ~(1u << channel_index);
+    if (cls == CLS_BUTTON && channel_index >= 0 && channel_index < BTN) {
+        if (idx == 1) { // Mode / SetMode: the panel applies it
+            lua_Integer configured_value = luaL_optinteger(L, val, 0);
+            panel_state->mode[channel_index] =
+                configured_value >= 0 && configured_value <= MODE_LOCKED ? (uint8_t)configured_value : MODE_MONOSTABLE;
+            panel_state->pressed_at[channel_index] = 0; // a press in progress gets no click / hold
             if (panel_state->initialized) {
-                led(module, channel_index, LED_OFF);
+                send_mode(module, channel_index);
             }
+        } else if (idx == 2) {
+            panel_state->hold_delay[channel_index] = (uint16_t)luaL_optinteger(L, val, 1000);
+        } else if (idx == 3) {
+            panel_state->hold_interval[channel_index] = (uint16_t)luaL_optinteger(L, val, 100);
         }
         return false;
     }
@@ -383,40 +412,87 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
     }
 }
 
+static void button_edges(sp4_t *panel_state, uint16_t changed, uint16_t values, int64_t now);
+static void button_holds(sp4_t *panel_state, int64_t now);
+
 /**
- * @brief tfbus_driver_t::on_status: temperature, light and button event records (button Mode applied here).
+ * @brief tfbus_driver_t::on_status: state frame (button Values, temperature) or TLV sensor records;
+ *        every reply (a bare ACK too) also advances OnHold.
  */
 static void on_status(tfbus_module_t *module, const uint8_t *status_payload, size_t len)
 {
     sp4_t *panel_state = ctx(module);
-    if (len == SENSOR_FRAME_LEN && status_payload[0] == 0) {
+    int64_t now = esp_timer_get_time();
+    if (len == SENSOR_FRAME_LEN) {
+        uint16_t changed = (uint16_t)(status_payload[0] | status_payload[1] << 8);
+        uint16_t values = (uint16_t)(status_payload[2] | status_payload[3] << 8);
+        button_edges(panel_state, changed, values, now);
         int16_t temperature_deci = (int16_t)(status_payload[4] | status_payload[5] << 8);
         panel_sensor_update(&panel_state->temp, temperature_deci * 10);
-        return;
+    } else {
+        tfbus_tlv_t status_records[4];
+        int status_record_count = tfbus_parse_tlv(status_payload, len, status_records, 4);
+        for (int i = 0; i < status_record_count; i++) {
+            if (status_records[i].len < 2) {
+                continue;
+            }
+            uint16_t record_value = (uint16_t)(status_records[i].data[0] | status_records[i].data[1] << 8);
+            switch (status_records[i].type) {
+            case 0x02: panel_sensor_update(&panel_state->temp, (int16_t)record_value); break;
+            case 0x07: panel_sensor_update(&panel_state->light, record_value); break; // raw ADC; % mapping unknown
+            default: break;
+            }
+        }
     }
-    tfbus_tlv_t status_records[4];
-    int status_record_count = tfbus_parse_tlv(status_payload, len, status_records, 4);
-    for (int i = 0; i < status_record_count; i++) {
-        if (status_records[i].len < 2) {
+    button_holds(panel_state, now);
+}
+
+/**
+ * @brief Value changes of the buttons in @p changed -> Value, OnChange, OnSwitchOn / OnSwitchOff;
+ *        a monostable release adds OnClick / OnShortPress / OnLongPress by press time (as DIN).
+ *
+ * Bistable buttons toggle on the panel, so the time between two reports is not a press time: they
+ * get no click / hold events. Locked buttons report nothing.
+ */
+static void button_edges(sp4_t *panel_state, uint16_t changed, uint16_t values, int64_t now)
+{
+    for (int b = 0; b < BTN; b++) {
+        uint16_t button_bit = (uint16_t)(1u << b);
+        if (!(changed & button_bit)) {
             continue;
         }
-        uint16_t record_value = (uint16_t)(status_records[i].data[0] | status_records[i].data[1] << 8);
-        switch (status_records[i].type) {
-        case 0x02: panel_sensor_update(&panel_state->temp, (int16_t)record_value); break;
-        case 0x07: panel_sensor_update(&panel_state->light, record_value); break; // raw ADC; % mapping unknown
-        case 0x08: {
-            uint32_t before = panel_state->btn_value;
-            panel_button_event(panel_state->btn, BTN, &panel_state->btn_value, panel_state->mode, status_records[i].data[0]);
-            // Bistable: the LED shows the toggled state (green on, off).
-            uint32_t flipped = before ^ panel_state->btn_value;
-            for (int b = 0; b < BTN; b++) {
-                if ((flipped & (1u << b)) && panel_state->mode[b] == PANEL_MODE_BISTABLE) {
-                    led(module, b, (panel_state->btn_value & (1u << b)) ? LED_ON : LED_OFF);
-                }
-            }
-            break;
+        bool on = values & button_bit;
+        bool was = panel_state->btn_value & button_bit;
+        panel_state->btn_value = on ? (uint16_t)(panel_state->btn_value | button_bit)
+                                    : (uint16_t)(panel_state->btn_value & ~button_bit);
+        const char *name = panel_state->btn[b];
+        if (on == was || !name[0]) {
+            continue;
         }
-        default: break;
+        clu_lua_post_number(name, 0, on);
+        clu_lua_post_event(name, EV_CHANGE);
+        clu_lua_post_event(name, on ? EV_ON : EV_OFF);
+        if (panel_state->mode[b] != MODE_MONOSTABLE) {
+            continue;
+        }
+        if (on) {
+            panel_state->pressed_at[b] = now;
+            panel_state->next_hold[b] = now + (int64_t)panel_state->hold_delay[b] * 1000;
+        } else if (panel_state->pressed_at[b]) {
+            int64_t held_ms = (now - panel_state->pressed_at[b]) / 1000;
+            clu_lua_post_event(name, held_ms < 500 ? EV_CLICK : held_ms < 2000 ? EV_SHORT : EV_LONG);
+            panel_state->pressed_at[b] = 0;
+        }
+    }
+}
+
+/** @brief OnHold after HoldDelay, then every HoldInterval, while a monostable button is held. */
+static void button_holds(sp4_t *panel_state, int64_t now)
+{
+    for (int b = 0; b < BTN; b++) {
+        if (panel_state->pressed_at[b] && now >= panel_state->next_hold[b]) {
+            clu_lua_post_event(panel_state->btn[b], EV_HOLD);
+            panel_state->next_hold[b] = now + (int64_t)panel_state->hold_interval[b] * 1000;
         }
     }
 }

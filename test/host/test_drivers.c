@@ -601,9 +601,32 @@ int main(void)
         check("SMART_PANEL runtime set(11, 3000) -> 0x31 [02 b8 0b]",
               strncmp(s_frames, "aa123102b80b", 12) == 0 && strlen(s_frames) == 26 * 2 + 1);
 
+        // Button 3 (ch 2, bit 0x04): Value from the state frame [changed, values, temp, ...],
+        // events derived by the CLU
+        static const char *pressed = "04 00 04 00 e6 00 00 00 00 00 00 00 00";
+        static const char *released = "04 00 00 00 e6 00 00 00 00 00 00 00 00";
         posts_reset();
-        status(m, "03 06 01 01 00 07 02 10 d7 00 08 02 10 12 00"); // light + VAL 18 = btn 2 OnLongPress
-        check_posts("SMART_PANEL button 3 long press", "PB2!4 ");
+        s_now_us = 20000000;
+        status(m, pressed);
+        s_now_us += 200000;
+        status(m, released);
+        check_posts("SMART_PANEL monostable click", "PB2[0]=1 PB2!0 PB2!1 PB2[0]=0 PB2!0 PB2!2 PB2!6 ");
+        posts_reset();
+        status(m, "00 00 04 00 e6 00 00 00 00 00 00 00 00");
+        check_posts("SMART_PANEL Value bit without its changed bit: ignored", "");
+        posts_reset();
+        status(m, pressed);
+        s_now_us += 1000000;
+        status(m, ""); // bare ACK: HoldDelay (1000 ms) reached
+        s_now_us += 100000;
+        status(m, ""); // HoldInterval (100 ms)
+        s_now_us += 1500000;
+        status(m, released); // 2.6 s
+        check_posts("SMART_PANEL hold: OnHold at HoldDelay and HoldInterval, then OnLongPress",
+                    "PB2[0]=1 PB2!0 PB2!1 PB2!5 PB2!5 PB2[0]=0 PB2!0 PB2!2 PB2!4 ");
+        posts_reset();
+        status(m, "03 06 01 01 00 07 02 10 d7 00 08 02 10 12 00"); // touch-panel style event record
+        check_posts("SMART_PANEL TLV button event record: ignored", "");
         frames_reset();
         lua_exec(m, 30, 2, 1, 0, 0); // LedSwitchOn button 3
         check_frames("SMART_PANEL LedSwitchOn btn3 -> LED_CMD[04,00,02]", "aa1218040002a6 ");
@@ -619,28 +642,21 @@ int main(void)
             check(name, strncmp(s_frames, draw[i].pfx, strlen(draw[i].pfx)) == 0 && !strchr(s_frames, ' ')[1]);
         }
 
-        // Button 3 (ch 2, VAL = 14 + ev): press ON+CHANGE, release OFF+CHANGE, then CLICK
-        static const char *press_click[] = {"01 08 02 10 0f 00", "01 08 02 10 0e 00", "01 08 02 10 10 00",
-                                            "01 08 02 10 0e 00", "01 08 02 10 14 00"};
-        posts_reset();
-        for (int i = 0; i < 5; i++) status(m, press_click[i]);
-        check_posts("SMART_PANEL monostable click", "PB2[0]=1 PB2!1 PB2!0 PB2[0]=0 PB2!2 PB2!0 PB2!6 ");
+        // Mode goes to the panel, which toggles Value itself; no LED_CMD from the CLU (real CLU capture)
+        frames_reset();
         lua_set(m, 30, 2, 1, 1); // Mode = Bistable
+        check_frames("SMART_PANEL SetMode(1) -> class 0x17 [04 00 01]", "aa1217040001aa ");
         posts_reset();
         frames_reset();
-        for (int i = 0; i < 5; i++) status(m, press_click[i]);
-        check_posts("SMART_PANEL bistable 1st click: toggles on, release ignored",
-                    "PB2[0]=1 PB2!1 PB2!0 PB2!6 ");
-        check_frames("SMART_PANEL bistable on -> LED_CMD[04,00,02] (green)", "aa1218040002a6 ");
+        status(m, pressed);
+        s_now_us += 2000000;
+        status(m, "");
+        check_posts("SMART_PANEL bistable ON: Value + events, no hold", "PB2[0]=1 PB2!0 PB2!1 ");
+        check_frames("SMART_PANEL bistable: no LED_CMD from the CLU", "");
         posts_reset();
-        frames_reset();
-        for (int i = 0; i < 5; i++) status(m, press_click[i]);
-        check_posts("SMART_PANEL bistable 2nd click: toggles off", "PB2[0]=0 PB2!2 PB2!0 PB2!6 ");
-        check_frames("SMART_PANEL bistable off -> LED_CMD[04,00,04] (off)", "aa1218040004a0 ");
-        lua_set(m, 30, 2, 1, 2); // Mode = Locked
-        posts_reset();
-        for (int i = 0; i < 5; i++) status(m, press_click[i]);
-        check_posts("SMART_PANEL locked: no events", "");
+        s_now_us += 5000000;
+        status(m, released);
+        check_posts("SMART_PANEL bistable OFF: no click / long press", "PB2[0]=0 PB2!0 PB2!2 ");
         lua_set(m, 30, 2, 1, 0);
     }
 
@@ -936,7 +952,7 @@ int main(void)
               strncmp(s_frames, "aa13310a000001000000", 20) == 0 &&
                   strstr(s_frames, " aa13310fe803640008000000") && strlen(s_frames) == 2 * (2 * 26 + 1)); // TFBUS_CMD frames are padded to 26 bytes
 
-        // button LEDs; Mode change away from bistable turns a lit LED off
+        // button LEDs
         frames_reset();
         lua_exec(m, 30, 0, 0, 0, 0);  // ShowOK
         lua_exec(m, 30, 0, 2, 0, 0);  // LedSwitchOff
@@ -951,14 +967,9 @@ int main(void)
                       m->drv->io_execute(m, L, obj, 30, 99, 0, obj + 1, 0) == -1);
             lua_settop(L, obj - 1);
         }
-        lua_set(m, 30, 0, 1, 1); // Bistable
-        posts_reset();
-        status(m, "01 08 02 10 01 00");
-        status(m, "01 08 02 10 00 00");
-        check_posts("SMART_PANEL bistable press toggles PB0 on", "PB0[0]=1 PB0!1 PB0!0 ");
         frames_reset();
-        lua_set(m, 30, 0, 1, 7); // invalid Mode -> monostable: lit LED switched off
-        check("SMART_PANEL Mode bistable -> monostable while on: LED off", strncmp(s_frames, "aa1318010004", 12) == 0);
+        lua_set(m, 30, 0, 1, 7); // invalid Mode -> monostable
+        check_frames("SMART_PANEL invalid Mode -> class 0x17 [01 00 00]", "aa1317010000af ");
 
         // sensors: threshold / range from features, signed temperature, short records ignored
         lua_set(m, 20, 0, 1, 0.5);

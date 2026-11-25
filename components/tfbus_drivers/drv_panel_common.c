@@ -1,6 +1,6 @@
 /**
  * @file drv_panel_common.c
- * @brief Panel sensor hysteresis events and button event handling (monostable / bistable / locked).
+ * @brief Panel sensor hysteresis events and touch panel button event records.
  */
 #include "drv_panel_common.h"
 
@@ -43,32 +43,13 @@ void panel_sensor_update(panel_sensor_t *sensor, int32_t new_value)
     sensor->out_of_range = oor;
 }
 
-void panel_button_event(char (*btn_names)[24], int button_count, uint32_t *values, const uint8_t *modes,
-                        int event_value)
+void panel_button_event(char (*btn_names)[24], int button_count, uint32_t *values, int event_value)
 {
     int button_index = event_value / 7, event_index = event_value % 7;
     if (button_index < 0 || button_index >= button_count || !btn_names[button_index][0]) {
         return;
     }
     const char *name = btn_names[button_index];
-    int mode = modes ? modes[button_index] : PANEL_MODE_MONOSTABLE;
-    if (mode == PANEL_MODE_LOCKED) {
-        return;
-    }
-    if (mode == PANEL_MODE_BISTABLE) {
-        // The panel reports press/release (monostable); the CLU turns each press into a toggle.
-        // Release and the panel's OnChange events carry no state change here.
-        if (event_index == EV_ON) {
-            bool on = !(*values & (1u << button_index));
-            *values = on ? (*values | (1u << button_index)) : (*values & ~(1u << button_index));
-            clu_lua_post_number(name, 0, on);
-            clu_lua_post_event(name, on ? EV_ON : EV_OFF);
-            clu_lua_post_event(name, EV_CHANGE);
-        } else if (event_index != EV_OFF && event_index != EV_CHANGE) {
-            clu_lua_post_event(name, event_index); // OnClick / OnShortPress / OnLongPress / OnHold
-        }
-        return;
-    }
     if (event_index == EV_ON || event_index == EV_OFF) {
         bool on = event_index == EV_ON;
         *values = on ? (*values | (1u << button_index)) : (*values & ~(1u << button_index));

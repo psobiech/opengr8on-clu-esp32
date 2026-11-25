@@ -28,7 +28,10 @@
  * ShowButtons 0x03 [0,0,0,0], ClearScreen 0x04, PrintText 0x0a, DisplayContent 0x09, Draw 0x19,
  * SetBeep 0x0f; PANEL set(4..7, 10..21) re-sends its frame.
  *
- * Status: as touch panel (06 baseline, 02 temp, 07 light raw, 08 button VAL).
+ * Status: as touch panel (06 baseline, 02 temp, 07 light raw, 08 button VAL), plus the non-TLV
+ * 13-byte sensor frame (record count 0) the real SMART_PANEL_FM_4 sends when a value changes:
+ * `00 | 00 00 00 | temp_lo temp_hi | s1(2) | 00 00 00 00 | s2(2)`, temp LE int16 in 0.1 C.
+ * The real CLU takes the temperature only from this frame; s1 / s2 are not decoded.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +49,7 @@ static const char *TAG = "drv_sp4";
 #define BTN 16
 /** @brief OM object classes hosted on the panel. */
 enum { CLS_PAGE = 19, CLS_TEMP = 20, CLS_LIGHT = 21, CLS_PANEL = 29, CLS_BUTTON = 30 };
+#define SENSOR_FRAME_LEN 13 /**< Status payload length of the non-TLV sensor frame. */
 /** @brief LED_CMD command codes. */
 enum { LED_OK = 0x00, LED_ERROR = 0x01, LED_ON = 0x02, LED_OFF = 0x04, LED_RED_ON = 0x10 };
 
@@ -385,6 +389,11 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
 static void on_status(tfbus_module_t *module, const uint8_t *status_payload, size_t len)
 {
     sp4_t *panel_state = ctx(module);
+    if (len == SENSOR_FRAME_LEN && status_payload[0] == 0) {
+        int16_t temperature_deci = (int16_t)(status_payload[4] | status_payload[5] << 8);
+        panel_sensor_update(&panel_state->temp, temperature_deci * 10);
+        return;
+    }
     tfbus_tlv_t status_records[4];
     int status_record_count = tfbus_parse_tlv(status_payload, len, status_records, 4);
     for (int i = 0; i < status_record_count; i++) {

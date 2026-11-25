@@ -971,8 +971,10 @@ int main(void)
         status(m, "01 02 02 00 1c 0c");             // 31.00: rise + out of range (max 30)
         status(m, "01 02 02 00 9c ff");             // -1.00: lower, still out of range
         status(m, "02 06 01 01 00 07 02 10 64 00"); // short record skipped; light 1.00
-        check_posts("SMART_PANEL sensors: threshold, range, signed temperature, light",
-                    "TMP[0]=25 TMP[0]=25.3 TMP[0]=31 TMP!0 TMP!1 TMP!3 TMP[0]=-1 TMP!0 TMP!2 LGT[0]=1 ");
+        status(m, "00 00 00 00 e6 00 25 00 00 00 00 ad 01"); // sensor frame (real panel): 23.0
+        check_posts("SMART_PANEL sensors: threshold, range, signed temperature, light, sensor frame",
+                    "TMP[0]=25 TMP[0]=25.3 TMP[0]=31 TMP!0 TMP!1 TMP!3 TMP[0]=-1 TMP!0 TMP!2 LGT[0]=1 "
+                    "TMP[0]=23 TMP!0 TMP!1 ");
     }
 
     // ---------------- ROLLER_SH_DIN_3: remaining commands and features

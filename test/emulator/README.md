@@ -33,8 +33,17 @@ the module reports itself (250) must become the Lua Value. A power cycle must lo
 frame in both directions is kept in `tfbus-frames.jsonl`. The fake module connects (with retries)
 before the firmware's startup discovery, since UART1 TX is discarded while no client is connected.
 
+The watchdog check boots one guest with `esp-emu --no-panic-intercept`, so the firmware's own panic
+handler runs and reboots the chip as on hardware. It stores a MAIN.LUA that never blocks
+(`while true do end`) and hard-resets the chip through `--control-tcp` (`reset`). On core 1 the Lua
+task keeps checking in, but IDLE1 starves, so the task watchdog must panic. The next boot must report
+the crash from RTC memory (`previous boot crashed: task watchdog: ...`). After the second early crash
+the firmware must not run MAIN.LUA again: it logs `main.lua crashed the CLU on the last boots, not run`,
+keeps the script as `BAD_M.LUA` and enters emergency mode, which a UDP `req:` then confirms.
+
 The checks are organized by purpose: `boot/` contains startup validation, `udp/` contains native
-CLU UDP coverage, `http/` contains HTTP object coverage, and `tfbus/` contains RS485 TF-Bus coverage. Each scenario folder keeps its runner,
+CLU UDP coverage, `http/` contains HTTP object coverage, `tfbus/` contains RS485 TF-Bus coverage, and
+`watchdog/` contains task watchdog recovery coverage. Each scenario folder keeps its runner,
 Lua peer script (where applicable), and focused unit tests together.
 
 ## CI behavior
@@ -44,14 +53,15 @@ the emulator matrix downloads each matching firmware artifact rather than compil
 The low-memory preset uses `partitions_4mb.csv` and quad PSRAM, with its generated `sdkconfig` kept
 inside its separate build directory. The low-memory test artifact is not included in GitHub releases.
 CI installs `esp-emu` v1.0.0 after checking the published Linux archive SHA-256, then runs the bounded
-boot, UDP, and HTTP checks for both profiles. Both pair runners require matching firmware/ELF files
+boot, UDP, HTTP, and watchdog checks for both profiles. Both pair runners require matching firmware/ELF files
 and two generated `cfg` partitions with distinct serial numbers, the same factory PIN, and the
 emulator's default test AP credentials (`myssid` / `mypassword`). Each run uses a fresh random
 project key and nonce.
 Each preset's build log and emulator logs, Lua scripts, UDP packet evidence, and result summaries
 (when complete) are uploaded even when a check fails. The UDP relay reserves localhost port 1234;
 the guests use UDP control host-forward ports 19201 and 19202. The HTTP run additionally reserves
-TCP ports 19301 and 19302. The runners have independent emulator and Unix wall-clock limits.
+TCP ports 19301 and 19302. The watchdog run reuses UDP port 19201 and serves the emulator control
+channel on TCP port 19501. The runners have independent emulator and Unix wall-clock limits.
 
 ## Local run
 
@@ -78,6 +88,11 @@ python3 -m test.emulator.http.run_http \
   --cfg-a build/gate-http/udp-cfg-a.bin \
   --cfg-b build/gate-http/udp-cfg-b.bin \
   --out-dir build/gate-http/http-test
+python3 -m test.emulator.watchdog.run_watchdog \
+  --firmware build/gate-http/merged-binary.bin \
+  --elf build/gate-http/opengr8on_clu_esp32.elf \
+  --cfg build/gate-http/udp-cfg-a.bin \
+  --out-dir build/gate-http/watchdog-test
 idf.py --preset gate-http-low-memory build merge-bin
 python3 tools/mknvs.py --serial 221010155 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build/gate-http-low-memory/udp-cfg-a.bin
 python3 tools/mknvs.py --serial 221010156 --pin ABCD1234 --wifi-ssid myssid --wifi-pass mypassword --mqtt-uri "" -o build/gate-http-low-memory/udp-cfg-b.bin

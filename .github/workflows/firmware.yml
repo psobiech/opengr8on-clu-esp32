@@ -166,7 +166,7 @@ jobs:
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     needs: [ gate-http, gate-http-low-memory ]
     runs-on: ubuntu-26.04
-    timeout-minutes: 15
+    timeout-minutes: 40 # the watchdog check boots three times through two watchdog timeouts, each minutes of wall clock in esp-emu (run_watchdog.py)
     strategy:
       fail-fast: false
       matrix:
@@ -271,6 +271,16 @@ jobs:
             --psram-size "${{ matrix.psram_size }}" \
             --out-dir "${{ matrix.build_dir }}/http-test"
 
+      - name: Test task watchdog recovery from a runaway MAIN.LUA
+        run: |
+          python3 -m test.emulator.watchdog.run_watchdog \
+            --emulator "$ESP_EMU" \
+            --firmware "${{ matrix.build_dir }}/merged-binary.bin" \
+            --elf "${{ matrix.build_dir }}/opengr8on_clu_esp32.elf" \
+            --cfg "${{ matrix.build_dir }}/udp-cfg-a.bin" \
+            --psram-size "${{ matrix.psram_size }}" \
+            --out-dir "${{ matrix.build_dir }}/watchdog-test"
+
       - name: Upload build and emulator logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -285,6 +295,9 @@ jobs:
             ${{ matrix.build_dir }}/http-test/*.log
             ${{ matrix.build_dir }}/http-test/*.LUA
             ${{ matrix.build_dir }}/http-test/result.txt
+            ${{ matrix.build_dir }}/watchdog-test/*.log
+            ${{ matrix.build_dir }}/watchdog-test/*.LUA
+            ${{ matrix.build_dir }}/watchdog-test/result.txt
           if-no-files-found: ignore
 
   # Real RS485 TF-Bus path (tfbus_uart on UART1, master, dimmer driver) against an emulated

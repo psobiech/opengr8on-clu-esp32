@@ -208,6 +208,27 @@ static int ack(uint8_t *rx)
     return 4;
 }
 
+// DISCOVER: every present, unaddressed module that answers DISCOVER replies within the window
+int tfbus_uart_collect(const uint8_t *tx, size_t txlen, tfbus_uart_reply_t *replies, int max_replies, int timeout_ms,
+                       bool *garbled)
+{
+    (void)timeout_ms;
+    log_frame("", tx, txlen);
+    *garbled = false;
+    int reply_count = 0;
+    for (int i = 0; i < s_nsim && reply_count < max_replies; i++) {
+        sim_mod_t *s = &s_sim[i];
+        if (tx[2] == TFBUS_T_DISCOVER && s->present && s->discover && !s->addr) {
+            uint8_t p[7] = {(uint8_t)s->sn, (uint8_t)(s->sn >> 8), (uint8_t)(s->sn >> 16),
+                            (uint8_t)(s->sn >> 24), s->ident[0], s->ident[1], s->ident[2]};
+            tfbus_uart_reply_t *module_reply = &replies[reply_count++];
+            module_reply->length = (size_t)reply(module_reply->frame, p, sizeof p);
+            module_reply->frame[module_reply->length - 1] ^= s->garble ? 0xff : 0;
+        }
+    }
+    return reply_count;
+}
+
 int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap, int timeout_ms)
 {
     (void)rxcap, (void)timeout_ms;
@@ -217,19 +238,6 @@ int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxc
         for (int i = 0; i < s_nsim; i++) {
             if (s_sim[i].present) {
                 return ack(rx);
-            }
-        }
-        return 0;
-    }
-    if (type == TFBUS_T_DISCOVER) {
-        for (int i = 0; i < s_nsim; i++) {
-            sim_mod_t *s = &s_sim[i];
-            if (s->present && s->discover && !s->addr) {
-                uint8_t p[7] = {(uint8_t)s->sn, (uint8_t)(s->sn >> 8), (uint8_t)(s->sn >> 16),
-                                (uint8_t)(s->sn >> 24), s->ident[0], s->ident[1], s->ident[2]};
-                int n = reply(rx, p, sizeof p);
-                rx[n - 1] ^= s->garble ? 0xff : 0;
-                return n;
             }
         }
         return 0;
@@ -581,12 +589,14 @@ int main(void)
                                    "aaff02816cab130103 "          // A by SN
                                    "aaff02111111110255 aaff02111111110255 aaff02111111110255 " // B absent
                                    "aaff02222222220354 aaff02222222220354 aaff02222222220354 " // C ignores
-                                   "aaff085d aaff02222222220354 " // C answers -> its OM.LUA address 3
-                                   "aaff085d aaff0223f1050f048b " // new panel -> next free address 4
+                                   "aaff085d "                    // C and the new panel answer the same DISCOVER:
+                                   "aaff02222222220354 "          //   C -> its OM.LUA address 3
+                                   "aaff0223f1050f048b "          //   new panel -> next free address 4
                                    "aaff085d "                    // silence: done
                                    "aaff02111111110255 aaff02111111110255 aaff02111111110255 " // B again
                                    "aa01f952 ";                   // VQ for A only (panels fwApiVer 4)
-    check("registry by SN first, then the DISCOVER loop (OM.LUA or next free address), then the rest again",
+    check("registry by SN first, then the DISCOVER loop (every reply of a DISCOVER addressed: OM.LUA or next "
+          "free address), then the rest again",
           strcmp(s_log, want_scan) == 0);
     if (strcmp(s_log, want_scan) != 0) {
         printf("  got  %s\n", s_log);

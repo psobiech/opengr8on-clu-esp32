@@ -1,5 +1,5 @@
 // Host tests for the RS485 transport (tfbus_uart.c) against a fake ESP-IDF UART driver: TX is
-// recorded, RX bytes arrive on a simulated clock (esp_timer_get_time), so timeouts, echo and
+// recorded, RX bytes arrive on a simulated clock (esp_timer_get_time), so timeouts and
 // split replies can be scripted.
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,7 +28,7 @@ static struct {
 static uint8_t s_tx[256];
 static size_t s_txlen;
 static int s_flushes;
-static bool s_short_write, s_echo;
+static bool s_short_write;
 
 // RX bytes with their arrival time; s_rxpos = next unread byte.
 static uint8_t s_rx[512];
@@ -82,9 +82,6 @@ int uart_write_bytes(uart_port_t n, const void *src, size_t len)
 {
     memcpy(s_tx + s_txlen, src, len);
     s_txlen += len;
-    if (s_echo) {
-        rx_at(100, src, len);
-    }
     return s_short_write ? (int)len - 1 : (int)len;
 }
 esp_err_t uart_wait_tx_done(uart_port_t n, TickType_t ticks) { return ESP_OK; }
@@ -128,7 +125,7 @@ static void reset(void)
 {
     s_txlen = 0;
     s_nrx = s_rxpos = 0;
-    s_echo = s_short_write = false;
+    s_short_write = false;
 }
 
 // Local endpoint (on-board modules): answers STATUS_POLL to address 5, owns address 6 without a
@@ -156,6 +153,17 @@ static int fake_local2(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxca
         return 4;
     }
     return 0;
+}
+
+// Endpoint with an unaddressed local module: answers DISCOVER.
+static int fake_local_discover(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap)
+{
+    (void)txlen;
+    if (tx[2] != TFBUS_T_DISCOVER || rxcap < 4) {
+        return 0;
+    }
+    memcpy(rx, (const uint8_t[]){0xaa, 0x00, 0x01, 0xab}, 4);
+    return 4;
 }
 
 // Module -> CLU frame: aa 00 len payload xor
@@ -196,13 +204,6 @@ int main(void)
           s_txlen == fl && memcmp(s_tx, f, fl) == 0 && s_flushes == flushes + 1);
     check("transact: reply returned as soon as complete (not after the timeout)",
           n == (int)rl && memcmp(rx, r, rl) == 0 && s_now_us - t0 == 2000);
-
-    // echo of our own frame (RE tied low) is skipped
-    reset();
-    s_echo = true;
-    rx_at(1500, r, rl);
-    n = tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
-    check("transact: own TX echo skipped, reply returned", n == (int)rl && memcmp(rx, r, rl) == 0);
 
     // reply arriving byte by byte
     reset();
@@ -257,6 +258,47 @@ int main(void)
     rx_at(1000, (const uint8_t[]){0xaa, 0x00, 0x08, 0x12, 0x34}, 5);
     n = tfbus_uart_transact(f, dl, rx, sizeof rx, 40);
     check("transact: garbled reply to a broadcast -> 0", n == 0);
+
+    // collect (DISCOVER): every reply of the window, like the real CLU (capture: a panel at 369 ms,
+    // a RELAY at 577 ms, both addressed)
+    tfbus_uart_reply_t replies[4];
+    bool garbled = true;
+    uint8_t panel_reply[TFBUS_MAX_FRAME], relay_reply[TFBUS_MAX_FRAME];
+    size_t panel_length = reply(panel_reply, (const uint8_t[]){0x7a, 0xf7, 0x05, 0x0f, 0x03, 0x03, 0x04}, 7);
+    size_t relay_length = reply(relay_reply, (const uint8_t[]){0x0b, 0xfb, 0x5e, 0x87, 0x15, 0x02, 0x02}, 7);
+    reset();
+    rx_at(369000, panel_reply, panel_length);
+    rx_at(577000, relay_reply, relay_length);
+    t0 = s_now_us;
+    n = tfbus_uart_collect(f, dl, replies, 4, 1000, &garbled);
+    check("collect: both replies kept in order, request sent",
+          n == 2 && replies[0].length == panel_length && memcmp(replies[0].frame, panel_reply, panel_length) == 0 &&
+              replies[1].length == relay_length && memcmp(replies[1].frame, relay_reply, relay_length) == 0 &&
+              s_txlen == dl && !garbled);
+    check("collect: listens for the whole window", s_now_us - t0 >= 1000000);
+    reset();
+    rx_at(369000, panel_reply, panel_length);
+    rx_at(577000, relay_reply, relay_length);
+    n = tfbus_uart_collect(f, dl, replies, 1, 1000, &garbled);
+    check("collect: replies beyond max_replies dropped (not garbled)",
+          n == 1 && memcmp(replies[0].frame, panel_reply, panel_length) == 0 && !garbled);
+    reset();
+    rx_at(300000, (const uint8_t[]){0x12, 0x34, 0x56}, 3); // remains of two replies on top of each other
+    rx_at(577000, relay_reply, relay_length);
+    n = tfbus_uart_collect(f, dl, replies, 4, 1000, &garbled);
+    check("collect: colliding bytes -> garbled, the clean reply still kept", n == 1 && garbled &&
+                                                                             replies[0].length == relay_length);
+    reset();
+    n = tfbus_uart_collect(f, dl, replies, 4, 1000, &garbled);
+    check("collect: silence -> 0, not garbled", n == 0 && !garbled);
+    tfbus_uart_set_local(fake_local_discover);
+    reset();
+    rx_at(577000, relay_reply, relay_length);
+    t0 = s_now_us;
+    n = tfbus_uart_collect(f, dl, replies, 4, 1000, &garbled);
+    check("collect: local reply returned at once, nothing on the wire (wire modules answer a later DISCOVER)",
+          n == 1 && replies[0].length == 4 && s_txlen == 0 && s_now_us == t0);
+    tfbus_uart_set_local(NULL);
 
     // UART write failure
     reset();

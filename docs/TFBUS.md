@@ -20,8 +20,10 @@ niezweryfikowana. Stan modułów: [README](../README.md#moduły-tf-bus).
 - Moduł nieobecny (bez ACK na ADDR_ASSIGN albo 3 nieodebrane odpytania) nie jest odpytywany;
   dostaje jedną próbę ADDR_ASSIGN co ok. 40 ms przez 60 s od RESET-u wykrywania, potem co 3 s.
   Gdy nic nie odpowiada, SEEK jest wysyłany 4 razy.
-- Moduły odpowiadają na DISCOVER dopiero po ok. 576 ms, więc DISCOVER czeka do 1 s. Przy starcie
-  moduły z rejestru są adresowane po SN przed DISCOVER, który szuka tylko nowych.
+- Moduły odpowiadają na DISCOVER dopiero po ok. 576 ms, więc DISCOVER czeka 1 s. Jak prawdziwe CLU,
+  firmware zbiera wszystkie odpowiedzi z tej sekundy i adresuje każdy moduł (zrzut: panel po 369 ms,
+  RELAY po 577 ms, oba dostały adres); moduły unikają kolizji tylko różnym opóźnieniem odpowiedzi.
+  Przy starcie moduły z rejestru są adresowane po SN przed DISCOVER, który szuka tylko nowych.
 - `Switch*` z `Time > 0` po upływie czasu przywraca poprzednią wartość.
 - `Hold*` (wywoływane z OnHold przycisku): przerwa dłuższa niż ok. 0,5 s zaczyna nowe
   przytrzymanie w przeciwnym kierunku (od końca zakresu zawsze w stronę środka).
@@ -120,8 +122,11 @@ Module support status: [README](../README.md#moduły-tf-bus).
 - An absent module (ADDR_ASSIGN not ACKed, or 3 missed polls) is not polled; it gets one
   ADDR_ASSIGN try about every 40 ms for 60 s after the discovery RESET, then every 3 s. With nothing
   answering, SEEK is sent 4 times.
-- Modules answer DISCOVER only after about 576 ms, so DISCOVER waits up to 1 s. At boot the registry
-  modules are addressed by SN before DISCOVER, which then only looks for new ones.
+- Modules answer DISCOVER only after about 576 ms, so DISCOVER waits 1 s. Like the real CLU, the
+  firmware collects every reply of that second and addresses each module (capture: a panel at
+  369 ms, a RELAY at 577 ms, both assigned); modules avoid collisions only by answering at different
+  times. At boot the registry modules are addressed by SN before DISCOVER, which then only looks for
+  new ones.
 - `Switch*` with `Time > 0` restores the previous value once the timer expires.
 - `Hold*` (called from a button's OnHold): a gap longer than approx. 0.5 s starts a new hold in the
   opposite direction (from either end of the range, always toward the middle).

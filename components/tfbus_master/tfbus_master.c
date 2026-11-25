@@ -49,9 +49,12 @@ static const char *TAG = "tfbus"; // tfbus_master_set_log_tag()
 #define SEEK_TIMEOUT_MS     40
 #define REFRESH_SETTLE_MS   1200   // req_refresh_modules: RESET -> first ADDR_ASSIGN (real CLU)
 #define MAX_DRIVERS         32
-// Real modules answer DISCOVER ~576 ms late; the real CLU keeps each DISCOVER open ~1 s.
-#define DISCOVER_TIMEOUT_MS 1000
-#define DISCOVER_RETRIES    3
+// Real modules answer DISCOVER ~576 ms late; the real CLU keeps each DISCOVER open ~1 s and
+// addresses every module that answered in it (capture: a panel at 369 ms and a RELAY at 577 ms,
+// both assigned).
+#define DISCOVER_TIMEOUT_MS  1000
+#define DISCOVER_RETRIES     3
+#define DISCOVER_MAX_REPLIES 8
 #define SUMMARY_EVERY_MS    600000 // "round N: x/y online" heartbeat (also logged on change)
 #define WATCHDOG_SLICE_MS   1000   // idle / parked bus: wake up this often to check in with the task watchdog
 #define NVS_NS              "tfbus"
@@ -792,66 +795,82 @@ static tfbus_device_t *dev_get(uint32_t serial_number)
 /**
  * @brief DISCOVER loop (broadcast type 0x08).
  *
- * Every still-unaddressed module answers SN hwType fwType fwApiVer; the CLU addresses it (its
- * registry address, a new module gets the lowest free one) so the next DISCOVER reaches the
- * remaining ones. Ends on silence or an empty ACK ("SEEK - no data - finish").
+ * Every still-unaddressed module answers SN hwType fwType fwApiVer within DISCOVER_TIMEOUT_MS; like
+ * the real CLU, all replies of the window are collected, then each module is addressed (its
+ * registry address, a new module gets the lowest free one). The next DISCOVER reaches the ones
+ * whose replies collided. Ends on a DISCOVER that addresses nothing ("SEEK - no data - finish").
  *
  * @return true if the registry changed (to be saved).
  */
 static bool scan(void)
 {
-    uint8_t discovery_frame[TFBUS_MAX_FRAME], reply_frame[TFBUS_MAX_FRAME];
+    uint8_t discovery_frame[TFBUS_MAX_FRAME];
     size_t frame_length = tfbus_discover(discovery_frame, sizeof discovery_frame);
-    int garbled = 0;
+    static tfbus_uart_reply_t replies[DISCOVER_MAX_REPLIES]; // bus task only; keeps them off its stack
+    int garbled_rounds = 0;
     bool added = false;
     for (int found = 0; found < TFBUS_MAX_MODULES;) {
-        esp_task_wdt_reset(); // up to DISCOVER_TIMEOUT_MS per round, one round per module
-        int response_length = tfbus_uart_transact(discovery_frame, frame_length, reply_frame, sizeof reply_frame, DISCOVER_TIMEOUT_MS);
-        const uint8_t *response_payload;
-        size_t plen;
-        tfbus_ident_t id;
-        if (response_length <= 0) {
-            break;
-        }
-        if (!tfbus_parse_response(reply_frame, (size_t)response_length, &response_payload, &plen)) {
-            if (++garbled > DISCOVER_RETRIES) { // several modules answering at once
-                ESP_LOGW(TAG, "DISCOVER: garbled replies, giving up");
+        esp_task_wdt_reset(); // DISCOVER_TIMEOUT_MS per round
+        bool garbled = false;
+        int reply_count = tfbus_uart_collect(discovery_frame, frame_length, replies, DISCOVER_MAX_REPLIES,
+                                             DISCOVER_TIMEOUT_MS, &garbled);
+        int addressed = 0;
+        bool table_full = false;
+        for (int i = 0; i < reply_count && found < TFBUS_MAX_MODULES; i++) {
+            const uint8_t *response_payload;
+            size_t plen;
+            tfbus_ident_t id;
+            if (!tfbus_parse_response(replies[i].frame, replies[i].length, &response_payload, &plen)) {
+                garbled = true;
+                continue;
+            }
+            if (plen == 0 || !tfbus_parse_discover(response_payload, plen, &id)) {
+                continue; // plain ACK: not an unaddressed module
+            }
+            found++;
+            xSemaphoreTake(s_lock, portMAX_DELAY);
+            tfbus_module_t *module = tfbus_master_find_sn(id.sn);
+            bool is_new = !module; // or gone: back with its old address
+            if (!module) {
+                module = mod_add(id.sn, id.hw_type);
+            }
+            if (module && (module->fw_type != id.fw_type || module->fw_api_ver != id.fw_api_ver)) {
+                module->fw_type = id.fw_type;
+                module->fw_api_ver = id.fw_api_ver;
+                added = true; // identity changed (firmware update): save it
+            }
+            added |= is_new && module;
+            tfbus_device_t *device = dev_get(id.sn);
+            if (device) {
+                device->hw_type = id.hw_type;
+                device->fw_type = id.fw_type;
+                device->fw_api_ver = id.fw_api_ver;
+                device->known = module != NULL;
+            }
+            xSemaphoreGive(s_lock);
+            ESP_LOGI(TAG, "DISCOVER: sn=%08lx hw=0x%02x fwType=%u fwApiVer=%u%s", (unsigned long)id.sn,
+                     id.hw_type, id.fw_type, id.fw_api_ver, is_new ? (module ? " (new)" : "") : "");
+            if (!module) {
+                ESP_LOGW(TAG, "DISCOVER: no free address");
+                table_full = true;
                 break;
             }
-            continue;
+            addressed += assign(module, CMD_TRIES);
         }
-        if (plen == 0 || !tfbus_parse_discover(response_payload, plen, &id)) {
-            break; // plain ACK: no (more) unaddressed modules
-        }
-        found++;
-        xSemaphoreTake(s_lock, portMAX_DELAY);
-        tfbus_module_t *module = tfbus_master_find_sn(id.sn);
-        bool is_new = !module; // or gone: back with its old address
-        if (!module) {
-            module = mod_add(id.sn, id.hw_type);
-        }
-        if (module && (module->fw_type != id.fw_type || module->fw_api_ver != id.fw_api_ver)) {
-            module->fw_type = id.fw_type;
-            module->fw_api_ver = id.fw_api_ver;
-            added = true; // identity changed (firmware update): save it
-        }
-        added |= is_new && module;
-        tfbus_device_t *device = dev_get(id.sn);
-        if (device) {
-            device->hw_type = id.hw_type;
-            device->fw_type = id.fw_type;
-            device->fw_api_ver = id.fw_api_ver;
-            device->known = module != NULL;
-        }
-        xSemaphoreGive(s_lock);
-        ESP_LOGI(TAG, "DISCOVER: sn=%08lx hw=0x%02x fwType=%u fwApiVer=%u%s", (unsigned long)id.sn,
-                 id.hw_type, id.fw_type, id.fw_api_ver, is_new ? (module ? " (new)" : "") : "");
-        if (!module) {
-            ESP_LOGW(TAG, "DISCOVER: no free address");
+        if (table_full) {
             break;
         }
-        if (!assign(module, CMD_TRIES)) {
-            break; // it would answer the next DISCOVER again
+        if (addressed > 0) {
+            continue; // the next DISCOVER finds modules whose replies collided or were not addressed
+        }
+        // Nothing addressed: silence, or only modules that do not take ADDR_ASSIGN (they would answer
+        // every DISCOVER again), or colliding replies (retried).
+        if (!garbled) {
+            break;
+        }
+        if (++garbled_rounds > DISCOVER_RETRIES) {
+            ESP_LOGW(TAG, "DISCOVER: garbled replies, giving up");
+            break;
         }
     }
     return added;

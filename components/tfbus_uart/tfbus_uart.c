@@ -98,37 +98,20 @@ esp_err_t tfbus_uart_send(const uint8_t *request_frame, size_t request_length)
     return wire_send(request_frame, request_length);
 }
 
-/** @brief Reply collector state for tfbus_uart_transact(). */
+/** @brief Reply collector state for tfbus_uart_transact() / tfbus_uart_collect(). */
 typedef struct {
     const uint8_t *request_frame;
     size_t request_length;
-    uint8_t *reply_buffer;
-    size_t reply_capacity;
-    int got;
+    tfbus_uart_reply_t *replies;
+    int max_replies;
+    size_t reply_capacity; /**< Largest reply kept. */
+    bool listen_full_window; /**< Keep listening after the first reply (collect). */
+    int got;               /**< Replies kept. */
+    size_t framed_bytes;   /**< Received bytes that formed frames (any frame, kept or not). */
 } collect_t;
 
-/**
- * @brief RX parser callback: keep the first module -> CLU frame that is not our own echo.
- * @param frame Complete frame.
- * @param len   Frame length.
- * @param ctx   ::collect_t.
- */
-static void on_frame(const uint8_t *frame, size_t len, void *ctx)
-{
-    collect_t *collector = ctx;
-    if (collector->got > 0) {
-        return;
-    }
-    // Some transceivers echo our own TX (RE tied low) — skip it.
-    if (len == collector->request_length && memcmp(frame, collector->request_frame, len) == 0) {
-        return;
-    }
-    if (frame[1] != TFBUS_CLU_ADDR || len > collector->reply_capacity) {
-        return;
-    }
-    memcpy(collector->reply_buffer, frame, len);
-    collector->got = (int)len;
-}
+static int receive(collect_t *collector, int timeout_ms);
+static void on_frame(const uint8_t *frame, size_t len, void *ctx);
 
 int tfbus_uart_transact(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity, int timeout_ms)
 {
@@ -142,14 +125,55 @@ int tfbus_uart_transact(const uint8_t *request_frame, size_t request_length, uin
     if (wire_send(request_frame, request_length) != ESP_OK) {
         return -1;
     }
+    tfbus_uart_reply_t reply;
+    collect_t collector = {.request_frame = request_frame, .request_length = request_length, .replies = &reply,
+                           .max_replies = 1,
+                           .reply_capacity = reply_capacity < sizeof reply.frame ? reply_capacity : sizeof reply.frame};
+    receive(&collector, timeout_ms);
+    if (collector.got == 0) {
+        return 0;
+    }
+    memcpy(reply_buffer, reply.frame, reply.length);
+    return (int)reply.length;
+}
+
+int tfbus_uart_collect(const uint8_t *request_frame, size_t request_length, tfbus_uart_reply_t *replies, int max_replies, int timeout_ms, bool *garbled)
+{
+    *garbled = false;
+    int reply_count = 0;
+    for (int i = 0; i < s_nlocal && reply_count < max_replies; i++) {
+        int reply_length = s_local[i](request_frame, request_length, replies[reply_count].frame, sizeof replies[reply_count].frame);
+        if (reply_length > 0) {
+            replies[reply_count++].length = (size_t)reply_length;
+        }
+    }
+    if (reply_count > 0 || s_nowire) {
+        return reply_count; // local modules first (no 1 s wire window each), the wire after them
+    }
+    if (wire_send(request_frame, request_length) != ESP_OK) {
+        return -1;
+    }
+    collect_t collector = {.request_frame = request_frame, .request_length = request_length,
+                           .replies = replies, .max_replies = max_replies,
+                           .reply_capacity = sizeof replies->frame, .listen_full_window = true};
+    size_t received = (size_t)receive(&collector, timeout_ms);
+    *garbled = received > collector.framed_bytes;
+    return collector.got;
+}
+
+/**
+ * @brief Read the wire until the first kept reply (or, with listen_full_window, until the timeout).
+ * @return Bytes received.
+ */
+static int receive(collect_t *collector, int timeout_ms)
+{
     tfbus_rx_t parser;
     tfbus_rx_init(&parser);
-    collect_t collector = {.request_frame = request_frame, .request_length = request_length, .reply_buffer = reply_buffer, .reply_capacity = reply_capacity};
     int64_t deadline = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     uint8_t chunk[64];
     uint8_t raw[24];
     size_t nraw = 0, total = 0;
-    while (collector.got == 0) {
+    while (collector->listen_full_window || collector->got == 0) {
         int64_t left_us = deadline - esp_timer_get_time();
         if (left_us <= 0) {
             break;
@@ -176,10 +200,11 @@ int tfbus_uart_transact(const uint8_t *request_frame, size_t request_length, uin
             raw[nraw++] = chunk[i];
         }
         total += (size_t)bytes_read;
-        tfbus_rx_push(&parser, chunk, (size_t)bytes_read, on_frame, &collector);
+        tfbus_rx_push(&parser, chunk, (size_t)bytes_read, on_frame, collector);
     }
     // Discovery diagnostics: a broadcast got bytes back that do not parse (collision / turnaround).
-    if (collector.got == 0 && total > 0 && request_length >= 3 && request_frame[1] == TFBUS_BROADCAST) {
+    const uint8_t *request_frame = collector->request_frame;
+    if (collector->got == 0 && total > 0 && collector->request_length >= 3 && request_frame[1] == TFBUS_BROADCAST) {
         char hex[3 * sizeof raw + 1] = "";
         for (size_t i = 0; i < nraw; i++) {
             snprintf(hex + 3 * i, 4, "%02x ", raw[i]);
@@ -187,5 +212,29 @@ int tfbus_uart_transact(const uint8_t *request_frame, size_t request_length, uin
         ESP_LOGW(TAG, "bcast type 0x%02x: no reply parsed, %u byte(s) received: %s", request_frame[2],
                  (unsigned)total, hex);
     }
-    return collector.got;
+    return (int)total;
+}
+
+/**
+ * @brief RX parser callback: keep module -> CLU frames.
+ *
+ * The UART drops our own TX in RS485 half-duplex mode (ESP-IDF clears rs485tx_rx_en), so no echo
+ * reaches the parser.
+ * @param frame Complete frame.
+ * @param len   Frame length.
+ * @param ctx   ::collect_t.
+ */
+static void on_frame(const uint8_t *frame, size_t len, void *ctx)
+{
+    collect_t *collector = ctx;
+    collector->framed_bytes += len;
+    if (collector->got >= collector->max_replies) {
+        return;
+    }
+    if (frame[1] != TFBUS_CLU_ADDR || len > collector->reply_capacity) {
+        return;
+    }
+    tfbus_uart_reply_t *reply = &collector->replies[collector->got++];
+    memcpy(reply->frame, frame, len);
+    reply->length = len;
 }

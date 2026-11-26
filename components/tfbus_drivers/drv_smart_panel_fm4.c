@@ -22,7 +22,10 @@
  *     sensors 2 of 4; regs with PageNr=0; icons; buttons 15..0 with LED_CMD 0x18 [00,00,02]
  *     right before button 0's blocks.
  * @endverbatim
- * NOT YET DECODED: how non-empty labels/icons/page content are encoded (only headers are sent).
+ * PANEL_PAGE texts (runtime set() on a real CLU): 0x31 [12, p, field, slot, text...] (text up to 18
+ * bytes, zero padded): PageName field 01 slot 00, Object_1_Name field 04 slot 01. Object_n_Id /
+ * Object_n_Name of slots 2..4 (field 03 / 04, slot n) follow the init headers (inferred).
+ * NOT YET DECODED: button labels / icons, PageType values, CustomIcon, DistributedLogicGroup.
  *
  * Runtime: LED_CMD 0x18 [mask, 0, cmd]; TFBUS_CMD (PANEL execute -> sub-cmd): SwitchOnDisplay 0x00,
  * ShowButtons 0x03 [0,0,0,0], ClearScreen 0x04, PrintText 0x0a, DisplayContent 0x09, Draw 0x19,
@@ -30,11 +33,21 @@
  *
  * Status: the real SMART_PANEL_FM_4 answers a poll with a bare ACK, or with the 13-byte state
  * frame the real CLU reads by position (firmware.bin 0xb14a2 PANEL_BUTTON, 0xb1526 sensors):
- * `changed(LE16) | values(LE16) | temp(LE16, 0.1 C) | s1(2) | 00 00 | ext 00 | s2(2)`.
+ * `changed(LE16) | values(LE16) | temp(LE16, 0.1 C) | light(LE16, 0.1 %) | 00 00 | ext 00 | s2(2)`.
+ * light checked against PANELSENSLIGHT Value on a real CLU (19 -> 1.9 %, 583 -> 58.3 %); s2 does
+ * not follow the light (probably the raw proximity reading).
  * A button's Value is taken from `values` only while its bit in `changed` is set; the CLU derives
  * the button events from Value itself (the panel sends none). Bistable / Locked are done by the
- * panel from the Mode in class frame 0x17 [mask16, mode]. ext (bits 7..5) = gesture / page /
- * proximity records, not decoded. TLV records 02 temp / 07 light raw are still accepted.
+ * panel from the Mode in class frame 0x17 [mask16, mode]. TLV records 02 temp / 07 light raw are
+ * still accepted.
+ *
+ * ext (byte 10), checked against PANEL events on a real CLU, each flag in one frame only:
+ * @verbatim
+ *   01 OnProximityDetect   02 OnGestureUp   04 OnGestureDown   08 OnGestureLeft   10 OnGestureRight
+ *   80 display record, all other bytes 0 except byte 0: 01 OnDisplayOn, 00 OnDisplayOff
+ * @endverbatim
+ * A wake sends the display-on record, then a frame with 01. OnPageChange (5) was not seen
+ * (PageControlMode 1).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -54,12 +67,18 @@ static const char *TAG = "drv_sp4";
 /** @brief OM object classes hosted on the panel. */
 enum { CLS_PAGE = 19, CLS_TEMP = 20, CLS_LIGHT = 21, CLS_PANEL = 29, CLS_BUTTON = 30 };
 #define SENSOR_FRAME_LEN 13 /**< Status payload length of the non-TLV sensor frame. */
+#define EXT_BYTE 10         /**< Position of ext in the sensor frame. */
+#define EXT_DISPLAY 0x80    /**< ext: display record (byte 0 = display on). */
 /** @brief LED_CMD command codes. */
 enum { LED_OK = 0x00, LED_ERROR = 0x01, LED_ON = 0x02, LED_OFF = 0x04, LED_RED_ON = 0x10 };
 
 #define PAGES 4
 #define SLOTS 4
 #define ICON_LEN 20
+#define PAGE_TEXT_LEN 18 /**< 0x31 payload 22 = cmd 0x12, page, field, slot + text. */
+/** @brief PANEL_PAGE header fields (0x31 0x12 [p, field, slot]). */
+enum { PAGE_FIELD_TYPE = 0x00, PAGE_FIELD_NAME = 0x01, PAGE_FIELD_OBJECT_ID = 0x03, PAGE_FIELD_OBJECT_NAME = 0x04,
+       PAGE_FIELD_CUSTOM_ICON = 0x06 };
 
 /**
  * @brief PANEL feature -> TFBUS_CMD register, with the PANEL defaults (doc: TFBUS_SMART_PANEL_FM_4.md).
@@ -90,10 +109,22 @@ static const uint8_t k_icon_sub[4] = {0x04, 0x05, 0x02, 0x03};
 enum { MODE_MONOSTABLE = 0, MODE_BISTABLE = 1, MODE_LOCKED = 2 };
 /** @brief PANEL_BUTTON events. */
 enum { EV_CHANGE = 0, EV_ON = 1, EV_OFF = 2, EV_SHORT = 3, EV_LONG = 4, EV_HOLD = 5, EV_CLICK = 6 };
+/** @brief PANEL events. */
+enum { PEV_GESTURE_UP = 0, PEV_GESTURE_DOWN = 1, PEV_GESTURE_LEFT = 2, PEV_GESTURE_RIGHT = 3,
+       PEV_PROXIMITY = 4, PEV_PAGE_CHANGE = 5, PEV_DISPLAY_ON = 6, PEV_DISPLAY_OFF = 7 };
+
+/** @brief ext flag -> PANEL event, in the order they are posted when several are set. */
+static const struct {
+    uint8_t flag, event;
+} k_ext_events[] = {
+    {0x01, PEV_PROXIMITY}, {0x02, PEV_GESTURE_UP}, {0x04, PEV_GESTURE_DOWN},
+    {0x08, PEV_GESTURE_LEFT}, {0x10, PEV_GESTURE_RIGHT},
+};
 
 /** @brief Driver state per module (drv_ctx). */
 typedef struct {
     char btn[BTN][24];
+    char panel_name[24];           // PANEL object (empty = not declared)
     uint16_t btn_value;            // Value bits as last reported by the panel
     uint8_t mode[BTN];             // PANEL_BUTTON Mode (feature 1)
     uint16_t hold_delay[BTN];      // ms (feature 2)
@@ -103,6 +134,11 @@ typedef struct {
     panel_sensor_t temp, light;
     uint16_t reg[NREGS];
     char icon[4][ICON_LEN + 1];
+    struct {
+        char name[PAGE_TEXT_LEN + 1];
+        char object_id[SLOTS][PAGE_TEXT_LEN + 1];
+        char object_name[SLOTS][PAGE_TEXT_LEN + 1];
+    } page[PAGES];                 // PANEL_PAGE texts, sent with their headers
     bool initialized;
     bool page_warned;
 } sp4_t;
@@ -179,10 +215,39 @@ static void send_mode(tfbus_module_t *module, int button_index)
     drv_queue_frame(module, 0x17, (uint8_t[]){(uint8_t)mask, (uint8_t)(mask >> 8), ctx(module)->mode[button_index]}, 3);
 }
 
-/** @brief Send a PANEL_PAGE field header (TFBUS_CMD 0x12 [p, field, slot]). */
+static char *page_text(sp4_t *panel_state, int page_number, uint8_t field, uint8_t slot);
+
+/** @brief Send a PANEL_PAGE field: TFBUS_CMD 0x12 [p, field, slot, stored text]. */
 static void send_page(tfbus_module_t *module, uint8_t page_number, uint8_t field, uint8_t slot)
 {
-    tfbus_cmd_queue(module, 0x12, (uint8_t[]){page_number, field, slot}, 3);
+    uint8_t page_data[3 + PAGE_TEXT_LEN] = {page_number, field, slot};
+    const char *text = page_text(ctx(module), page_number, field, slot);
+    size_t text_length = text ? strlen(text) : 0;
+    if (text_length) {
+        memcpy(page_data + 3, text, text_length);
+    }
+    tfbus_cmd_queue(module, 0x12, page_data, 3 + text_length);
+}
+
+/** @brief Stored text of PANEL_PAGE @p page_number (1..4) field / slot; NULL for fields without text. */
+static char *page_text(sp4_t *panel_state, int page_number, uint8_t field, uint8_t slot)
+{
+    if (page_number < 1 || page_number > PAGES) {
+        return NULL;
+    }
+    if (field == PAGE_FIELD_NAME && slot == 0) {
+        return panel_state->page[page_number - 1].name;
+    }
+    if (slot < 1 || slot > SLOTS) {
+        return NULL;
+    }
+    if (field == PAGE_FIELD_OBJECT_ID) {
+        return panel_state->page[page_number - 1].object_id[slot - 1];
+    }
+    if (field == PAGE_FIELD_OBJECT_NAME) {
+        return panel_state->page[page_number - 1].object_name[slot - 1];
+    }
+    return NULL;
 }
 
 /** @brief tfbus_driver_t::init: replay the captured two-pass init (see file description). */
@@ -205,24 +270,24 @@ static void init(tfbus_module_t *module)
     drv_queue_frame(module, 0x16, (uint8_t[]){0x01, 0x01, 0x0a, 0}, 4);
     drv_queue_frame(module, 0x16, (uint8_t[]){0x01, 0x0a, 0x0a, 0}, 4);
     for (uint8_t p = 1; p <= PAGES; p++) {
-        send_page(module, p, 0x00, 0); // PageType
-        send_page(module, p, 0x01, 0); // PageName
+        send_page(module, p, PAGE_FIELD_TYPE, 0);
+        send_page(module, p, PAGE_FIELD_NAME, 0);
         for (uint8_t s = 1; s <= SLOTS; s++) {
-            send_page(module, p, 0x03, s); // Object_s_Id
-            send_page(module, p, 0x04, s); // Object_s_Name
+            send_page(module, p, PAGE_FIELD_OBJECT_ID, s);
+            send_page(module, p, PAGE_FIELD_OBJECT_NAME, s);
         }
     }
 
     // ---- pass 2: CLU re-sends all features in reverse order
     for (uint8_t p = PAGES; p >= 1; p--) {
-        send_page(module, p, 0x00, 0);
-        send_page(module, p, 0x01, 0);
+        send_page(module, p, PAGE_FIELD_TYPE, 0);
+        send_page(module, p, PAGE_FIELD_NAME, 0);
         for (uint8_t s = 1; s <= SLOTS; s++) {
-            send_page(module, p, 0x04, s);
-            send_page(module, p, 0x03, s);
+            send_page(module, p, PAGE_FIELD_OBJECT_NAME, s);
+            send_page(module, p, PAGE_FIELD_OBJECT_ID, s);
             uint8_t button_index = (uint8_t)((p - 1) * SLOTS + s - 1);
             tfbus_cmd_queue(module, 0x1a, (uint8_t[]){button_index, 0x02, 0x00}, 3); // slot -> PANEL_BUTTON button_index
-            send_page(module, p, 0x06, s);
+            send_page(module, p, PAGE_FIELD_CUSTOM_ICON, s);
         }
     }
     drv_queue_frame(module, 0x16, (uint8_t[]){0x01, 0x0a, 0x0a, 0}, 4);
@@ -246,11 +311,28 @@ static void init(tfbus_module_t *module)
 }
 
 /**
- * @brief PANEL_PAGE set(): content encoding is not decoded yet; warn once if non-empty content is set.
+ * @brief PANEL_PAGE set(): PageName (1), Object_n_Id (3, 5, 7, 9), Object_n_Name (4, 6, 8, 10) are
+ *        stored and sent; other features are not decoded yet (warn once if set non-empty).
  */
 static void page_set(tfbus_module_t *module, lua_State *L, int page_index, int idx, int val)
 {
     sp4_t *panel_state = ctx(module);
+    uint8_t field = 0, slot = 0;
+    if (idx == 1) {
+        field = PAGE_FIELD_NAME;
+    } else if (idx >= 3 && idx <= 10) {
+        field = idx % 2 ? PAGE_FIELD_OBJECT_ID : PAGE_FIELD_OBJECT_NAME;
+        slot = (uint8_t)((idx - 1) / 2);
+    }
+    char *text = field ? page_text(panel_state, page_index + 1, field, slot) : NULL;
+    if (text) {
+        const char *value = lua_type(L, val) == LUA_TSTRING ? lua_tostring(L, val) : "";
+        strlcpy(text, value, PAGE_TEXT_LEN + 1);
+        if (panel_state->initialized) {
+            send_page(module, (uint8_t)(page_index + 1), field, slot);
+        }
+        return;
+    }
     bool empty = lua_type(L, val) == LUA_TSTRING ? lua_rawlen(L, val) == 0
                                                  : luaL_optinteger(L, val, 0) == 0;
     if (!empty && !panel_state->page_warned) {
@@ -260,12 +342,14 @@ static void page_set(tfbus_module_t *module, lua_State *L, int page_index, int i
     }
 }
 
-/** @brief tfbus_driver_t::io_new: remember the Lua name of a button / sensor. */
+/** @brief tfbus_driver_t::io_new: remember the Lua name of a button / sensor / PANEL. */
 static void io_new(tfbus_module_t *module, int cls, int channel_index, const char *name)
 {
     sp4_t *panel_state = ctx(module);
     if (cls == CLS_BUTTON && channel_index >= 0 && channel_index < BTN) {
         strlcpy(panel_state->btn[channel_index], name, sizeof panel_state->btn[channel_index]);
+    } else if (cls == CLS_PANEL && channel_index == 0) {
+        strlcpy(panel_state->panel_name, name, sizeof panel_state->panel_name);
     } else if (cls == CLS_TEMP) {
         strlcpy(panel_state->temp.name, name, sizeof panel_state->temp.name);
     } else if (cls == CLS_LIGHT) {
@@ -414,21 +498,30 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
 
 static void button_edges(sp4_t *panel_state, uint16_t changed, uint16_t values, int64_t now);
 static void button_holds(sp4_t *panel_state, int64_t now);
+static void ext_events(const sp4_t *panel_state, const uint8_t *status_payload);
 
 /**
- * @brief tfbus_driver_t::on_status: state frame (button Values, temperature) or TLV sensor records;
- *        every reply (a bare ACK too) also advances OnHold.
+ * @brief tfbus_driver_t::on_status: state frame (button Values, temperature, light, PANEL events) or TLV
+ *        sensor records; every reply (a bare ACK too) also advances OnHold.
  */
 static void on_status(tfbus_module_t *module, const uint8_t *status_payload, size_t len)
 {
     sp4_t *panel_state = ctx(module);
     int64_t now = esp_timer_get_time();
-    if (len == SENSOR_FRAME_LEN) {
+    if (len == SENSOR_FRAME_LEN && status_payload[EXT_BYTE] & EXT_DISPLAY) {
+        // display record: the other fields are zero, not buttons / temperature
+        if (panel_state->panel_name[0]) {
+            clu_lua_post_event(panel_state->panel_name, status_payload[0] ? PEV_DISPLAY_ON : PEV_DISPLAY_OFF);
+        }
+    } else if (len == SENSOR_FRAME_LEN) {
         uint16_t changed = (uint16_t)(status_payload[0] | status_payload[1] << 8);
         uint16_t values = (uint16_t)(status_payload[2] | status_payload[3] << 8);
         button_edges(panel_state, changed, values, now);
         int16_t temperature_deci = (int16_t)(status_payload[4] | status_payload[5] << 8);
         panel_sensor_update(&panel_state->temp, temperature_deci * 10);
+        uint16_t light_deci = (uint16_t)(status_payload[6] | status_payload[7] << 8);
+        panel_sensor_update(&panel_state->light, light_deci * 10);
+        ext_events(panel_state, status_payload);
     } else {
         tfbus_tlv_t status_records[4];
         int status_record_count = tfbus_parse_tlv(status_payload, len, status_records, 4);
@@ -445,6 +538,19 @@ static void on_status(tfbus_module_t *module, const uint8_t *status_payload, siz
         }
     }
     button_holds(panel_state, now);
+}
+
+/** @brief PANEL gesture / proximity events from the ext flags of a state frame. */
+static void ext_events(const sp4_t *panel_state, const uint8_t *status_payload)
+{
+    if (!panel_state->panel_name[0]) {
+        return;
+    }
+    for (size_t i = 0; i < sizeof k_ext_events / sizeof k_ext_events[0]; i++) {
+        if (status_payload[EXT_BYTE] & k_ext_events[i].flag) {
+            clu_lua_post_event(panel_state->panel_name, k_ext_events[i].event);
+        }
+    }
 }
 
 /**

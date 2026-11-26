@@ -47,12 +47,13 @@
 #include "clu_lua.h"
 #include "drv_ledch.h"
 #include "drv_light.h"
+#include "drv_psu.h"
 #include "esp_timer.h"
 #include "lauxlib.h"
 #include "tfbus_drivers.h"
 #include "tfbus_master.h"
 
-enum { CLS_LEDRGB = 9, CLS_PSU = 12 };
+enum { CLS_LEDRGB = 9 };
 
 /** @brief LEDRGB feature indices. */
 enum { F_VALUE = 0, F_HUE = 1, F_SAT = 2, F_RED = 3, F_GREEN = 4, F_BLUE = 5, F_RGB = 6, F_RAMP = 7,
@@ -64,10 +65,6 @@ enum { X_VALUE = 0, X_HUE = 1, X_SAT = 2, X_RED = 3, X_GREEN = 4, X_BLUE = 5, X_
 /** @brief LEDRGB events. */
 enum { EV_CHANGE = 0, EV_ON = 1, EV_OFF = 2, EV_RISE = 3, EV_LOWER = 4, EV_RANGE = 5 };
 
-/** @brief PowerSupplyVoltage features / events. */
-enum { P_VALUE = 0, P_PERCENT = 1, P_SENS = 3, P_MIN = 5, P_MAX = 6 };
-enum { PE_CHANGE = 0, PE_LOWER = 1, PE_RISE = 2, PE_OUT = 3, PE_IN = 6 };
-
 /** @brief Colour state. */
 typedef struct {
     int16_t hue;           // hue 0..360 [whole degrees]
@@ -78,7 +75,6 @@ typedef struct {
 /** @brief Driver state per module (drv_ctx). */
 typedef struct {
     char name[24];         // LEDRGB object (empty = not declared)
-    char psu[24];          // PowerSupplyVoltage object
     color_t col;
     float min, max;
     uint8_t corr[3];       // R/G/B correction [%]
@@ -88,10 +84,7 @@ typedef struct {
     color_t revert_to;
     light_hold_t hold;     // shared by all Hold* methods
 
-    // PowerSupplyVoltage
-    int32_t voltage, u_event; // last value, value at the last change event [10 mV]
-    int32_t u_sens, u_min, u_max; // [10 mV]
-    bool u_have, u_out;
+    psu_t psu;             // PowerSupplyVoltage
 
     ledch_t *lch;          // LED_CHANNEL / LED_CCT objects (drv_ledch.c)
 } rgbw_t;
@@ -106,9 +99,7 @@ static rgbw_t *ctx(tfbus_module_t *module)
         }
         rgbw_state->max = 1;
         rgbw_state->corr[0] = rgbw_state->corr[1] = rgbw_state->corr[2] = 100;
-        rgbw_state->u_sens = 50;   // 0.5 V
-        rgbw_state->u_min = 2100;  // 21 V
-        rgbw_state->u_max = 2400;  // 24 V
+        psu_init(&rgbw_state->psu);
         rgbw_state->lch = ledch_new();
         module->drv_ctx = rgbw_state;
     }
@@ -304,8 +295,8 @@ static void io_new(tfbus_module_t *module, int cls, int channel, const char *nam
     rgbw_t *rgbw_state = ctx(module);
     if (cls == CLS_LEDRGB && channel == 0) {
         strlcpy(rgbw_state->name, name, sizeof rgbw_state->name);
-    } else if (cls == CLS_PSU && channel == 0) {
-        strlcpy(rgbw_state->psu, name, sizeof rgbw_state->psu);
+    } else if (cls == PSU_CLASS && channel == 0) {
+        strlcpy(rgbw_state->psu.name, name, sizeof rgbw_state->psu.name);
     } else {
         ledch_io_new(rgbw_state->lch, cls, channel, name);
     }
@@ -341,16 +332,8 @@ static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int c
     if (channel != 0) {
         return false;
     }
-    if (cls == CLS_PSU) {
-        int32_t supply_voltage = drv_centi(luaL_checknumber(L, val));
-        if (idx == P_SENS) {
-            rgbw_state->u_sens = supply_voltage;
-        } else if (idx == P_MIN) {
-            rgbw_state->u_min = supply_voltage;
-        } else if (idx == P_MAX) {
-            rgbw_state->u_max = supply_voltage;
-        }
-        return false;
+    if (cls == PSU_CLASS) {
+        return psu_io_set(&rgbw_state->psu, L, idx, val);
     }
     if (cls != CLS_LEDRGB) {
         return false;
@@ -505,34 +488,6 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
     return 0;
 }
 
-/** @brief PowerSupplyVoltage update: Value / Value% and events. */
-static void psu_update(rgbw_t *rgbw_state, int32_t supply_voltage)
-{
-    const char *object_name = rgbw_state->psu;
-    bool first = !rgbw_state->u_have;
-    rgbw_state->u_have = true;
-    rgbw_state->voltage = supply_voltage;
-    bool out = supply_voltage < rgbw_state->u_min || supply_voltage > rgbw_state->u_max;
-    bool change = first || abs(supply_voltage - rgbw_state->u_event) >= rgbw_state->u_sens;
-    if (object_name[0] && (change || out != rgbw_state->u_out)) {
-        clu_lua_post_number(object_name, P_VALUE, (float)supply_voltage / 100.0f);
-        // Value% to two decimals: round(U / UMax * 10000) / 100
-        int64_t percent = rgbw_state->u_max > 0 ? ((int64_t)supply_voltage * 10000 + rgbw_state->u_max / 2) / rgbw_state->u_max : 0;
-        clu_lua_post_number(object_name, P_PERCENT, (float)percent / 100.0f);
-    }
-    if (object_name[0] && change && !first) {
-        clu_lua_post_event(object_name, PE_CHANGE);
-        clu_lua_post_event(object_name, supply_voltage < rgbw_state->u_event ? PE_LOWER : PE_RISE);
-    }
-    if (change) {
-        rgbw_state->u_event = supply_voltage;
-    }
-    if (object_name[0] && out != rgbw_state->u_out && !(first && !out)) {
-        clu_lua_post_event(object_name, out ? PE_OUT : PE_IN);
-    }
-    rgbw_state->u_out = out;
-}
-
 /** @brief tfbus_driver_t::on_status: supply voltage, channel values (LED_CHANNEL / LED_CCT). */
 static void on_status(tfbus_module_t *module, const uint8_t *status_payload, size_t len)
 {
@@ -540,8 +495,8 @@ static void on_status(tfbus_module_t *module, const uint8_t *status_payload, siz
     tfbus_tlv_t status_records[8];
     int status_record_count = tfbus_parse_tlv(status_payload, len, status_records, 8);
     for (int i = 0; i < status_record_count; i++) {
-        if (status_records[i].type == 0x02 && status_records[i].len >= 2) {
-            psu_update(rgbw_state, status_records[i].data[0] | status_records[i].data[1] << 8);
+        if (status_records[i].type == PSU_STATUS_RECORD && status_records[i].len >= 2) {
+            psu_update(&rgbw_state->psu, status_records[i].data[0] | status_records[i].data[1] << 8);
         } else if (status_records[i].type == 0x04 && status_records[i].len >= 2) {
             ledch_reported(rgbw_state->lch, status_records[i].data[0], status_records[i].data[1]);
         }

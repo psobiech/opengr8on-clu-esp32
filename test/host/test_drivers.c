@@ -457,6 +457,16 @@ int main(void)
             "aa0bf00601090101045b aa0bf007010b020002025e aa0bf009010f04000201000051 "
             "aa0bf006010901010857 aa0bf007010b020003025f aa0bf009010f04000301000050 "
             "aa0bf007010b020003025f aa0bf007010b020002025e aa0bf007010b020001025d aa0bf007010b020000025c ");
+
+        // PowerSupplyVoltage: 02 02 10 record, 0.01 V (real CLU: 09 09 -> Value 23.13, Value% 96.375)
+        m->drv->io_new(m, 12, 0, "POW");
+        posts_reset();
+        status(m, "02 01 01 01 00 02 02 10 09 09");
+        status(m, "02 01 01 01 00 02 02 10 34 08"); // 21.00: change -2.13
+        status(m, "02 01 01 01 00 02 02 10 d0 07"); // 20.00: out of range
+        check_posts("RELAY_DIN_4 PowerSupplyVoltage: value, change, range",
+                    "POW[0]=23.13 POW[1]=96.375 POW[0]=21 POW[1]=87.5 POW!0 POW!1 "
+                    "POW[0]=20 POW[1]=83.3333 POW!0 POW!1 POW!3 ");
     }
 
     // ---------------- ROLLER_SH_DIN_3
@@ -500,6 +510,17 @@ int main(void)
         status(m, "04 01 01 02 20 16 03 00 01 64 00 16 03 00 02 00 5a 16 03 00 03 21 5a");
         check_posts("roller moving down ch3 -> state/position events",
                     "ROL2[7]=33 ROL2!8 ROL2[0]=2 ROL2[3]=0 ROL2[4]=1 ROL2!0 ROL2!3 ROL2!2 ");
+        posts_reset();
+        status(m, "04 01 01 02 00 16 03 00 01 64 00 16 03 00 02 00 5a 16 03 00 03 21 5a");
+        check_posts("roller stopped -> OnStateChange + OnStop", "ROL2[0]=0 ROL2[3]=0 ROL2[4]=0 ROL2!0 ROL2!4 ");
+        posts_reset();
+        status(m, "04 01 01 02 10 16 03 00 01 64 00 16 03 00 02 00 5a 16 03 00 03 21 5a");
+        check_posts("roller moving up from stop -> OnStart + OnUp",
+                    "ROL2[0]=1 ROL2[3]=1 ROL2[4]=0 ROL2!0 ROL2!3 ROL2!1 ");
+        posts_reset();
+        status(m, "04 01 01 02 20 16 03 00 01 64 00 16 03 00 02 00 5a 16 03 00 03 21 5a");
+        check_posts("roller reversing up -> down: OnDown without OnStart / OnStop",
+                    "ROL2[0]=2 ROL2[3]=0 ROL2[4]=1 ROL2!0 ROL2!2 ");
     }
 
     // ---------------- ROLLER_SH_DIN (single, old firmware)
@@ -537,6 +558,13 @@ int main(void)
         status(m, "02 06 01 01 00 02 02 10 76 09");      // temp 24.22 (+0.10 >= threshold)
         check_posts("touch panel temp + button events",
                     "TEMP[0]=24.12 BUT2!0 BUT2[0]=1 BUT2!1 TEMP[0]=24.22 TEMP!0 TEMP!1 ");
+        posts_reset();
+        status(m, "02 06 01 01 00 08 02 10 11 00"); // VAL 17 = btn 2, event 3 (OnShortPress)
+        status(m, "02 06 01 01 00 08 02 10 12 00"); // VAL 18 = btn 2, event 4 (OnLongPress)
+        status(m, "02 06 01 01 00 08 02 10 13 00"); // VAL 19 = btn 2, event 5 (OnHold)
+        status(m, "02 06 01 01 00 08 02 10 14 00"); // VAL 20 = btn 2, event 6 (OnClick)
+        check_posts("touch panel press events passed through, Value unchanged",
+                    "BUT2!3 BUT2!4 BUT2!5 BUT2!6 ");
     }
 
     // ---------------- SMART_PANEL_FM_4
@@ -596,6 +624,24 @@ int main(void)
             printf("  first diff at %zu\n  got  %.80s\n  want %.80s\n", i, got + i, want + i);
         }
 
+        // PANEL_PAGE texts at runtime == real CLU (bench capture 2026-11-26): header + text
+        frames_reset();
+        lua_set_str(m, 19, 0, 1, "Strona1");  // PageName, page 1
+        lua_set_str(m, 19, 1, 4, "Beta");     // Object_1_Name, page 2
+        lua_set_str(m, 19, 1, 6, "Gamma");    // Object_2_Name, page 2 (field 04 slot 02: inferred)
+        lua_set_str(m, 19, 0, 1, "Strona1234567890ABCD"); // longer than 18: cut
+        {
+            char got_pages[512];
+            frames_tokens(got_pages, sizeof got_pages);
+            check("PANEL_PAGE texts -> 0x31 [12, p, field, slot, text]",
+                  strcmp(got_pages, "31:120101005374726f6e6131 31:1202040142657461 31:1202040247616d6d61 "
+                                    "31:120101005374726f6e61313233343536373839304142 ") == 0);
+            if (strcmp(got_pages, "31:120101005374726f6e6131 31:1202040142657461 31:1202040247616d6d61 "
+                                  "31:120101005374726f6e61313233343536373839304142 ") != 0) {
+                printf("  got  %s\n", got_pages);
+            }
+        }
+
         frames_reset();
         lua_set(m, 29, 0, 11, 3000); // runtime ProximityTimeout -> TFBUS_CMD 0x02
         check("SMART_PANEL runtime set(11, 3000) -> 0x31 [02 b8 0b]",
@@ -612,6 +658,12 @@ int main(void)
         status(m, released);
         check_posts("SMART_PANEL monostable click", "PB2[0]=1 PB2!0 PB2!1 PB2[0]=0 PB2!0 PB2!2 PB2!6 ");
         posts_reset();
+        status(m, pressed);
+        s_now_us += 800000;
+        status(m, released); // 0.8 s: past click, before HoldDelay
+        check_posts("SMART_PANEL 0.8 s press -> OnShortPress",
+                    "PB2[0]=1 PB2!0 PB2!1 PB2[0]=0 PB2!0 PB2!2 PB2!3 ");
+        posts_reset();
         status(m, "00 00 04 00 e6 00 00 00 00 00 00 00 00");
         check_posts("SMART_PANEL Value bit without its changed bit: ignored", "");
         posts_reset();
@@ -627,6 +679,35 @@ int main(void)
         posts_reset();
         status(m, "03 06 01 01 00 07 02 10 d7 00 08 02 10 12 00"); // touch-panel style event record
         check_posts("SMART_PANEL TLV button event record: ignored", "");
+
+        // ext byte (10), frames of a real panel; events as the real CLU fired them
+        m->drv->io_new(m, 29, 0, "PAN");
+        m->drv->io_new(m, 20, 0, "PT");
+        posts_reset();
+        status(m, "00 00 00 00 e6 00 14 00 00 00 00 cc 01");
+        status(m, "00 00 00 00 00 00 00 00 00 00 80 00 00"); // display off
+        status(m, "01 00 00 00 00 00 00 00 00 00 80 00 00"); // display on (byte 0 is not a button)
+        status(m, "00 00 00 00 e6 00 14 00 00 00 01 cc 01"); // proximity
+        status(m, "00 00 00 00 e6 00 14 00 00 00 02 cc 01"); // up
+        status(m, "00 00 00 00 e6 00 14 00 00 00 04 cc 01"); // down
+        status(m, "00 00 00 00 e6 00 14 00 00 00 08 cc 01"); // left
+        status(m, "00 00 00 00 e6 00 14 00 00 00 10 cc 01"); // right
+        status(m, "00 00 00 00 e6 00 14 00 00 00 00 cc 01");
+        check_posts("SMART_PANEL ext: display off / on, proximity, gestures; display records keep temperature",
+                    "PT[0]=23 PAN!7 PAN!6 PAN!4 PAN!0 PAN!1 PAN!2 PAN!3 ");
+
+        // light: bytes 6-7, 0.1 % (real CLU: 19 -> 1.9 %, 583 -> 58.3 %), Threshold 0.5 %. Own module:
+        // the synthetic frames of the tests below carry light 0.
+        {
+            tfbus_module_t *light_panel = module(&tfbus_drv_smart_panel_fm4, 0x1f);
+            light_panel->drv->io_new(light_panel, 21, 0, "PL");
+            posts_reset();
+            status(light_panel, "00 00 00 00 e6 00 13 00 00 00 00 cc 01");
+            status(light_panel, "00 00 00 00 e6 00 15 00 00 00 00 cc 01"); // +0.2 %: below Threshold
+            status(light_panel, "00 00 00 00 e6 00 47 02 00 00 00 cc 01");
+            status(light_panel, "00 00 00 00 00 00 00 00 00 00 80 00 00"); // display off: light untouched
+            check_posts("SMART_PANEL light from the state frame", "PL[0]=1.9 PL[0]=2.1 PL[0]=58.3 PL!0 PL!1 ");
+        }
         frames_reset();
         lua_exec(m, 30, 2, 1, 0, 0); // LedSwitchOn button 3
         check_frames("SMART_PANEL LedSwitchOn btn3 -> LED_CMD[04,00,02]", "aa1218040002a6 ");
@@ -917,10 +998,15 @@ int main(void)
         m->drv->init(m);
 
         frames_reset();
-        lua_set(m, 19, 0, 1, 5);      // PANEL_PAGE content: not decoded, not sent
-        lua_set_str(m, 19, 0, 2, "");
-        lua_set(m, 19, 0, 3, 7);      // warned once only
-        check_frames("PANEL_PAGE set: nothing sent", "");
+        lua_set(m, 19, 0, 1, 5);      // PageName / Object_1_Id: text fields, a number sends an empty text
+        lua_set(m, 19, 0, 3, 7);
+        check_frames("PANEL_PAGE text fields set to a number: header with empty text",
+                     "aa1331120101000000000000000000000000000000000000009a "
+                     "aa13311201030100000000000000000000000000000000000099 ");
+        frames_reset();
+        lua_set(m, 19, 0, 0, 1);      // PageType, DistributedLogicGroup_1: not decoded, not sent
+        lua_set(m, 19, 0, 11, 7);     // warned once only
+        check_frames("PANEL_PAGE undecoded features: nothing sent", "");
         lua_set_str(m, 29, 0, 4, "up");
         check("PANEL GestureIconUp after init -> DISPLAY_BLOCK [00 04 'up']",
               strncmp(s_frames, "aa133000047570", 14) == 0 && !strchr(s_frames, ' ')[1]);
@@ -982,10 +1068,10 @@ int main(void)
         status(m, "01 02 02 00 1c 0c");             // 31.00: rise + out of range (max 30)
         status(m, "01 02 02 00 9c ff");             // -1.00: lower, still out of range
         status(m, "02 06 01 01 00 07 02 10 64 00"); // short record skipped; light 1.00
-        status(m, "00 00 00 00 e6 00 25 00 00 00 00 ad 01"); // sensor frame (real panel): 23.0
+        status(m, "00 00 00 00 e6 00 25 00 00 00 00 ad 01"); // sensor frame (real panel): 23.0 C, light 3.7 %
         check_posts("SMART_PANEL sensors: threshold, range, signed temperature, light, sensor frame",
                     "TMP[0]=25 TMP[0]=25.3 TMP[0]=31 TMP!0 TMP!1 TMP!3 TMP[0]=-1 TMP!0 TMP!2 LGT[0]=1 "
-                    "TMP[0]=23 TMP!0 TMP!1 ");
+                    "TMP[0]=23 TMP!0 TMP!1 LGT[0]=3.7 LGT!0 LGT!1 ");
     }
 
     // ---------------- ROLLER_SH_DIN_3: remaining commands and features
@@ -1411,9 +1497,9 @@ int main(void)
         status(m, "01 02 02 10 d0 07"); // 20.00 out of range
         status(m, "01 02 02 10 60 09"); // 24.00 back
         check_posts("PowerSupplyVoltage: first value, range, sensitivity",
-                    "POW[0]=24.18 POW[1]=100.75 POW!3 POW[0]=23.98 POW[1]=99.92 POW!6 "
+                    "POW[0]=24.18 POW[1]=100.75 POW!3 POW[0]=23.98 POW[1]=99.9167 POW!6 "
                     "POW[0]=21 POW[1]=87.5 POW!0 POW!1 "
-                    "POW[0]=20 POW[1]=83.33 POW!0 POW!1 POW!3 POW[0]=24 POW[1]=100 POW!0 POW!2 POW!6 ");
+                    "POW[0]=20 POW[1]=83.3333 POW!0 POW!1 POW!3 POW[0]=24 POW[1]=100 POW!0 POW!2 POW!6 ");
         check("LED: other class / unknown method -> -1",
               lua_execn(m, 9, 0, 99, 0, NULL) == -1 && lua_execn(m, 12, 0, 0, 0, NULL) == -1);
 
@@ -1486,6 +1572,10 @@ int main(void)
         status(m, "01 04 02 08 00 46");
         check_posts("LED_CHANNEL Value + events from the module's report",
                     "LCH[0]=84 LCH!0 LCH!1 LCH!3 LCH[0]=70 LCH!0 LCH!4 ");
+        posts_reset();
+        status(m, "01 04 02 08 00 00");
+        check_posts("LED_CHANNEL module reports 0 -> OnSwitchOff", "LCH[0]=0 LCH!0 LCH!2 LCH!4 ");
+        status(m, "01 04 02 08 00 46"); // back to 70 for the tests below
         frames_reset();
         lua_set(m, 49, 0, 1, 1000);
         lua_set(m, 49, 0, 2, 200);
@@ -1538,6 +1628,9 @@ int main(void)
               s_feat[0] == 3000 && s_feat[1] == 92 && s_feat[2] == 200);
         lua_execn(m, 72, 1, 1, 1, (lua_Number[]){33});
         check("LED_CCT SetColorTempPercent(33): 5246 K", s_feat[0] == 5246 && s_feat[1] == 33);
+        posts_reset();
+        lua_execn(m, 72, 1, 2, 1, (lua_Number[]){300}); // above MaxValue 255
+        check("LED_CCT SetValue(300) -> OnOutOfRange first", strncmp(s_posts, "CCT!4 ", 6) == 0);
 
         // Hold*: on the module, towards targets from MaxValue / Value and the warm share
         lua_set(m, 72, 1, 5, 0);

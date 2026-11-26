@@ -24,6 +24,10 @@ niezweryfikowana. Stan modułów: [README](../README.md#moduły-tf-bus).
   firmware zbiera wszystkie odpowiedzi z tej sekundy i adresuje każdy moduł (zrzut: panel po 369 ms,
   RELAY po 577 ms, oba dostały adres); moduły unikają kolizji tylko różnym opóźnieniem odpowiedzi.
   Przy starcie moduły z rejestru są adresowane po SN przed DISCOVER, który szuka tylko nowych.
+- PowerSupplyVoltage (klasa 12) LED_RGBW_DIN, RELAY_DIN_4 i IO_MODULE_DIN_8: rekord statusu
+  `02 02 10 [U LE u16, 0,01 V]`. Value% = U / MaxValue × 100 bez zaokrąglania (prawdziwe CLU:
+  23,13 V przy MaxValue 24 → 96,375). Zdarzenia zmiany co Sensitivity, OnOutOfRange / OnInRange
+  przy przekroczeniu MinValue / MaxValue. IO_MODULE_DIN_8 wysyła ten sam rekord, niesprawdzony.
 - `Switch*` z `Time > 0` po upływie czasu przywraca poprzednią wartość.
 - `Hold*` (wywoływane z OnHold przycisku): przerwa dłuższa niż ok. 0,5 s zaczyna nowe
   przytrzymanie w przeciwnym kierunku (od końca zakresu zawsze w stronę środka).
@@ -127,6 +131,10 @@ Module support status: [README](../README.md#moduły-tf-bus).
   369 ms, a RELAY at 577 ms, both assigned); modules avoid collisions only by answering at different
   times. At boot the registry modules are addressed by SN before DISCOVER, which then only looks for
   new ones.
+- PowerSupplyVoltage (class 12) of LED_RGBW_DIN, RELAY_DIN_4 and IO_MODULE_DIN_8: status record
+  `02 02 10 [U LE u16, 0.01 V]`. Value% = U / MaxValue × 100, not rounded (real CLU: 23.13 V with
+  MaxValue 24 → 96.375). Change events every Sensitivity, OnOutOfRange / OnInRange when crossing
+  MinValue / MaxValue. IO_MODULE_DIN_8 sends the same record, unverified.
 - `Switch*` with `Time > 0` restores the previous value once the timer expires.
 - `Hold*` (called from a button's OnHold): a gap longer than approx. 0.5 s starts a new hold in the
   opposite direction (from either end of the range, always toward the middle).

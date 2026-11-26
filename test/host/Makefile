@@ -277,6 +277,12 @@ test-lua:
 	$(LUA_RUN) test_http.lua
 	$(if $(OM),$(LUA_RUN) test_prelude.lua "$(OM)")
 
+# Event coverage: every event the supported OM interfaces declare is fired or listed as missing
+# (check_events.py). The interface files are not in the repository: make test-events INTERFACES=<dir>.
+.PHONY: test-events
+test-events:
+	$(if $(INTERFACES),python3 check_events.py --report "$(INTERFACES)",$(error INTERFACES=<device-interfaces dir> not set))
+
 # Line/branch coverage of C (gcov) and Lua (lua_cov.lua) code under test: summary on stdout,
 # $(OUT)/coverage/summary.md (Markdown table) and $(OUT)/coverage/coverage.json. Needs gcc/gcov, python3.
 # FAIL_UNDER=<pct> fails the run when total line coverage is lower.

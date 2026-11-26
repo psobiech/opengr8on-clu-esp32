@@ -3,7 +3,7 @@
  * @brief Digital output/input modules (shared implementation).
  *
  * - IO_MODULE_DIN_8 (hwType 30 / 0x1e): 8x DOUT (class 4), 8x DIN (class 3), PowerSupplyVoltage (12).
- * - RELAY_DIN_4 (hwType 21 / 0x15): 4x DOUT (class 4).
+ * - RELAY_DIN_4 (hwType 21 / 0x15): 4x DOUT (class 4), PowerSupplyVoltage (12).
  *
  * RELAY_DIN_4 init per ch (real CLU capture):
  * @verbatim
@@ -15,8 +15,11 @@
  * @verbatim
  *   init  : per ch DEACTIVATE[1<<ch] + MODULE_PARAM[ch,1,0,0]; per ch CHANNEL_INIT[0,ch,0] + MODULE_PARAM[ch,0,0,0]
  *   output: ACTIVATE[1<<ch] / DEACTIVATE[1<<ch]
- *   status: 03 | 00 01 01 [inputs] | 01 01 01 [outputs] | 02 02 10 [temp LE 0.01C]
+ *   status: 03 | 00 01 01 [inputs] | 01 01 01 [outputs] | 02 02 10 [U LE u16, 0.01 V]
  * @endverbatim
+ * The 02 record is the supply voltage (drv_psu.h): verified on RELAY_DIN_4 against a real CLU
+ * (PowerSupplyVoltage Value = record / 100); IO_MODULE_DIN_8 sends the same record and has no
+ * other object it could belong to.
  *
  * Timed Switch/SwitchOn/SwitchOff(ms) revert the output with an esp_timer whose work is deferred
  * to the bus task.
@@ -25,6 +28,7 @@
 #include <string.h>
 
 #include "clu_lua.h"
+#include "drv_psu.h"
 #include "esp_timer.h"
 #include "lauxlib.h"
 #include "tfbus_drivers.h"
@@ -74,6 +78,7 @@ struct io8 {
     uint8_t inputs;
     bool have_status;
     dout_timer_t timed[CH];      // Switch/SwitchOn/SwitchOff(time)
+    psu_t psu;                   // PowerSupplyVoltage
 };
 
 /** @brief Driver state of @p module, allocated on first use. */
@@ -89,6 +94,7 @@ static io8_t *ctx(tfbus_module_t *module)
             io_state->hold_delay[i] = 500;
             io_state->hold_interval[i] = 100;
         }
+        psu_init(&io_state->psu);
         module->drv_ctx = io_state;
     }
     return module->drv_ctx;
@@ -175,10 +181,14 @@ static void timed_start(tfbus_module_t *module, io8_t *io_state, int channel, bo
     esp_timer_start_once(timer_context->timer, (uint64_t)ms * 1000);
 }
 
-/** @brief tfbus_driver_t::io_new: remember the Lua name of a DIN / DOUT channel. */
+/** @brief tfbus_driver_t::io_new: remember the Lua name of a DIN / DOUT channel or PowerSupplyVoltage. */
 static void io_new(tfbus_module_t *module, int cls, int channel, const char *name)
 {
     io8_t *io_state = ctx(module);
+    if (cls == PSU_CLASS && channel == 0) {
+        strlcpy(io_state->psu.name, name, sizeof io_state->psu.name);
+        return;
+    }
     if (channel < 0 || channel >= CH) {
         return;
     }
@@ -223,11 +233,15 @@ static void set_output(tfbus_module_t *module, int channel, bool on)
 }
 
 /**
- * @brief tfbus_driver_t::io_set: DOUT Value (0) drives the output; DIN HoldDelay (2) / HoldInterval (3) are cached.
+ * @brief tfbus_driver_t::io_set: DOUT Value (0) drives the output; DIN HoldDelay (2) / HoldInterval (3) and
+ *        the PowerSupplyVoltage limits are cached.
  */
 static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel, int idx, int val)
 {
     io8_t *io_state = ctx(module);
+    if (cls == PSU_CLASS) {
+        return channel == 0 && psu_io_set(&io_state->psu, L, idx, val);
+    }
     if (channel < 0 || channel >= CH) {
         return false;
     }
@@ -331,7 +345,10 @@ static void dout_report(io8_t *io_state, uint8_t outputs)
     io_state->outputs = outputs;
 }
 
-/** @brief tfbus_driver_t::on_status: track inputs / outputs; the first status is taken without edge events. */
+/**
+ * @brief tfbus_driver_t::on_status: track inputs / outputs (the first status is taken without edge events)
+ *        and the supply voltage.
+ */
 static void on_status(tfbus_module_t *module, const uint8_t *status_payload, size_t len)
 {
     io8_t *io_state = ctx(module);
@@ -343,6 +360,8 @@ static void on_status(tfbus_module_t *module, const uint8_t *status_payload, siz
             inputs = status_records[i].data[0];
         } else if (status_records[i].type == 0x01 && status_records[i].len >= 1) {
             outputs = status_records[i].data[0];
+        } else if (status_records[i].type == PSU_STATUS_RECORD && status_records[i].len >= 2) {
+            psu_update(&io_state->psu, status_records[i].data[0] | status_records[i].data[1] << 8);
         }
     }
     if (!io_state->have_status) {

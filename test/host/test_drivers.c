@@ -542,6 +542,11 @@ int main(void)
         }
         m->drv->io_new(m, 20, 0, "TEMP");
         m->drv->io_new(m, 21, 0, "LIGHT");
+        // sensor settings of the captured project: temperature 0.2 / 1000 ms, light 1.0 / 1000 ms
+        lua_set(m, 20, 0, 1, 0.2);
+        lua_set(m, 20, 0, 2, 1000);
+        lua_set(m, 21, 0, 1, 1.0);
+        lua_set(m, 21, 0, 2, 1000);
         frames_reset();
         m->drv->init(m);
         check_frames("TOUCH_PANEL_FM_4 init == capture (addr 0x0e)",
@@ -551,6 +556,7 @@ int main(void)
             "aa0ef00901000400070a020057 aa0ef0090100040008010a005b aa0ef00901000400080a0a0050 "
             "aa0ef006010301010151 ");
 
+        lua_set(m, 20, 0, 1, 0.1); // back to the default Threshold after the captured project's 0.2
         posts_reset();
         status(m, "02 06 01 01 00 02 02 10 6c 09");      // temp 24.12
         status(m, "02 06 01 01 00 08 02 10 0e 00");      // VAL 14 = btn 2, event 0 (OnChange)
@@ -575,6 +581,11 @@ int main(void)
         for (int i = 0; i < 4; i++) {
             lua_set_str(m, 29, 0, 4 + i, icons[i]);
         }
+        // sensor settings of the captured project: temperature 0.2 / 1000 ms, light 1.0 / 1000 ms
+        lua_set(m, 20, 0, 1, 0.2);
+        lua_set(m, 20, 0, 2, 1000);
+        lua_set(m, 21, 0, 1, 1.0);
+        lua_set(m, 21, 0, 2, 1000);
         frames_reset();
         m->drv->init(m);
         // Every TX frame to addr 0x12 in clu firmware/tfbus_capture_20261014_171505.log, as
@@ -925,8 +936,12 @@ int main(void)
         lua_set(m, 29, 0, 13, 0);
         check_frames("touch panel buzzer off (PANEL:set(13, 0))", "aa0ff006010301010051 ");
 
+        frames_reset();
         lua_set(m, 20, 0, 1, 0.5); // Threshold 0.5
         lua_set(m, 20, 0, 4, 30);  // MaxValue 30
+        lua_set(m, 21, 0, 2, 1500); // light Sensitivity
+        check_frames("touch panel Threshold / Sensitivity -> SENSOR_CONFIG [sensor, ms / 100, Threshold x 10]; MaxValue: nothing",
+                     "aa0ff009010004000703050058 aa0ff00901000400080f01005f ");
         posts_reset();
         status(m, "02 06 01 01 00 02 02 10 d0 07"); // 20.00
         status(m, "02 06 01 01 00 02 02 10 fa 07"); // 20.42 (< threshold: value only)
@@ -1056,6 +1071,21 @@ int main(void)
         frames_reset();
         lua_set(m, 30, 0, 1, 7); // invalid Mode -> monostable
         check_frames("SMART_PANEL invalid Mode -> class 0x17 [01 00 00]", "aa1317010000af ");
+
+        // sensor config on set(): class 0x16 [sensor, Sensitivity / 100 ms, Threshold x 10 LE16]
+        // (real CLU, light: 0.3 -> 03 00, 30 -> 2c 01, 30000 ms -> ff); MinValue sends nothing
+        frames_reset();
+        lua_set(m, 21, 0, 1, 0.3);
+        lua_set(m, 21, 0, 1, 30);
+        lua_set(m, 21, 0, 2, 30000);
+        lua_set(m, 21, 0, 3, 10);
+        lua_set(m, 20, 0, 2, 1234);
+        {
+            char got_sensor_config[128];
+            frames_tokens(got_sensor_config, sizeof got_sensor_config);
+            check("SMART_PANEL sensor Threshold / Sensitivity -> class 0x16",
+                  strcmp(got_sensor_config, "16:01050300 16:01052c01 16:01ff2c01 16:000c0100 ") == 0);
+        }
 
         // sensors: threshold / range from features, signed temperature, short records ignored
         lua_set(m, 20, 0, 1, 0.5);

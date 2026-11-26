@@ -8,8 +8,10 @@
  * Init, verified against a real CLU capture:
  * @verbatim
  *   per button b: SET_OUTPUT(0x01)[1<<b,0,0], MODULE_PARAM(0x0f)[b,0,0,0]
- *   SENSOR_SENSITIVITY(0x00): [07,01,02,00] [07,0a,02,00] [08,01,0a,00] [08,0a,0a,00]
- *     (replicated verbatim; meaning not decoded - byte 1 is not the threshold, see SMART_PANEL)
+ *   SENSOR_CONFIG(0x00): [sensor, Sensitivity / 100 ms, Threshold x 10 LE16] (panel_sensor_config()),
+ *     twice per sensor: Sensitivity 01 (not set yet), then the set one; one more per set() of
+ *     Threshold / Sensitivity at runtime. Sensor 07 temperature, 08 light: inferred from the
+ *     capture's order and values (same encoding as the SMART_PANEL class frame 0x16).
  *   0x03 meta 01 [buzzer]   (= PANEL:set(13, BuzzerValue) from OnInit)
  * @endverbatim
  * Status:
@@ -38,13 +40,19 @@ static const char *TAG = "drv_tp4";
 #define BTN 4
 /** @brief OM object classes hosted on the panel. */
 enum { CLS_BUTTON = 7, CLS_TEMP = 20, CLS_LIGHT = 21, CLS_PANEL = 29 };
+/** @brief Sensor ids of the SENSOR_CONFIG record. */
+enum { SENSOR_TEMP = 0x07, SENSOR_LIGHT = 0x08 };
+#define SENSITIVITY_UNSET_MS 100 /**< Sent before OM.LUA sets Sensitivity (wire 01). */
 /** @brief Driver state per module (drv_ctx). */
 typedef struct {
     char btn[BTN][24];
     uint32_t btn_value;
     panel_sensor_t temp, light;
     bool buzzer;
+    bool initialized;
 } tp4_t;
+
+static void send_sensor_config(tfbus_module_t *module, uint8_t sensor_id, uint16_t sensitivity_ms);
 
 /** @brief Driver state of @p module, allocated (with sensor defaults) on first use. */
 static tp4_t *ctx(tfbus_module_t *module)
@@ -54,8 +62,8 @@ static tp4_t *ctx(tfbus_module_t *module)
         if (!panel_state) {
             abort(); // out of memory while loading OM.LUA: reboot instead of a NULL dereference
         }
-        panel_state->temp = (panel_sensor_t){.threshold = 10, .min = 0, .max = 4000};
-        panel_state->light = (panel_sensor_t){.threshold = 10, .min = 0, .max = 10000};
+        panel_state->temp = (panel_sensor_t){.threshold = 10, .min = 0, .max = 4000, .sensitivity_ms = 300};
+        panel_state->light = (panel_sensor_t){.threshold = 10, .min = 0, .max = 10000, .sensitivity_ms = 500};
         panel_state->buzzer = true;
         module->drv_ctx = panel_state;
     }
@@ -72,11 +80,12 @@ static void init(tfbus_module_t *module)
         drv_queue_record(module, 0x01, 0x00, (uint8_t[]){(uint8_t)(1 << b), 0, 0}, 3);
         drv_queue_record(module, 0x0f, 0x00, (uint8_t[]){(uint8_t)b, 0, 0, 0}, 4);
     }
-    drv_queue_record(module, 0x00, 0x00, (uint8_t[]){0x07, 0x01, 0x02, 0}, 4);
-    drv_queue_record(module, 0x00, 0x00, (uint8_t[]){0x07, 0x0a, 0x02, 0}, 4);
-    drv_queue_record(module, 0x00, 0x00, (uint8_t[]){0x08, 0x01, 0x0a, 0}, 4);
-    drv_queue_record(module, 0x00, 0x00, (uint8_t[]){0x08, 0x0a, 0x0a, 0}, 4);
+    send_sensor_config(module, SENSOR_TEMP, SENSITIVITY_UNSET_MS);
+    send_sensor_config(module, SENSOR_TEMP, panel_state->temp.sensitivity_ms);
+    send_sensor_config(module, SENSOR_LIGHT, SENSITIVITY_UNSET_MS);
+    send_sensor_config(module, SENSOR_LIGHT, panel_state->light.sensitivity_ms);
     drv_queue_record(module, 0x03, 0x01, (uint8_t[]){panel_state->buzzer}, 1);
+    panel_state->initialized = true;
 }
 
 /** @brief tfbus_driver_t::io_new: remember the Lua name of a button / sensor. */
@@ -93,7 +102,8 @@ static void io_new(tfbus_module_t *module, int cls, int channel_index, const cha
 }
 
 /**
- * @brief tfbus_driver_t::io_set: cache sensor Threshold (1) / Min (3) / Max (4); PANEL BuzzerValue (13) is sent.
+ * @brief tfbus_driver_t::io_set: sensor Threshold (1) / Sensitivity (2) are sent once initialised, Min (3) /
+ *        Max (4) cached; PANEL BuzzerValue (13) is sent.
  */
 static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel_index, int idx, int val)
 {
@@ -103,16 +113,32 @@ static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int c
         int32_t sensor_value = drv_centi(luaL_optnumber(L, val, 0));
         if (idx == 1) {
             sensor_config->threshold = sensor_value;
+        } else if (idx == 2) {
+            lua_Integer sensitivity_ms = luaL_optinteger(L, val, 0);
+            sensor_config->sensitivity_ms =
+                (uint16_t)(sensitivity_ms < 0 ? 0 : sensitivity_ms > 0xffff ? 0xffff : sensitivity_ms);
         } else if (idx == 3) {
             sensor_config->min = sensor_value;
         } else if (idx == 4) {
             sensor_config->max = sensor_value;
+        }
+        if ((idx == 1 || idx == 2) && panel_state->initialized) { // the panel applies both
+            send_sensor_config(module, cls == CLS_TEMP ? SENSOR_TEMP : SENSOR_LIGHT, sensor_config->sensitivity_ms);
         }
     } else if (cls == CLS_PANEL && idx == 13) {
         panel_state->buzzer = luaL_optinteger(L, val, 1) != 0;
         drv_queue_record(module, 0x03, 0x01, (uint8_t[]){panel_state->buzzer}, 1);
     }
     return false;
+}
+
+/** @brief SENSOR_CONFIG record (0x00) with the sensor config (panel_sensor_config()) and @p sensitivity_ms. */
+static void send_sensor_config(tfbus_module_t *module, uint8_t sensor_id, uint16_t sensitivity_ms)
+{
+    uint8_t sensor_config[4];
+    panel_sensor_config(sensor_id == SENSOR_TEMP ? &ctx(module)->temp : &ctx(module)->light, sensor_id, sensitivity_ms,
+                        sensor_config);
+    drv_queue_record(module, 0x00, 0x00, sensor_config, sizeof sensor_config);
 }
 
 /** @brief tfbus_driver_t::io_execute: BUTTON LedSwitchOn (1) / LedSwitchOff (2). */

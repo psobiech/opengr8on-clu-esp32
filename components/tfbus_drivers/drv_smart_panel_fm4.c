@@ -15,8 +15,9 @@
  *     PANEL_BUTTON b=0..15: class 0x17 [mask16 LE, 0]; DISPLAY_BLOCK 0x30 [b, 0x0a|0x00|0x01, 20x 0]
  *     PANEL set(4..7) gesture icons: 0x30 [0, sub, name] sub up=04 down=05 left=02 right=03
  *     PANEL set(10..21): TFBUS_CMD 0x31 [reg, val LE] (reg table k_regs)
- *     sensors: class 0x16 [00,01,02,00] [00,0a,02,00] [01,01,0a,00] [01,0a,0a,00]
- *       (sent verbatim: byte 1 is NOT the threshold - OM sets light threshold 0.5, wire has 01)
+ *     sensors: class 0x16 [sensor, Sensitivity / 100 ms (max 255), Threshold x 10 LE16], sensor 00
+ *       temperature, 01 light; one per set() of Threshold / Sensitivity (MinValue / MaxValue send
+ *       nothing), Sensitivity 01 until it is set; checked on a real CLU. The panel applies both.
  *     PANEL_PAGE p=1..4 set(0,1,3..10): 0x31 [12, p, field, slot] field 00/01 header, 03/04 per slot
  *   pass 2 (reverse): pages 4..1 incl. 0x31 [1a, button, 02, 00] + [12, p, 06, slot];
  *     sensors 2 of 4; regs with PageNr=0; icons; buttons 15..0 with LED_CMD 0x18 [00,00,02]
@@ -67,6 +68,9 @@ static const char *TAG = "drv_sp4";
 /** @brief OM object classes hosted on the panel. */
 enum { CLS_PAGE = 19, CLS_TEMP = 20, CLS_LIGHT = 21, CLS_PANEL = 29, CLS_BUTTON = 30 };
 #define SENSOR_FRAME_LEN 13 /**< Status payload length of the non-TLV sensor frame. */
+/** @brief Sensor ids of the class frame 0x16. */
+enum { SENSOR_TEMP = 0, SENSOR_LIGHT = 1 };
+#define SENSITIVITY_UNSET_MS 100 /**< Sent before OM.LUA sets Sensitivity (wire 01). */
 #define EXT_BYTE 10         /**< Position of ext in the sensor frame. */
 #define EXT_DISPLAY 0x80    /**< ext: display record (byte 0 = display on). */
 /** @brief LED_CMD command codes. */
@@ -154,8 +158,8 @@ static sp4_t *ctx(tfbus_module_t *module)
         if (!panel_state) {
             abort(); // out of memory while loading OM.LUA: reboot instead of a NULL dereference
         }
-        panel_state->temp = (panel_sensor_t){.threshold = 10, .min = 0, .max = 4500};
-        panel_state->light = (panel_sensor_t){.threshold = 50, .min = 0, .max = 10000};
+        panel_state->temp = (panel_sensor_t){.threshold = 10, .min = 0, .max = 4500, .sensitivity_ms = 1000};
+        panel_state->light = (panel_sensor_t){.threshold = 50, .min = 0, .max = 10000, .sensitivity_ms = 500};
         for (size_t i = 0; i < NREGS; i++) {
             panel_state->reg[i] = k_regs[i].def;
         }
@@ -216,6 +220,7 @@ static void send_mode(tfbus_module_t *module, int button_index)
 }
 
 static char *page_text(sp4_t *panel_state, int page_number, uint8_t field, uint8_t slot);
+static void send_sensor_config(tfbus_module_t *module, int sensor_id, uint16_t sensitivity_ms);
 
 /** @brief Send a PANEL_PAGE field: TFBUS_CMD 0x12 [p, field, slot, stored text]. */
 static void send_page(tfbus_module_t *module, uint8_t page_number, uint8_t field, uint8_t slot)
@@ -265,10 +270,11 @@ static void init(tfbus_module_t *module)
     for (size_t i = 0; i < NREGS; i++) {
         send_reg(module, i, panel_state->reg[i]);
     }
-    drv_queue_frame(module, 0x16, (uint8_t[]){0x00, 0x01, 0x02, 0}, 4);
-    drv_queue_frame(module, 0x16, (uint8_t[]){0x00, 0x0a, 0x02, 0}, 4);
-    drv_queue_frame(module, 0x16, (uint8_t[]){0x01, 0x01, 0x0a, 0}, 4);
-    drv_queue_frame(module, 0x16, (uint8_t[]){0x01, 0x0a, 0x0a, 0}, 4);
+    // as after OM.LUA's set(1) Threshold (Sensitivity not set yet), then set(2) Sensitivity
+    send_sensor_config(module, SENSOR_TEMP, SENSITIVITY_UNSET_MS);
+    send_sensor_config(module, SENSOR_TEMP, panel_state->temp.sensitivity_ms);
+    send_sensor_config(module, SENSOR_LIGHT, SENSITIVITY_UNSET_MS);
+    send_sensor_config(module, SENSOR_LIGHT, panel_state->light.sensitivity_ms);
     for (uint8_t p = 1; p <= PAGES; p++) {
         send_page(module, p, PAGE_FIELD_TYPE, 0);
         send_page(module, p, PAGE_FIELD_NAME, 0);
@@ -290,8 +296,8 @@ static void init(tfbus_module_t *module)
             send_page(module, p, PAGE_FIELD_CUSTOM_ICON, s);
         }
     }
-    drv_queue_frame(module, 0x16, (uint8_t[]){0x01, 0x0a, 0x0a, 0}, 4);
-    drv_queue_frame(module, 0x16, (uint8_t[]){0x00, 0x0a, 0x02, 0}, 4);
+    send_sensor_config(module, SENSOR_LIGHT, panel_state->light.sensitivity_ms);
+    send_sensor_config(module, SENSOR_TEMP, panel_state->temp.sensitivity_ms);
     send_reg(module, 0, panel_state->reg[0]);
     send_reg(module, 1, panel_state->reg[1]);
     send_icon(module, 3); // right
@@ -405,15 +411,32 @@ static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int c
     panel_sensor_t *sensor_config = cls == CLS_TEMP ? &panel_state->temp : cls == CLS_LIGHT ? &panel_state->light : NULL;
     if (sensor_config) {
         int32_t configured_value = drv_centi(luaL_optnumber(L, val, 0));
+        int sensor_id = cls == CLS_TEMP ? SENSOR_TEMP : SENSOR_LIGHT;
         if (idx == 1) {
             sensor_config->threshold = configured_value;
+        } else if (idx == 2) {
+            lua_Integer sensitivity_ms = luaL_optinteger(L, val, 0);
+            sensor_config->sensitivity_ms =
+                (uint16_t)(sensitivity_ms < 0 ? 0 : sensitivity_ms > 0xffff ? 0xffff : sensitivity_ms);
         } else if (idx == 3) {
             sensor_config->min = configured_value;
         } else if (idx == 4) {
             sensor_config->max = configured_value;
         }
+        if ((idx == 1 || idx == 2) && panel_state->initialized) { // the panel applies both
+            send_sensor_config(module, sensor_id, sensor_config->sensitivity_ms);
+        }
     }
     return false;
+}
+
+/** @brief Class frame 0x16 with the sensor config (panel_sensor_config()) and @p sensitivity_ms. */
+static void send_sensor_config(tfbus_module_t *module, int sensor_id, uint16_t sensitivity_ms)
+{
+    uint8_t sensor_config[4];
+    panel_sensor_config(sensor_id == SENSOR_TEMP ? &ctx(module)->temp : &ctx(module)->light, (uint8_t)sensor_id,
+                        sensitivity_ms, sensor_config);
+    drv_queue_frame(module, 0x16, sensor_config, sizeof sensor_config);
 }
 
 /**

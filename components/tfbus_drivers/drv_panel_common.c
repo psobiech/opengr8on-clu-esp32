@@ -57,3 +57,14 @@ void panel_button_event(char (*btn_names)[24], int button_count, uint32_t *value
     }
     clu_lua_post_event(name, event_index);
 }
+
+void panel_sensor_config(const panel_sensor_t *sensor, uint8_t sensor_id, uint16_t sensitivity_ms, uint8_t out[4])
+{
+    unsigned sensitivity_units = sensitivity_ms / 100u > 255u ? 255u : sensitivity_ms / 100u;
+    int32_t threshold_deci = sensor->threshold / 10; // 1/100 -> 1/10
+    uint16_t threshold_wire = threshold_deci < 0 ? 0 : threshold_deci > 0xffff ? 0xffff : (uint16_t)threshold_deci;
+    out[0] = sensor_id;
+    out[1] = (uint8_t)sensitivity_units;
+    out[2] = (uint8_t)threshold_wire;
+    out[3] = (uint8_t)(threshold_wire >> 8);
+}

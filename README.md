@@ -547,7 +547,7 @@ konfiguracja retained `homeassistant/device/<object_id>/config` z encjami w `cmp
 | `opengr8on_CLU<serial>_var` | cechy użytkownika CLU |
 | `opengr8on_CLU<serial>_system` | diagnostyka firmware (`CLU_MQTT_DIAGNOSTICS`) |
 | `opengr8on_CLU<serial>_<moduł>` | moduł (osobne urządzenie HA) |
-| `opengr8on_CLU<serial>_<obiekt>` | obiekt z `subdevice = true` (przycisk panelu): urządzenie pod modułem |
+| `opengr8on_CLU<serial>_<obiekt>` | obiekt z `subdevice = true` (przycisk i ekran panelu): urządzenie pod modułem |
 
 Pierwsze trzy to jedno urządzenie HA (te same `ids`). Konfiguracje są wysyłane przy każdym połączeniu
 i gdy HA opublikuje `online` na `homeassistant/status`. Encja, która zniknęła po zmianie OM.LUA lub
@@ -571,7 +571,7 @@ starszego firmware (`homeassistant/<component>/opengr8on_CLU<serial>/<id>/config
 | AnalogIN (12, moduł ANALOG_DIN) | `sensor` Value (bez jednostki: zależy od wejścia i `Scale`) | — |
 | ONEW_SENSOR (23) | `sensor` °C | — |
 | ONE_WIRE_HUB (73) | `sensor` aktywne czujniki (diagnostyka), `button` RefreshSensors | PRESS → RefreshSensors |
-| PANEL (29, SMART_PANEL_FM_4) | `event` (gesture_up/down/left/right, proximity, page_change, display_on/off), `button` Display On / Beep / Display Clear / Display Show Buttons / Display Next Page / Display Previous Page, `text` Display Text, `number` Display X / Y / Display Page, `select` Display Font | Display Clear: wybudzenie + ClearScreen + wyświetlenie; Display Text: wybudzenie + PrintText(X, Y, tekst ≤ 16 znaków, czcionka) + wyświetlenie, bez czyszczenia (Clear, potem kilka Text składa ekran); każda encja kończy rysowanie sama (inaczej panel pokazuje `! TIMEOUT !`), Draw zamiast DisplayContent na panelach z fwApiVer < 5; Display Page → SetPageNr (stan: ostatnio ustawiona strona); brak polecenia wyłączenia ekranu |
+| PANEL (29, SMART_PANEL_FM_4) | własne urządzenie pod panelem: `event` (gesture_up/down/left/right, proximity, page_change, display_on/off), `button` Display On / Beep / Display Clear / Display Show Buttons / Display Next Page / Display Previous Page, `text` Display Text, `number` Display X / Y / Display Page, `select` Display Font | Display Clear: wybudzenie + ClearScreen + wyświetlenie; Display Text: wybudzenie + PrintText(X, Y, tekst ≤ 16 znaków, czcionka) + wyświetlenie, bez czyszczenia (Clear, potem kilka Text składa ekran); każda encja kończy rysowanie sama (inaczej panel pokazuje `! TIMEOUT !`), Draw zamiast DisplayContent na panelach z fwApiVer < 5; Display Page → SetPageNr (stan: ostatnio ustawiona strona); brak polecenia wyłączenia ekranu |
 | Calendar (15) | `switch` State, `sensor` ToNextRun (min), `event` calendar | ON/OFF → Start/Stop |
 | SunriseSunsetCalendar (39) | `sensor` wschód / zachód (timestamp), `binary_sensor` dzień | — |
 | Statistics (47) / StatisticsPulse (48) | `sensor` Value | — |

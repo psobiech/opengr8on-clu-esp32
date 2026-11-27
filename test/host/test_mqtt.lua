@@ -339,6 +339,9 @@ check("ONE_WIRE_HUB -> active sensors (diagnostic) + refresh button", hub and hu
   and hub.p:find('"ent_cat":"diagnostic"', 1, true)
   and (config("button", "HUB0001_2") or {}).p:find('"ent_cat":"config"', 1, true) ~= nil)
 local panel = config("event", "PAN0001_event")
+check("SMART_PANEL PANEL: own device under the panel, event named after it", panel
+  and panel.t == DEVICE_CFG .. NODE .. "_PAN0001/config" and panel.node.dev.name == "PAN0001"
+  and panel.node.dev.via_device == NODE .. "_30000001" and not panel.p:find('"name"', 1, true))
 check("SMART_PANEL PANEL -> gesture / proximity / display event entity", panel and panel.p:find(
   '"evt_typ":["gesture_up","gesture_down","gesture_left","gesture_right","proximity","page_change","display_on","display_off"]', 1, true)
   and not panel.p:find('"dev_cla"', 1, true))
@@ -353,15 +356,15 @@ check("SunriseSunset timestamp state", ((find("grenton/CLU100000001/SUN0001/stat
 check("Statistics -> value sensors", (find("grenton/CLU100000001/STA0001/state") or {}).p == "0"
   and (config("sensor", "PUL0001") or {}).p:find('"stat_cla":"total_increasing"', 1, true) ~= nil)
 check("SMART_PANEL PANEL -> Display On / Beep buttons",
-  (config("button", "PAN0001_2") or {}).p:find('"name":"PAN0001 Display On"', 1, true) ~= nil
-  and (config("button", "PAN0001_3") or {}).p:find('"name":"PAN0001 Beep"', 1, true) ~= nil)
+  (config("button", "PAN0001_2") or {}).p:find('"name":"Display On"', 1, true) ~= nil
+  and (config("button", "PAN0001_3") or {}).p:find('"name":"Beep"', 1, true) ~= nil)
 check("SMART_PANEL PANEL -> free draw entities",
-  (config("button", "PAN0001_4") or {}).p:find('"name":"PAN0001 Display Clear"', 1, true) ~= nil
+  (config("button", "PAN0001_4") or {}).p:find('"name":"Display Clear"', 1, true) ~= nil
   and (config("text", "PAN0001_5") or {}).p:find('"max":16', 1, true) ~= nil
   and (config("number", "PAN0001_6") or {}).p:find('"max":127', 1, true) ~= nil
   and (config("number", "PAN0001_7") or {}).p:find('"max":63', 1, true) ~= nil
   and (config("select", "PAN0001_8") or {}).p:find('"ops":["Small","Medium","Large"]', 1, true) ~= nil
-  and (config("button", "PAN0001_9") or {}).p:find('"name":"PAN0001 Display Show Buttons"', 1, true) ~= nil
+  and (config("button", "PAN0001_9") or {}).p:find('"name":"Display Show Buttons"', 1, true) ~= nil
   and (find("grenton/CLU100000001/PAN0001_6/state") or {}).p == "0"
   and (find("grenton/CLU100000001/PAN0001_8/state") or {}).p == "Small")
 local panel_button = config("event", "PBT0001_event")

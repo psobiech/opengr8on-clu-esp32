@@ -114,7 +114,8 @@ local MODULE_DEFAULTS = {
   [0x19] = { [12] = { { kind = "sensor" } } },
   -- SMART_PANEL_FM_4: PANEL (class 29) events and methods (drv_smart_panel_fm4.c): SwitchOnDisplay,
   -- SetBeep (default tone), free draw (see PANEL_FONTS above), ShowButtons; there is no display-off
-  -- command. On the TOUCH_PANEL it is only the buzzer.
+  -- command. On the TOUCH_PANEL it is only the buzzer. Its own device under the panel (subdevice,
+  -- set below for every entity).
   [0x03] = { [29] = { { kind = "event", device_class = false,
                         events = { [0] = "gesture_up", [1] = "gesture_down", [2] = "gesture_left",
                                    [3] = "gesture_right", [4] = "proximity", [5] = "page_change",
@@ -158,3 +159,4 @@ local MODULE_DEFAULTS = {
                       { kind = "button", execute = 28, name_suffix = "Display Previous Page",
                         icon = "mdi:page-previous" } } },
 }
+for _, panel_entity in ipairs(MODULE_DEFAULTS[0x03][29]) do panel_entity.subdevice = true end

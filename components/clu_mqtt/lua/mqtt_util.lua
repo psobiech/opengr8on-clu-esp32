@@ -3,13 +3,17 @@
 -- C side (clu_mqtt.c): connection, LWT "<root>/status", subscriptions, inbound queue. Here:
 --   * entities: objects declared by OM.LUA, mapped per class (DEFAULTS, MODULE_DEFAULTS per module
 --     type) or by USER.LUA overrides; channels of on-board modules without hardware behind them
---     (__clu.local_channels) get no default entities
+--     (__clu.local_channels) get no default entities; CLU user features (OM.LUA `_type[name]`)
+--     as number / text / switch under "<root>/var/<name>"
+--   * devices: the CLU, and one per module (via_device the CLU) with its TF-Bus versions; entities
+--     of a TF-Bus module are unavailable while its link (system/tfbus/modules/<module>) is OFF
 --   * discovery: retained "<prefix>/<component>/opengr8on_CLU<sn>/<id>/config", resent on every
 --     (re)connect and on Home Assistant's "online"; configs of entities that disappeared are cleared
 --   * state: polled every scan_ms, published retained on change only
 --   * commands: "<root>/<obj>/set" and kind-specific subtopics -> fixed object calls (never eval)
 --   * internals (menuconfig CLU_MQTT_DIAGNOSTICS) under "<root>/system/", values published
---     directly on the topic (no "/state"): clu/{boot_time,state,reset_reason,event,restart/set},
+--     directly on the topic (no "/state"): clu/{boot_time,state,firmware,reset_reason,last_crash,
+--     event,restart/set},
 --     memory/{heap_free,heap_min,psram_free,lua}, network/{rssi,ip},
 --     tfbus/{online,total,missed_polls}, tfbus/modules/<module>; noisy ones sampled every diag_ms
 --   * raw object API (menuconfig CLU_MQTT_OBJECT_API): get/set any feature, call any method with
@@ -20,7 +24,8 @@
 --   MQTT.expose(obj | "NAME", "light")                      replace the default mapping
 --   MQTT.expose(TIM1234, { kind = "sensor", feature = 3, unit = "ms", name = "Countdown" })
 --   MQTT.expose(TIM1234, { kind = "button", execute = 0, name = "Start" })
---   MQTT.hide(obj | "NAME" | "system")
+--   MQTT.expose("userFeature", { kind = "sensor" })              user features too
+--   MQTT.hide(obj | "NAME" | "userFeature" | "system")
 --   MQTT.publish(topic, payload [, retain])   MQTT.connected()   MQTT.root
 local clu = __clu
 local cfg = clu.mqtt_cfg()
@@ -47,7 +52,15 @@ end
 
 local function onoff(value)
   if value == nil then return nil end
+  if type(value) == "boolean" then return value and "ON" or "OFF" end
   return (tonumber(value) or 0) ~= 0 and "ON" or "OFF"
+end
+
+-- UTC epoch seconds -> HA timestamp; nil for unset / negative ("unavailable") values.
+local function iso_time(epoch_seconds)
+  epoch_seconds = tonumber(epoch_seconds)
+  if not epoch_seconds or epoch_seconds < 0 then return nil end
+  return os.date("!%Y-%m-%dT%H:%M:%S+00:00", math.floor(epoch_seconds))
 end
 
 local function num(value)

@@ -16,6 +16,11 @@ local storage = os.tmpname()
 os.remove(storage)
 
 local outbox, logs = 0, {} -- fake esp-mqtt outbox bytes; C.log messages
+-- Bus master view of the TF-Bus modules (versions once VERSION_QUERY answered)
+local module_statuses = {
+  [0x13ab6c81] = { online = true, fails = 0, hw_ver = 2, fw_ver = "2.2.4" },
+  [0x20c85581] = { online = false, fails = 9 },
+}
 __clu = {
   root = here .. "fixtures",
   storage = storage,
@@ -35,8 +40,8 @@ __clu = {
   remote = function() end,
   mqtt_cfg = function()
     return { root = "grenton/CLU100000001", status = "grenton/CLU100000001/status", ha = true,
-             prefix = "homeassistant", scan_ms = 100, sn = 100000001, fw = "5.13.8-2442",
-             diag_ms = 30000, api = true }
+             prefix = "homeassistant", scan_ms = 100, sn = 100000001, fw = "v1.4.0-3-gabcdef",
+             model = "Test board", hw = "esp32s3 v0.2", diag_ms = 30000, api = true }
   end,
   sys_info = function()
     return { heap_free = 200 * 1024 + 5, heap_min = 150 * 1024, psram_free = 7000 * 1024, rssi = -61,
@@ -44,10 +49,7 @@ __clu = {
              last_crash = "task watchdog: clu_lua (CPU 1) | task IDLE1 | pc 0x400d1234",
              tfbus_fails = sys_fails }
   end,
-  tfbus_module = function(sn)
-    if sn == 0x13ab6c81 then return { online = true, fails = 0 } end
-    if sn == 0x20c85581 then return { online = false, fails = 9 } end
-  end,
+  tfbus_module = function(sn) return module_statuses[sn] end,
   -- On-board modules: GPIO input module (DIN1 + DIN3 wired, DOUT drive nothing), ANALOG_DIN
   -- (AnalogIN 1 set up, 1-Wire hub); the ONE_WIRE sensor module and the rest are not restricted.
   local_channels = function(sn)
@@ -109,6 +111,16 @@ AIN0002 = OBJECT:new(12, mm_analog, 1, "AIN0002") -- not set up
 AOU0001 = OBJECT:new(13, mm_analog, 0, "AOU0001")
 mm_onewire = OBJECT:new(2, 0x0a000003, 0xff, "0a000003")
 ONS0001 = OBJECT:new(23, mm_onewire, 0, "ONS0001")
+HUB0001 = OBJECT:new(73, mm_analog, 0, "HUB0001")
+mm_panel = OBJECT:new(2, 0x30000001, 0x03, "30000001")
+PAN0001 = OBJECT:new(29, mm_panel, 0, "PAN0001")
+CAL0001 = OBJECT:new(15, "CAL0001")
+SUN0001 = OBJECT:new(39, "SUN0001")
+STA0001 = OBJECT:new(47, "STA0001")
+PUL0001 = OBJECT:new(48, "PUL0001")
+-- one more CLU user feature, as OM declares it (the fixture has number and string ones)
+_type["flag"] = "boolean"
+flag = true
 TMR0001:set(0, 60000)
 TMR0001:execute(0)
 SYSTEM.Init()
@@ -161,14 +173,20 @@ local sw = find(CFG .. "switch" .. NODE .. "DOU0001/config")
 check("DOU -> switch discovery", sw ~= nil and sw.r == true and sw.q == 1)
 check("switch uses ~ base", sw and sw.p:find('"~":"grenton/CLU100000001/DOU0001"', 1, true) ~= nil)
 check("friendly name from NAME_IO", sw and sw.p:find('"name":"LIGHT A"', 1, true) ~= nil)
-check("module IO on its module device (model + serial)", sw and sw.p:find(
-  '"device":{"identifiers":["opengr8on_CLU100000001_13ab6c81"],"model":"IO MODULE DIN 8","name":"IO MODULE DIN 8 330001537","serial_number":"330001537","via_device":"opengr8on_CLU100000001"}', 1, true) ~= nil)
+check("module IO on its module device (model, serial, TF-Bus versions)", sw and sw.p:find(
+  '"device":{"hw_version":"2","identifiers":["opengr8on_CLU100000001_13ab6c81"],"manufacturer":"Grenton","model":"IO MODULE DIN 8","name":"IO MODULE DIN 8 330001537","serial_number":"330001537","sw_version":"2.2.4","via_device":"opengr8on_CLU100000001"}', 1, true) ~= nil)
 local tmr_cfg = find(CFG .. "sensor" .. NODE .. "TMR0001/config")
 check("virtual object on the CLU device, named from NAME_CLU",
   tmr_cfg and tmr_cfg.p:find('"identifiers":["opengr8on_CLU100000001"]', 1, true) and tmr_cfg.p:find('"name":"CLU TEST"', 1, true) ~= nil)
 local rol_cfg = find(CFG .. "cover" .. NODE .. "ROL0001/config")
 check("other module: own device", rol_cfg and rol_cfg.p:find('"name":"ROLLER SH DIN 3 550000001"', 1, true) ~= nil)
-check("availability topic", sw and sw.p:find('"availability_topic":"grenton/CLU100000001/status"', 1, true) ~= nil)
+check("TF-Bus module IO: available while the CLU is online and the module's link is ON", sw and sw.p:find(
+  '"availability":[{"topic":"grenton/CLU100000001/status"},{"payload_available":"ON","payload_not_available":"OFF","topic":"grenton/CLU100000001/system/tfbus/modules/13ab6c81"}],"availability_mode":"all"', 1, true) ~= nil
+  and not sw.p:find("availability_topic", 1, true))
+check("CLU entity: CLU availability only", tmr_cfg and tmr_cfg.p:find('"availability_topic":"grenton/CLU100000001/status"', 1, true) ~= nil
+  and not tmr_cfg.p:find('"availability":', 1, true))
+check("CLU device: board model, chip, build version", tmr_cfg and tmr_cfg.p:find(
+  '"device":{"hw_version":"esp32s3 v0.2","identifiers":["opengr8on_CLU100000001"],"manufacturer":"OpenGr8on","model":"Test board","name":"CLU TEST","serial_number":"100000001","sw_version":"v1.4.0-3-gabcdef"}', 1, true) ~= nil)
 check("unique_id", sw and sw.p:find('"unique_id":"opengr8on_CLU100000001_DOU0001"', 1, true) ~= nil)
 check("override: DOU0002 -> light", find(CFG .. "light" .. NODE .. "DOU0002/config") ~= nil)
 check("override replaces default", find(CFG .. "switch" .. NODE .. "DOU0002/config") == nil)
@@ -214,6 +232,9 @@ check("ANALOG_DIN AnalogIN -> sensor without voltage class / unit", analog_in
   and not analog_in.p:find('"device_class"', 1, true) and not analog_in.p:find('"unit_of_measurement"', 1, true)
   and analog_in.p:find('"name":"ANALOG DIN 167772162"', 1, true) ~= nil
   and (find("grenton/CLU100000001/AIN0001/state") or {}).p == "3.3")
+local on_board_input = find(CFG .. "binary_sensor" .. NODE .. "LDI0001/config")
+check("on-board module: emulated (OpenGr8on), no link availability", on_board_input
+  and on_board_input.p:find('"manufacturer":"OpenGr8on"', 1, true) and not on_board_input.p:find('"availability":', 1, true))
 local onewire = find(CFG .. "sensor" .. NODE .. "ONS0001/config")
 check("ONEW_SENSOR -> temperature sensor", onewire and onewire.p:find('"device_class":"temperature"', 1, true)
   and onewire.p:find('"unit_of_measurement":"°C"', 1, true)
@@ -244,6 +265,33 @@ check("Thermostat state from interface features", thermo_state and thermo_state.
 local presence = find(CFG .. "binary_sensor" .. NODE .. "PRE0001/config")
 check("PresenceSensor -> occupancy", presence and presence.p:find('"device_class":"occupancy"', 1, true))
 check("PresenceSensor -> Locked switch", find(CFG .. "switch" .. NODE .. "PRE0001_2/config") ~= nil)
+local hub = find(CFG .. "sensor" .. NODE .. "HUB0001/config")
+check("ONE_WIRE_HUB -> active sensors (diagnostic) + refresh button", hub and hub.p:find('"name":"HUB0001 active sensors"', 1, true)
+  and hub.p:find('"entity_category":"diagnostic"', 1, true)
+  and (find(CFG .. "button" .. NODE .. "HUB0001_2/config") or {}).p:find('"entity_category":"config"', 1, true) ~= nil)
+local panel = find(CFG .. "event" .. NODE .. "PAN0001_event/config")
+check("SMART_PANEL PANEL -> gesture / proximity / display event entity", panel and panel.p:find(
+  '"event_types":["gesture_up","gesture_down","gesture_left","gesture_right","proximity","page_change","display_on","display_off"]', 1, true)
+  and not panel.p:find('"device_class"', 1, true))
+check("Calendar -> State switch, next run sensor, event", find(CFG .. "switch" .. NODE .. "CAL0001/config") ~= nil
+  and (find(CFG .. "sensor" .. NODE .. "CAL0001_2/config") or {}).p:find('"name":"CAL0001 next run"', 1, true) ~= nil
+  and (find(CFG .. "event" .. NODE .. "CAL0001_event/config") or {}).p:find('"event_types":["calendar"]', 1, true) ~= nil)
+local sunrise = find(CFG .. "sensor" .. NODE .. "SUN0001/config")
+check("SunriseSunset -> sunrise / sunset timestamps, day binary_sensor", sunrise
+  and sunrise.p:find('"device_class":"timestamp"', 1, true) and sunrise.p:find('"name":"SUN0001 sunrise"', 1, true)
+  and find(CFG .. "sensor" .. NODE .. "SUN0001_2/config") ~= nil and find(CFG .. "binary_sensor" .. NODE .. "SUN0001_3/config") ~= nil)
+check("SunriseSunset timestamp state", ((find("grenton/CLU100000001/SUN0001/state") or {}).p or ""):match("^%d+%-%d+%-%d+T%d+:%d+:%d+%+00:00$") ~= nil)
+check("Statistics -> value sensors", (find("grenton/CLU100000001/STA0001/state") or {}).p == "0"
+  and (find(CFG .. "sensor" .. NODE .. "PUL0001/config") or {}).p:find('"state_class":"total_increasing"', 1, true) ~= nil)
+local number_feature = find(CFG .. "number" .. NODE .. "var_restored/config")
+check("number user feature -> number entity under var/", number_feature
+  and number_feature.p:find('"~":"grenton/CLU100000001/var/restored"', 1, true) and number_feature.p:find('"mode":"box"', 1, true)
+  and number_feature.p:find('"min":-2147483648', 1, true) and number_feature.p:find('"name":"restored"', 1, true)
+  and (find("grenton/CLU100000001/var/restored/state") or {}).p == "0")
+check("string user feature -> text entity", (find(CFG .. "text" .. NODE .. "var_keep/config") or {}).p:find('"max":255', 1, true) ~= nil
+  and (find("grenton/CLU100000001/var/keep/state") or {}).p == "init")
+check("boolean user feature -> switch", find(CFG .. "switch" .. NODE .. "var_flag/config") ~= nil
+  and (find("grenton/CLU100000001/var/flag/state") or {}).p == "ON")
 check("switch state ON", (find("grenton/CLU100000001/DOU0001/state") or {}).p == "ON")
 check("state retained", (find("grenton/CLU100000001/DOU0001/state") or {}).r == true)
 check("binary_sensor OFF", (find("grenton/CLU100000001/DIN0001/state") or {}).p == "OFF")
@@ -279,6 +327,8 @@ check("rssi", (find("grenton/CLU100000001/system/network/rssi") or {}).p == "-61
 check("ip text sensor", (find("grenton/CLU100000001/system/network/ip") or {}).p == "192.168.1.100"
   and not (find(CFG .. "sensor" .. NODE .. "system_network_ip/config") or {}).p:find("state_class", 1, true))
 check("reset reason", (find("grenton/CLU100000001/system/clu/reset_reason") or {}).p == "task_watchdog")
+check("firmware version sensor (diagnostic)", (find("grenton/CLU100000001/system/clu/firmware") or {}).p == "v1.4.0-3-gabcdef"
+  and (find(CFG .. "sensor" .. NODE .. "system_clu_firmware/config") or {}).p:find('"entity_category":"diagnostic"', 1, true) ~= nil)
 check("last crash text sensor", (find("grenton/CLU100000001/system/clu/last_crash") or {}).p
   == "task watchdog: clu_lua (CPU 1) | task IDLE1 | pc 0x400d1234"
   and (find(CFG .. "sensor" .. NODE .. "system_clu_last_crash/config") or {}).p:find('"name":"Last crash"', 1, true) ~= nil)
@@ -386,6 +436,19 @@ check("Thermostat auto preset", THE0001:get(8) == 2)
 command("THE0001/preset/set", "none")
 command("THE0001/preset/set", "boost")
 check("Thermostat boost preset", THE0001:get(8) == 3 and THE0001._heatup.add == 5)
+command("var/restored/set", "12.5")
+check("number user feature set", restored == 12.5)
+command("var/restored/set", "abc")
+check("number user feature: non-number ignored", restored == 12.5)
+command("var/keep/set", " Hello World ")
+check("text user feature set verbatim (trimmed, case kept)", keep == "Hello World")
+command("var/flag/set", "OFF")
+check("boolean user feature off", flag == false)
+command("var/flag/set", "ON")
+check("boolean user feature on", flag == true)
+command("HUB0001_2/set", "PRESS")
+command("CAL0001/set", "OFF")
+check("Calendar switch off -> Stop", CAL0001:get(3) == 0)
 
 -- ---- lights (JSON schema) -------------------------------------------------------------
 local calls = {}
@@ -476,6 +539,16 @@ check("stalled: queue capped at 64 events", n_ev == 64)
 __fire("DIN0001", 4)
 run(1)
 check("drop count logged when events flow again", logs[#logs] == "mqtt: 136 event(s) dropped" and pubs[#pubs].t == "grenton/CLU100000001/DIN0001/event")
+
+-- ---- module versions reported after the build: configs resent with them ------------------
+module_statuses[0x20c85581].hw_ver, module_statuses[0x20c85581].fw_ver = 1, "3.1.0"
+pubs = {}
+run(20) -- scan notices the versions, rebuild, then every config drains (PUBS_PER_TICK per tick)
+check("late VERSION_QUERY: module configs resent with the versions",
+  ((find(CFG .. "cover" .. NODE .. "ROL0001/config") or {}).p or ""):find('"sw_version":"3.1.0"', 1, true) ~= nil)
+pubs = {}
+run(20)
+check("versions unchanged: configs not resent again", count(CFG) == 0)
 
 -- ---- HA restart -------------------------------------------------------------------
 local before = count(CFG)

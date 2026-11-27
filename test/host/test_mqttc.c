@@ -211,7 +211,8 @@ static void reconfigure(const char *uri)
 int main(void)
 {
     // Lua bindings before init: no queue / client yet
-    clu_mqtt_cfg_t cfg = {.sn = 330017203, .fw_version = "1.2.3", .ca_path = NULL};
+    clu_mqtt_cfg_t cfg = {.sn = 330017203, .fw_version = "1.2.3", .model = "Test board", .hw_version = "esp32s3 v0.2",
+                          .ca_path = NULL};
     L = luaL_newstate();
     luaL_openlibs(L);
     check("recv / outbox before init -> nothing", l_recv(L) == 0 && (l_outbox(L), lua_tointeger(L, -1) == 0));
@@ -319,12 +320,22 @@ int main(void)
               lua_tointeger(L, 7) == 330017203 && lua_tointeger(L, 8) == 60000 && lua_toboolean(L, 9) &&
               !strcmp(lua_tostring(L, 10), "1.2.3"));
     lua_settop(L, 0);
+    lua_call_fn("mqtt_cfg", 0, 1);
+    lua_getfield(L, 1, "model");
+    lua_getfield(L, 1, "hw");
+    check("mqtt_cfg: board model, chip", !strcmp(lua_tostring(L, 2), "Test board") && !strcmp(lua_tostring(L, 3), "esp32s3 v0.2"));
+    lua_settop(L, 0);
     clu_mqtt_cfg_t nofw = cfg;
     nofw.fw_version = NULL;
+    nofw.model = NULL;
+    nofw.hw_version = NULL;
     s_cfg = nofw;
     lua_call_fn("mqtt_cfg", 0, 1);
     lua_getfield(L, 1, "fw");
-    check("mqtt_cfg: no firmware version -> \"\"", !strcmp(lua_tostring(L, -1), ""));
+    lua_getfield(L, 1, "model");
+    lua_getfield(L, 1, "hw");
+    check("mqtt_cfg: no firmware version / board / chip -> \"\", default model, no hw",
+          !strcmp(lua_tostring(L, 2), "") && !strcmp(lua_tostring(L, 3), "OpenGr8on CLU") && lua_isnil(L, 4));
     s_cfg = cfg;
     lua_settop(L, 0);
 

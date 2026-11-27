@@ -261,6 +261,16 @@ tfbus_module_t *tfbus_master_find_sn(uint32_t sn)
     }
     return NULL;
 }
+bool tfbus_master_device_find(uint32_t sn, tfbus_device_t *out)
+{
+    for (int i = 0; i < s_ndevs; i++) {
+        if (s_devs[i].sn == sn) {
+            *out = s_devs[i];
+            return true;
+        }
+    }
+    return false;
+}
 int tfbus_master_devices(tfbus_device_t *out, int max)
 {
     int n = s_ndevs < max ? s_ndevs : max;
@@ -800,6 +810,17 @@ static void test_sysinfo(void)
     lua_pop(L, 1);
     check("tfbus_module(unknown sn) -> nil", call("tfbus_module", 1, 99) == LUA_TNIL);
     lua_pop(L, 1);
+    call("tfbus_module", 1, 1);
+    lua_getfield(L, -1, "fw_ver");
+    check("tfbus_module(sn): no VERSION_QUERY answer -> no versions", lua_isnil(L, -1));
+    lua_pop(L, 2);
+    s_ndevs = 1;
+    s_devs[0] = (tfbus_device_t){.sn = 1, .hw_type = 0x1e, .hw_ver = 3, .ver = {2, 1, 7}, .have_ver = true};
+    call("tfbus_module", 1, 1);
+    check("tfbus_module(sn): hw_ver / fw_ver from VERSION_QUERY",
+          field_int("hw_ver") == 3 && !strcmp(field_str("fw_ver"), "2.1.7"));
+    lua_pop(L, 1);
+    s_ndevs = 0;
 
     call("local_channels", 1, 7);
     check("local_channels(GPIO module): DIN mask, no DOUT", field_class(3) == 0x05 && field_class(4) == 0 &&

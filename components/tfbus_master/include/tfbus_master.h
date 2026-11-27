@@ -158,6 +158,14 @@ typedef struct {
 int tfbus_master_devices(tfbus_device_t *out, int max);
 
 /**
+ * @brief The module with serial @p sn from the last discovery's snapshot. Thread-safe.
+ * @param sn Serial number.
+ * @param out Output entry.
+ * @return false if the last discovery did not list it.
+ */
+bool tfbus_master_device_find(uint32_t sn, tfbus_device_t *out);
+
+/**
  * @brief Set a callback run in the bus task after every discovery (e.g. to rewrite a:\\CONFIG.JSON).
  * @param scan_callback Callback (NULL = none).
  */

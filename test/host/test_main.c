@@ -88,6 +88,7 @@ const esp_app_desc_t *esp_app_get_description(void)
     static const esp_app_desc_t app_description = {.version = "test", .project_name = "opengr8on-clu"};
     return &app_description;
 }
+void esp_chip_info(esp_chip_info_t *out_info) { out_info->revision = 2; }
 void clu_state_load(void) { L("state_load"); }
 // NVS cfg/* settings: key -> value (NULL = not provisioned)
 static const char *s_set_wifi_ssid, *s_set_wifi_pass, *s_set_mqtt_uri = "mqtt://10.0.0.5", *s_set_mqtt_user,
@@ -260,8 +261,9 @@ int main(void)
               s_wc.sta.pmf_cfg.capable && !s_wc.sta.bssid_set);
     check("OTA: port / CORS origin from Kconfig, password from the cfg partition", s_oc.port == 8080 && !strcmp(s_oc.password, "cfgpass1") &&
               !strcmp(s_oc.cors_origin, "https://example.github.io"));
-    check("MQTT: serial, firmware version, CA path on a:\\",
-          s_mc.sn == 330017203 && !strcmp(s_mc.fw_version, "1.0.0") && !strcmp(s_mc.ca_path, "/fs/a/MQTT_CA.PEM"));
+    check("MQTT: serial, build version (not the Grenton one), board, chip, CA path on a:\\",
+          s_mc.sn == 330017203 && !strcmp(s_mc.fw_version, "test") && !strcmp(s_mc.model, "Custom esp32s3 board") &&
+              !strcmp(s_mc.hw_version, "esp32s3 v0.2") && !strcmp(s_mc.ca_path, "/fs/a/MQTT_CA.PEM"));
     check("MQTT: broker URI from NVS, unset user / password left to menuconfig (NULL)",
           s_mc.broker_uri && !strcmp(s_mc.broker_uri, "mqtt://10.0.0.5") && !s_mc.username && !s_mc.password);
     check("Lua: root a:\\, serial, transport / feature / reload hooks wired",

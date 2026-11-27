@@ -34,21 +34,60 @@ local function load_labels()
 end
 
 local device, origin, module_devices
+local module_link_topics -- module device -> its link topic (availability of its entities)
+
+-- TF-Bus versions of a module as HA device fields: sw_version, hw_version (nil, nil until the
+-- module answered VERSION_QUERY).
+local function module_versions(module_status)
+  if not module_status or not module_status.fw_ver then return nil, nil end
+  return module_status.fw_ver, tostring(module_status.hw_ver)
+end
+
+-- Hidden entity (no discovery) publishing a TF-Bus module's link, ON / OFF, on
+-- <root>/system/tfbus/modules/<module>, the same topic as the diagnostic "TF-Bus link" entity:
+-- the second availability topic of the module's entities, so it is published without diagnostics
+-- too. It also notices versions that VERSION_QUERY reports after the build (the bus scan runs
+-- on its own): the configs are rebuilt and resent with them.
+local function add_module_link(module, module_dev)
+  local base = "system/tfbus/modules/" .. module._name
+  module_link_topics[module_dev] = ROOT .. "/" .. base
+  entities[#entities + 1] = {
+    obj = module,
+    base = base,
+    states = {
+      [""] = function()
+        local module_status = clu.tfbus_module(module._sn)
+        if not module_status then return nil end
+        local sw_version, hw_version = module_versions(module_status)
+        if sw_version ~= module_dev.sw_version or hw_version ~= module_dev.hw_version then dirty = true end
+        return module_status.online and "ON" or "OFF"
+      end,
+    },
+  }
+end
 
 -- Home Assistant device of a module object (class 2): CLU > module > its inputs / outputs.
+-- On-board modules (clu_localio) are emulated by this firmware, the rest are Grenton modules on the
+-- bus. Only modules the bus master knows (__clu.tfbus_module) get the link availability: a module
+-- missing from the bus when the entities are built stays available until the next build.
 local function module_device(module)
   local module_dev = module_devices[module]
   if not module_dev then
     local model = MODULE_MODELS[module._hwType] or string.format("Module 0x%02X", tonumber(module._hwType) or 0)
     local sn = tostring(module._sn)
+    local on_board = clu.local_channels and clu.local_channels(module._sn) ~= nil
+    local module_status = clu.tfbus_module and clu.tfbus_module(module._sn)
     module_dev = {
       identifiers = { NODE .. "_" .. module._name },
       name = model .. " " .. sn,
+      manufacturer = on_board and "OpenGr8on" or "Grenton",
       model = model,
       serial_number = sn,
       via_device = NODE,
     }
+    module_dev.sw_version, module_dev.hw_version = module_versions(module_status)
     module_devices[module] = module_dev
+    if module_status then add_module_link(module, module_dev) end
   end
   return module_dev
 end
@@ -72,18 +111,70 @@ local function has_hardware(object)
   return channel ~= nil and channel >= 0 and ((channel_masks[object._class] or 0) >> channel) & 1 == 1
 end
 
+-- CLU user features: OM.LUA declares each one with its type (`_type[name] = "number"`, the
+-- table its setVar uses). They are globals; the object below reads / writes one of them.
+local USER_FEATURE_CLASS = -2
+local USER_FEATURE_KINDS = { number = "number", string = "text", boolean = "switch" }
+
+local function user_feature(feature_name, feature_type)
+  local feature = { _name = feature_name, _class = USER_FEATURE_CLASS }
+  function feature.get() return rawget(_G, feature_name) end
+  function feature.set(_, _, value)
+    if feature_type == "number" then
+      value = tonumber(value)
+      if value == nil then return end
+    elseif feature_type == "boolean" then
+      value = value == true or (type(value) == "number" and value ~= 0)
+    else
+      value = tostring(value)
+    end
+    local set_var = rawget(_G, "setVar") -- OM's, applies _type
+    if type(set_var) == "function" then set_var(feature_name, value) else rawset(_G, feature_name, value) end
+  end
+  return feature
+end
+
+-- Declared user features, sorted by name: { name = ..., type = ... }.
+local function user_features()
+  local feature_types, features = rawget(_G, "_type"), {}
+  if type(feature_types) ~= "table" then return features end
+  for feature_name, feature_type in pairs(feature_types) do
+    if type(feature_name) == "string" and USER_FEATURE_KINDS[feature_type] then
+      features[#features + 1] = { name = feature_name, type = feature_type }
+    end
+  end
+  table.sort(features, function(left, right) return left.name < right.name end)
+  return features
+end
+
+-- Entity options placed under a topic group ("var/<name>") unless they name one.
+local function in_group(entity_options, group)
+  local grouped = {}
+  for option_index, options in ipairs(entity_options) do
+    if options.group then
+      grouped[option_index] = options
+    else
+      local grouped_options = { group = group }
+      for key, value in pairs(options) do grouped_options[key] = value end
+      grouped[option_index] = grouped_options
+    end
+  end
+  return grouped
+end
+
 local function build()
   if not labels then load_labels() end
   device = {
     identifiers = { NODE },
     name = clu_label or ("CLU" .. cfg.sn),
     manufacturer = "OpenGr8on",
-    model = "ESP32-S3 CLU",
+    model = cfg.model,
+    hw_version = cfg.hw,
     serial_number = tostring(cfg.sn),
-    sw_version = cfg.fw,
+    sw_version = cfg.fw ~= "" and cfg.fw or nil,
   }
   origin = { name = "opengr8on-clu-esp32" }
-  entities, by_base, by_object, stateful, module_devices = {}, {}, {}, {}, {}
+  entities, by_base, by_object, stateful, module_devices, module_link_topics = {}, {}, {}, {}, {}, {}
 
   local function add(name, object, entity_options)
     for entity_index, options in ipairs(entity_options or {}) do
@@ -95,6 +186,7 @@ local function build()
         entity.obj = object
         local module = object._class == 2 and object or object._module -- module itself / its IO
         if type(module) == "table" and module._sn ~= nil then entity.device = module_device(module) end
+        if entity.device and not entity.link then entity.link_topic = module_link_topics[entity.device] end
         -- e.base: topic path under root. First state-bearing entity of an object owns
         -- <root>/<obj>; later ones get <obj>_<n>; opts.group prefixes a path ("system/memory").
         local base = options.base or name
@@ -110,7 +202,10 @@ local function build()
           entity.states[""], entity.states.state = entity.states.state, nil
           entity.disc.state_topic = "~"
         end
-        entity.name = options.name or labels[name] or entity.default_name or name
+        -- opts.name replaces the object's label, opts.name_suffix follows it ("Sun sunrise")
+        if options.name then entity.name = options.name
+        elseif options.name_suffix then entity.name = (labels[name] or name) .. " " .. options.name_suffix
+        else entity.name = labels[name] or entity.default_name or name end
         if options.device_class then entity.disc.device_class = options.device_class end
         if options.icon then entity.disc.icon = options.icon end
         if options.entity_category then entity.disc.entity_category = options.entity_category end
@@ -137,6 +232,12 @@ local function build()
     add(name, object, list)
   end
 
+  for _, feature in ipairs(user_features()) do
+    local list = overrides[feature.name]
+    if list == nil then list = { { kind = USER_FEATURE_KINDS[feature.type] } } end
+    if list then add(feature.name, user_feature(feature.name, feature.type), in_group(list, "var")) end
+  end
+
   if cfg.diag_ms and overrides[SYS_NAME] ~= false then
     local list = {}
     for _, opts in ipairs(SYSTEM_ENTITIES) do
@@ -158,9 +259,18 @@ local function config_topic(entity)
   return cfg.prefix .. "/" .. entity.comp .. "/" .. NODE .. "/" .. entity.id .. "/config"
 end
 
+-- Available while the CLU is online (LWT) and, for a TF-Bus module's entities, its link is ON.
 local function config_payload(entity)
   local discovery = { ["~"] = ROOT .. "/" .. entity.base, name = entity.name, unique_id = entity.uid,
-              availability_topic = cfg.status, device = entity.device or device, origin = origin }
+              device = entity.device or device, origin = origin }
+  if entity.link_topic then
+    discovery.availability = { { topic = cfg.status },
+                               { topic = entity.link_topic, payload_available = "ON",
+                                 payload_not_available = "OFF" } }
+    discovery.availability_mode = "all"
+  else
+    discovery.availability_topic = cfg.status
+  end
   for key, value in pairs(entity.disc) do discovery[key] = value end
   return json(discovery)
 end
@@ -237,9 +347,11 @@ local function publish_discovery()
   local persisted_mqtt = persist.section("mqtt")
   local current_topics = {}
   for _, entity in ipairs(entities) do
-    local topic = config_topic(entity)
-    current_topics[#current_topics + 1] = topic
-    enqueue(topic, config_payload(entity), true, 1, true)
+    if entity.comp then -- module links have no config
+      local topic = config_topic(entity)
+      current_topics[#current_topics + 1] = topic
+      enqueue(topic, config_payload(entity), true, 1, true)
+    end
   end
   -- Clear configs this CLU published before but no longer has (object removed / hidden / remapped).
   local keep = {}
@@ -465,7 +577,7 @@ function MQTT.expose(object, options)
   local name = obj_name(object)
   if type(options) == "string" then options = { kind = options } end
   if type(options) ~= "table" or not KINDS[options.kind] then
-    error("MQTT.expose: kind must be one of switch, light, binary_sensor, sensor, climate, cover, event, button, module", 2)
+    error("MQTT.expose: kind must be one of switch, light, binary_sensor, sensor, number, text, climate, cover, event, button, module", 2)
   end
   local override_list = overrides[name]
   if not override_list then override_list = {}; overrides[name] = override_list end

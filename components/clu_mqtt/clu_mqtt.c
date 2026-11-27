@@ -20,11 +20,13 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
-#include "freertos/ringbuf.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "mqtt_client.h"
 #include "sdkconfig.h"
+#if CONFIG_CLU_MQTT_LOG
+#include "freertos/ringbuf.h" // log forwarding only (not in the host test stubs)
+#endif
 
 static const char *TAG = "mqtt";
 
@@ -356,6 +358,12 @@ static int l_cfg(lua_State *L)
     lua_setfield(L, -2, "api");
     lua_pushstring(L, s_cfg.fw_version ? s_cfg.fw_version : "");
     lua_setfield(L, -2, "fw");
+    lua_pushstring(L, s_cfg.model ? s_cfg.model : "OpenGr8on CLU");
+    lua_setfield(L, -2, "model");
+    if (s_cfg.hw_version) {
+        lua_pushstring(L, s_cfg.hw_version);
+        lua_setfield(L, -2, "hw"); // absent = no hw_version
+    }
     return 1;
 }
 

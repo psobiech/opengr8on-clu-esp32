@@ -11,6 +11,9 @@
 #ifndef CLU_FW_VERSION
 #define CLU_FW_VERSION "1.0.0"
 #endif
+#ifndef CONFIG_IDF_TARGET
+#define CONFIG_IDF_TARGET "esp32s3"
+#endif
 #ifndef CONFIG_CLU_SERIAL
 #define CONFIG_CLU_SERIAL ""
 #endif

@@ -14,12 +14,19 @@ KINDS.light = function(object, options)
   return onoff_light(object, options)
 end
 
+-- opts.fn(value) transforms the raw value (nil = no state).
 KINDS.binary_sensor = function(object, options)
   local feature = options.feature or 0
   return {
     comp = "binary_sensor",
     disc = { state_topic = "~/state" },
-    states = { state = function() return onoff(feat(object, feature)) end },
+    states = {
+      state = function()
+        local raw_value = feat(object, feature)
+        if options.fn and raw_value ~= nil then raw_value = options.fn(raw_value) end
+        return onoff(raw_value)
+      end,
+    },
   }
 end
 
@@ -58,6 +65,56 @@ KINDS.sensor = function(object, options)
 end
 
 
+-- Number: opts.min / opts.max / opts.step (HA's defaults 1..100 step 1 are too narrow for Grenton
+-- values: unbounded 32-bit range, step 0.001 unless given), opts.mode (default "box"), opts.unit.
+-- A command sets the feature, clamped to min..max.
+KINDS.number = function(object, options)
+  local feature = options.feature or 0
+  local minimum, maximum = options.min or -2147483648, options.max or 2147483647
+  return {
+    comp = "number",
+    disc = { state_topic = "~/state", command_topic = "~/set", min = minimum, max = maximum,
+             step = options.step or 0.001, mode = options.mode or "box",
+             unit_of_measurement = options.unit },
+    states = { state = function() return num(feat(object, feature)) end },
+    cmds = {
+      set = function(payload)
+        local value = tonumber(payload)
+        if not value or value ~= value then return end
+        object:set(feature, math.max(minimum, math.min(maximum, value)))
+      end,
+    },
+  }
+end
+
+local TEXT_MAX = 255 -- HA's limit for a text entity's state and command
+
+-- Longest prefix of text up to TEXT_MAX bytes that does not split a UTF-8 sequence.
+local function text_prefix(text)
+  if #text <= TEXT_MAX then return text end
+  local cut = TEXT_MAX
+  while cut > 0 and (text:byte(cut + 1) or 0) & 0xC0 == 0x80 do cut = cut - 1 end
+  return text:sub(1, cut)
+end
+
+-- Text: the feature as a string (cut to TEXT_MAX bytes); a command sets it verbatim (not upper-cased).
+KINDS.text = function(object, options)
+  local feature = options.feature or 0
+  return {
+    comp = "text",
+    raw = true,
+    disc = { state_topic = "~/state", command_topic = "~/set", max = TEXT_MAX },
+    states = {
+      state = function()
+        local value = feat(object, feature)
+        if value == nil then return nil end
+        return text_prefix(tostring(value))
+      end,
+    },
+    cmds = { set = function(payload) object:set(feature, payload) end },
+  }
+end
+
 -- Button: payload PRESS calls opts.press(o) or o:execute(opts.execute).
 KINDS.button = function(object, options)
   return {
@@ -77,6 +134,7 @@ end
 KINDS.module = function(object)
   return {
     comp = "binary_sensor",
+    link = true, -- the link itself: available while the CLU is, whatever the module's state
     default_name = "TF-Bus link", -- on the module's own device
     disc = { state_topic = "~/state", device_class = "connectivity" },
     states = {

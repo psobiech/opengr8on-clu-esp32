@@ -21,6 +21,8 @@ extern "C" {
 typedef struct {
     unsigned sn;          /**< CLU serial: topic root "<base>/CLU<sn>", default client id. */
     const char *fw_version;  /**< Firmware version reported to Home Assistant. */
+    const char *model;       /**< Board name: Home Assistant device model (NULL = "OpenGr8on CLU"). */
+    const char *hw_version;  /**< Chip and revision: Home Assistant device hw_version (NULL = none). */
     const char *ca_path;  /**< PEM CA for mqtts:// brokers (e.g. "/fs/a/MQTT_CA.PEM"); missing
                                file = built-in certificate bundle. */
     const char *broker_uri; /**< Broker URI; NULL or "" = CONFIG_CLU_MQTT_BROKER_URI (empty there = MQTT off). */

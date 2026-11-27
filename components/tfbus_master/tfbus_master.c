@@ -1408,3 +1408,20 @@ int tfbus_master_devices(tfbus_device_t *out, int max)
     xSemaphoreGive(s_lock);
     return device_count;
 }
+
+bool tfbus_master_device_find(uint32_t sn, tfbus_device_t *out)
+{
+    if (!s_lock) {
+        return false;
+    }
+    bool found = false;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    for (int i = 0; i < s_ndev && !found; i++) {
+        if (s_dev[i].sn == sn) {
+            *out = s_dev[i];
+            found = true;
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return found;
+}

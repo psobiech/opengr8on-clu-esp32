@@ -525,7 +525,16 @@ przeciwnym razie wbudowany pakiet publicznych CA.
 3. Wgraj projekt z OM. Po połączeniu CLU pojawia się w HA jako urządzenie nazwane według
    `-- NAME_CLU` z OM.LUA, a każdy moduł TF-Bus jako osobne urządzenie podpięte pod CLU
    (`via_device`, nazwa `<model> <numer seryjny>`) z własnymi wejściami / wyjściami; obiekty
-   wirtualne i diagnostyka zostają przy CLU. Encje mają nazwy z komentarzy `-- NAME_IO`.
+   wirtualne, cechy użytkownika i diagnostyka zostają przy CLU. Encje mają nazwy z komentarzy
+   `-- NAME_IO`.
+
+Urządzenie CLU: model = płytka (menuconfig „Board”), `hw_version` = układ i jego rewizja,
+`sw_version` = wersja tego firmware (nie wersja Grentona zgłaszana do OM). Urządzenie modułu:
+producent Grenton (moduły płytki: OpenGr8on), `sw_version` / `hw_version` z VERSION_QUERY magistrali
+(konfiguracje są wysyłane ponownie, gdy wersje pojawią się po zbudowaniu encji). Encje modułu znanego
+masterowi magistrali są dostępne tylko, gdy CLU jest online **i** łącze modułu
+(`<base>/system/tfbus/modules/<module>`) = ON — moduł, który przestał odpowiadać, pokazuje encje
+jako niedostępne zamiast starych wartości. Temat łącza jest publikowany także bez diagnostyki.
 
 Discovery (`homeassistant/<component>/opengr8on_CLU<serial>/<obj>/config`, retained) jest wysyłane
 przy każdym połączeniu i gdy HA opublikuje `online` na `homeassistant/status`. Konfiguracje encji,
@@ -545,9 +554,15 @@ które zniknęły po zmianie OM.LUA, są czyszczone (lista w `a:\STORAGE.DAT`).
 | PowerSupplyVoltage (12) | `sensor` V | — |
 | AnalogIN (12, moduł ANALOG_DIN) | `sensor` Value (bez jednostki: zależy od wejścia i `Scale`) | — |
 | ONEW_SENSOR (23) | `sensor` °C | — |
+| ONE_WIRE_HUB (73) | `sensor` aktywne czujniki (diagnostyka), `button` RefreshSensors | PRESS → RefreshSensors |
+| PANEL (29, SMART_PANEL_FM_4) | `event` (gesture_up/down/left/right, proximity, page_change, display_on/off) | — |
+| Calendar (15) | `switch` State, `sensor` ToNextRun (min), `event` calendar | ON/OFF → Start/Stop |
+| SunriseSunsetCalendar (39) | `sensor` wschód / zachód (timestamp), `binary_sensor` dzień | — |
+| Statistics (47) / StatisticsPulse (48) | `sensor` Value | — |
+| cecha użytkownika CLU (`_type` w OM.LUA) | `number` (liczba, pole), `text` (napis, do 255 bajtów), `switch` (boolean) | wartość → zmienna (przez `setVar` z OM.LUA) |
 | lokalna CLU (0)¹ | `sensor` czas startu i stan (starting/ok/emergency), `event` time_change | — |
 | moduł TF-Bus (2)¹ | `binary_sensor` connectivity | — |
-| firmware (`system`)¹ | `sensor` heap / min. heap / PSRAM / pamięć Lua (KiB), RSSI, IP, przyczyna resetu, moduły online / łącznie / pominięte odpytania; `button` Restart | — |
+| firmware (`system`)¹ | `sensor` wersja firmware, heap / min. heap / PSRAM / pamięć Lua (KiB), RSSI, IP, przyczyna resetu, moduły online / łącznie / pominięte odpytania; `button` Restart | — |
 
 Kanały modułów płytki (on-board IO), za którymi nie ma sprzętu, nie dostają domyślnych encji: OM
 widzi wszystkie obiekty emulowanego modułu, a np. DOUT modułu wejść GPIO niczego nie sterują,
@@ -568,6 +583,9 @@ tylko przy zmianie.
 <base>/<obj>/set                               polecenie
 <base>/<obj>/position | position/set           rolety
 <base>/<obj>/event                             {"event_type":"click"} (nie retained)
+<base>/var/<feature>/state | set               cecha użytkownika CLU
+
+<base>/system/clu/firmware                             wersja firmware (git describe)
 
 <base>/system/clu/boot_time | state | reset_reason     ISO time | starting/ok/emergency | text
 <base>/system/clu/last_crash                           text: przyczyna, zadanie i PC awarii przed tym startem
@@ -606,10 +624,15 @@ MQTT.hide("system")                                  -- no firmware entities
 MQTT.publish("custom/topic", "payload", true)        -- retained; MQTT.connected(), MQTT.root
 ```
 
-- Rodzaje: `switch`, `light` (DIMM / LED_CHANNEL: jasność, LED_CCT: jasność + temperatura, LEDRGB: RGBW, inne: ON/OFF), `binary_sensor`, `sensor`, `cover`, `event`, `button`, `module`.
-- Opcje: `name`, `feature`, `unit`, `device_class`, `state_class`, `icon`, `entity_category`,
-  `events`; czujniki także `text = true` (stan tekstowy), `map = {[v] = "label"}` (enum); przyciski
-  `execute = idx` (lub `press = function(o) … end`).
+- Rodzaje: `switch`, `light` (DIMM / LED_CHANNEL: jasność, LED_CCT: jasność + temperatura, LEDRGB: RGBW, inne: ON/OFF), `binary_sensor`, `sensor`, `number`, `text`, `cover`, `event`, `button`, `module`.
+- Opcje: `name` (zastępuje etykietę obiektu), `name_suffix` (dopisywany do etykiety), `feature`,
+  `unit`, `device_class`, `state_class`, `icon`, `entity_category`, `events`; czujniki także
+  `text = true` (stan tekstowy), `map = {[v] = "label"}` (enum), `fn = function(v) … end`
+  (przekształcenie wartości, też `binary_sensor`); `number`: `min` / `max` / `step` / `mode`
+  (domyślnie cały zakres int32, krok 0.001, `box`); przyciski `execute = idx` (lub
+  `press = function(o) … end`).
+- Cechy użytkownika CLU wybiera się po nazwie: `MQTT.expose("temperatura", { kind = "sensor" })`,
+  `MQTT.hide("temperatura")`.
 
 ## Testy
 

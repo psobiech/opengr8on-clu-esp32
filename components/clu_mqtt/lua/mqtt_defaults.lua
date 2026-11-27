@@ -29,6 +29,11 @@ local DEFAULTS = {
   [7] = { { kind = "event" } },                                                     -- BUTTON
   [9] = { { kind = "light" } },                                                     -- LEDRGB
   [12] = { { kind = "sensor", device_class = "voltage", unit = "V" } },            -- PowerSupplyVoltage
+  -- Calendar: State (Start / Stop), ToNextRun [min], OnCalendar
+  [15] = { { kind = "switch", feature = 3, on = 0, off = 1 },
+           { kind = "sensor", feature = 2, unit = "min", device_class = "duration",
+             name_suffix = "next run" },
+           { kind = "event", events = { [0] = "calendar" }, device_class = false } },
   [16] = { { kind = "sensor", feature = 2 },
            { kind = "switch", feature = 1, on = 0, off = 1 } },                     -- Scheduler
   [18] = { { kind = "climate" } },                                                  -- Thermostat v2
@@ -37,10 +42,24 @@ local DEFAULTS = {
   [23] = { { kind = "sensor", device_class = "temperature", unit = "°C" } },        -- ONEW_SENSOR
   [24] = { { kind = "cover" } },                                                    -- ROLLER_SHUTTER
   [30] = { { kind = "event" } },                                                    -- PANEL_BUTTON
+  -- SunriseSunsetCalendar: today's sunrise / sunset (UTC epoch, -1 = none), IsDayNow (-1 = polar
+  -- day / night: unknown)
+  [39] = { { kind = "sensor", feature = 7, device_class = "timestamp", fn = iso_time,
+             name_suffix = "sunrise" },
+           { kind = "sensor", feature = 8, device_class = "timestamp", fn = iso_time,
+             name_suffix = "sunset" },
+           { kind = "binary_sensor", feature = 11, name_suffix = "day",
+             fn = function(is_day) if is_day ~= -1 then return is_day end end } },
   [40] = { { kind = "binary_sensor", feature = 2, device_class = "occupancy" },
            { kind = "switch", feature = 5, name = "Locked" } },                     -- PresenceSensor v2
+  [47] = { { kind = "sensor" } },                                                   -- Statistics
+  [48] = { { kind = "sensor", feature = 10, state_class = "total_increasing" } },   -- StatisticsPulse
   [49] = { { kind = "light" } },                                                    -- LED_CHANNEL
   [72] = { { kind = "light" } },                                                    -- LED_CCT
+  [73] = { { kind = "sensor", feature = 1, name_suffix = "active sensors",           -- ONE_WIRE_HUB
+             icon = "mdi:thermometer-lines", entity_category = "diagnostic" },
+           { kind = "button", execute = 0, name_suffix = "refresh sensors",
+             entity_category = "config" } },
 }
 
 -- Module hwType -> classes mapped differently on that module than in DEFAULTS.
@@ -48,4 +67,10 @@ local MODULE_DEFAULTS = {
   -- ANALOG_DIN: class 12 is AnalogIN (Value = RawValue x Scale), not PowerSupplyVoltage: the unit
   -- depends on the input and its Scale.
   [0x19] = { [12] = { { kind = "sensor" } } },
+  -- SMART_PANEL_FM_4: PANEL (class 29) events (drv_smart_panel_fm4.c); on the TOUCH_PANEL it is
+  -- only the buzzer.
+  [0x03] = { [29] = { { kind = "event", device_class = false,
+                        events = { [0] = "gesture_up", [1] = "gesture_down", [2] = "gesture_left",
+                                   [3] = "gesture_right", [4] = "proximity", [5] = "page_change",
+                                   [6] = "display_on", [7] = "display_off" } } } },
 }

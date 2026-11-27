@@ -16,7 +16,7 @@ local function boot_time(uptime_seconds)
   if not boot_epoch or math.abs(boot_epoch_candidate - boot_epoch) > 60 then
     boot_epoch = boot_epoch_candidate
   end
-  return os.date("!%Y-%m-%dT%H:%M:%S+00:00", boot_epoch)
+  return iso_time(boot_epoch)
 end
 
 local function kib(bytes) return (tonumber(bytes) or 0) // 1024 end
@@ -28,6 +28,7 @@ function SYSOBJ.get(_, key)
   if not system_cache_time_ms or current_time_ms - system_cache_time_ms >= 1000 then
     system_cache = clu.sys_info and clu.sys_info() or {}
     system_cache.lua_mem = math.floor(collectgarbage("count"))
+    system_cache.firmware = cfg.fw ~= "" and cfg.fw or nil
     system_cache_time_ms = current_time_ms
   end
   return system_cache[key]
@@ -47,6 +48,8 @@ local SYSTEM_ENTITIES = {
     name = "WiFi signal", unit = "dBm", device_class = "signal_strength", sampled = true },
   { kind = "sensor", group = "system/network", base = "ip", feature = "ip", name = "IP address",
     text = true, icon = "mdi:ip-network" },
+  { kind = "sensor", group = "system/clu", base = "firmware", feature = "firmware", name = "Firmware",
+    text = true, icon = "mdi:chip" },
   { kind = "sensor", group = "system/clu", base = "reset_reason", feature = "reset_reason",
     name = "Last reset", text = true, icon = "mdi:restart-alert" },
   { kind = "sensor", group = "system/clu", base = "last_crash", feature = "last_crash",

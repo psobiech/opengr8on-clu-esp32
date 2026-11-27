@@ -42,6 +42,7 @@
 #include "clu_telnet.h"
 #include "clu_tftp.h"
 #include "esp_app_desc.h"
+#include "esp_chip_info.h"
 #include "esp_event.h"
 #include "esp_flash.h"
 #include "esp_heap_caps.h"
@@ -386,6 +387,20 @@ static void on_lua_init(void)
 
 static void log_memory_sizes(void);
 static void power_save_start(void);
+static const char *chip_description(void);
+
+/** @brief Board name (menuconfig "Board"): the Home Assistant device model. */
+#if CONFIG_CLU_BOARD_WAVESHARE_S3_RS485_CAN
+#define CLU_BOARD_NAME "Waveshare ESP32-S3-RS485-CAN"
+#elif CONFIG_CLU_BOARD_GRENTON_GATE
+#define CLU_BOARD_NAME "Grenton GATE"
+#elif CONFIG_CLU_BOARD_KINCONY_F8
+#define CLU_BOARD_NAME "KinCony F8"
+#elif CONFIG_CLU_BOARD_KINCONY_A8V3
+#define CLU_BOARD_NAME "KinCony KC868-A8v3"
+#else
+#define CLU_BOARD_NAME "Custom " CONFIG_IDF_TARGET " board"
+#endif
 
 /** @brief ESP-IDF entry point: bring up all subsystems in dependency order. */
 void app_main(void)
@@ -478,9 +493,16 @@ void app_main(void)
     };
     clu_ota_start(&ota_config);
 #endif
+    // This firmware's build version (CLU_FW_VERSION is the Grenton version reported to OM).
+    // esp_app_desc_t.version is not NUL-terminated when it fills all 32 bytes.
+    static char firmware_version[sizeof app_description->version + 1];
+    snprintf(firmware_version, sizeof firmware_version, "%.*s", (int)sizeof app_description->version,
+             app_description->version);
     const clu_mqtt_cfg_t mqtt_config = {
         .sn = g_clu.sn,
-        .fw_version = CLU_FW_VERSION,
+        .fw_version = firmware_version,
+        .model = CLU_BOARD_NAME,
+        .hw_version = chip_description(),
         .ca_path = CLU_FS_ROOT "/a/MQTT_CA.PEM",
         // cfg partition (prebuilt firmware) over menuconfig; NULL = the menuconfig value
         .broker_uri = clu_state_setting("mqtt_uri", NULL),
@@ -524,6 +546,17 @@ void app_main(void)
  * bootloader's "SPI Flash Size" and esp_psram's "Found ... PSRAM device"; this line replaces them
  * (test/emulator/boot checks it). PSRAM 0 = not built in or not found.
  */
+/** @brief Chip and its revision, e.g. "esp32s3 v0.2" (static buffer). */
+static const char *chip_description(void)
+{
+    static char description[32];
+    esp_chip_info_t chip_info;
+    esp_chip_info(&chip_info);
+    snprintf(description, sizeof description, "%s v%d.%d", CONFIG_IDF_TARGET, chip_info.revision / 100,
+             chip_info.revision % 100);
+    return description;
+}
+
 static void log_memory_sizes(void)
 {
     uint32_t flash_size_bytes = 0;

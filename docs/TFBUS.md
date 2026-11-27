@@ -2,8 +2,10 @@
 
 Zachowanie sterowników modułów oświetleniowych. Ramki i działanie metod odpowiadają przechwytom
 prawdziwej CLU sterującej tymi modułami (testy hosta `test_drivers` porównują je bajt po bajcie).
-Zdarzenia (OnValueChange, OnSwitchOn, …) nie są widoczne na magistrali, więc ich semantyka jest
-niezweryfikowana. Stan modułów: [README](../README.md#moduły-tf-bus).
+Zdarzenia (OnValueChange, OnSwitchOn, …) nie są widoczne na magistrali. Zdarzenia SMART_PANEL_FM_4
+(przyciski, gesty, zbliżenie, włączenie / wyłączenie wyświetlacza, czujniki temperatury i światła)
+sprawdzono na sprzęcie: ta sama akcja na panelu daje te same zdarzenia na prawdziwej CLU i na tym
+firmware. Semantyka zdarzeń pozostałych modułów jest niezweryfikowana. Stan modułów: [README](../README.md#moduły-tf-bus).
 
 - [Wspólne zasady](#wspólne-zasady)
 - [DIMMER_MOSFET_DIN](#dimmer_mosfet_din)
@@ -115,8 +117,10 @@ Status: `01 | 02 02 10 [U LE u16, 0,01 V]` (PowerSupplyVoltage) oraz po zmianie
 
 Behavior of lighting module drivers. Frames and method behavior match captures of a real CLU
 controlling these modules (host tests `test_drivers` compare them byte-for-byte). Events
-(OnValueChange, OnSwitchOn, …) are not visible on the bus, so their semantics are unverified.
-Module support status: [README](../README.md#moduły-tf-bus).
+(OnValueChange, OnSwitchOn, …) are not visible on the bus. SMART_PANEL_FM_4 events (buttons,
+gestures, proximity, display on / off, temperature and light sensors) were checked on hardware:
+the same panel action gives the same events on a real CLU and on this firmware. Event semantics of
+the other modules are unverified. Module support status: [README](../README.md#moduły-tf-bus).
 
 - [Common rules](#common-rules)
 - [DIMMER_MOSFET_DIN](#dimmer_mosfet_din-1)

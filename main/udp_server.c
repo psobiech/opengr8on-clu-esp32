@@ -402,11 +402,7 @@ static void on_set_ip(const char *request_text, const clu_cipher_t *used, bool b
     char response[64], cur[16];
     struct in_addr current_address = {.s_addr = clu_net_ip(nif)};
     inet_ntoa_r(current_address, cur, sizeof cur);
-    if (strcmp(ip, cur) == 0) {
-        snprintf(response, sizeof response, "resp_set_clu_ip:%08lx:%s", serial_number, cur);
-        send_str(used, response, from);
-        return;
-    }
+    // Persisted even when equal to the current address: pins a DHCP lease as static.
     if (!clu_net_set_static(nif, ip, gateway)) {
         send_str(used, "resp:ERROR", from);
         return;

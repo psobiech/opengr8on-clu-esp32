@@ -390,7 +390,8 @@ tryb PSRAM i konsola to opcje ESP-IDF: ustawia je target i `configs/sdkconfig.de
 | `CLU_WIFI_WPA3_ONLY` | n | odrzucaj AP z WPA2 |
 | `CLU_WIFI_MAX_TX_POWER` | 0 | moc nadawania w 0,25 dBm, 0 = domyślna sterownika |
 
-Adres IP: DHCP; statyczny ustawia OM przez `req_set_clu_ip` (zapisywany w NVS), osobno dla
+Adres IP: DHCP; statyczny ustawia OM przez `req_set_clu_ip` (zapisywany w NVS, także gdy równy
+bieżącemu adresowi z DHCP — wtedy go przypina), osobno dla
 każdego interfejsu: zmienia się konfiguracja tego, przez który przyszło żądanie (podsieć nadawcy;
 spoza obu podsieci: Ethernet). WiFi: przestrzeń NVS `clu_net` (jak dotąd), Ethernet: `clu_net_eth`;
 serwery DNS (cechy 25/26) są wspólne. W odpowiedziach (`resp:<ip>:…`) CLU podaje adres

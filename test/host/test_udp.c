@@ -667,7 +667,7 @@ static void test_set_ip(void)
     check_str("set_ip, wrong SN under the PIN key -> resp:ERROR", sent_str(0, &pk), "resp:ERROR");
     check_str("set_ip, malformed -> resp:ERROR", sent_str(1, &pk), "resp:ERROR");
 
-    // same IP as now: confirmed, nothing applied
+    // same IP as now (e.g. a DHCP lease): confirmed, pinned as static and applied
     sent_reset();
     char same[96];
     snprintf(same, sizeof same, "req_set_clu_ip:%08lx:192.168.1.20:192.168.1.1", (unsigned long)g_clu.sn);
@@ -677,7 +677,8 @@ static void test_set_ip(void)
     char want[64];
     snprintf(want, sizeof want, "resp_set_clu_ip:%08lx:192.168.1.20", (unsigned long)g_clu.sn);
     check_str("set_ip to the current IP: confirmed under the used key", sent_str(0, broadcast_key()), want);
-    check("set_ip to the current IP: not applied", s_net_applied == 0 && !s_net_ip[0]);
+    check("set_ip to the current IP: pinned as static and applied",
+          strcmp(s_net_ip, "192.168.1.20") == 0 && strcmp(s_net_gw, "192.168.1.1") == 0 && s_net_applied == 1);
 
     // new IP, saved: answer from the old address, then apply
     sent_reset();
@@ -687,7 +688,7 @@ static void test_set_ip(void)
     snprintf(want, sizeof want, "resp_set_clu_ip:%08lx:192.168.1.77", (unsigned long)g_clu.sn);
     check_str("set_ip: new IP confirmed", sent_str(0, &pk), want);
     check("set_ip: static IP + gateway stored and applied after the reply",
-          strcmp(s_net_ip, "192.168.1.77") == 0 && strcmp(s_net_gw, "192.168.1.1") == 0 && s_net_applied == 1);
+          strcmp(s_net_ip, "192.168.1.77") == 0 && strcmp(s_net_gw, "192.168.1.1") == 0 && s_net_applied == 2);
     check("set_ip: from an Ethernet peer -> Ethernet config", s_net_if == CLU_NET_ETH && s_net_if_applied == CLU_NET_ETH);
 
     // peer on the WiFi subnet: the WiFi config changes, the current IP compared is the WiFi one
@@ -699,7 +700,8 @@ static void test_set_ip(void)
     run_task(udp_task);
     snprintf(want, sizeof want, "resp_set_clu_ip:%08lx:10.0.0.20", (unsigned long)g_clu.sn);
     check_str("set_ip over WiFi to the current WiFi IP: confirmed", sent_str(0, &pk), want);
-    check("set_ip over WiFi to the current WiFi IP: not applied", s_net_applied == 1);
+    check("set_ip over WiFi to the current WiFi IP: pinned in the WiFi config",
+          s_net_if == CLU_NET_WIFI && strcmp(s_net_ip, "10.0.0.20") == 0 && s_net_applied == 3);
     snprintf(wreq, sizeof wreq, "req_set_clu_ip:%08lx:10.0.0.77:10.0.0.1", (unsigned long)g_clu.sn);
     sent_reset();
     rx_reset();
@@ -707,7 +709,7 @@ static void test_set_ip(void)
     run_task(udp_task);
     check("set_ip from a WiFi peer -> WiFi config stored and applied",
           s_net_if == CLU_NET_WIFI && s_net_if_applied == CLU_NET_WIFI && strcmp(s_net_ip, "10.0.0.77") == 0 &&
-              s_net_applied == 2);
+              s_net_applied == 4);
 
     // storing fails
     s_net_ok = false;
@@ -716,7 +718,7 @@ static void test_set_ip(void)
     rx_add_str(&pk, req, "192.168.1.50");
     run_task(udp_task);
     check_str("set_ip: store failure -> resp:ERROR", sent_str(0, &pk), "resp:ERROR");
-    check("set_ip: store failure -> not applied", s_net_applied == 2);
+    check("set_ip: store failure -> not applied", s_net_applied == 4);
     s_net_ok = true;
 }
 

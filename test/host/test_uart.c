@@ -361,6 +361,47 @@ int main(void)
     check("no wire: send OK, nothing sent", tfbus_uart_send(f, tfbus_discover(f, sizeof f)) == ESP_OK && s_txlen == 0);
     tfbus_uart_set_local(NULL);
 
+    // no DE pin (auto-direction transceiver, KinCony F8 / A8v3): plain UART mode, because RS485
+    // half-duplex mode resets the RX FIFO after TX and wiped the first byte of a fast reply
+    const tfbus_uart_cfg_t auto_direction = {.uart_num = 1, .tx_pin = 16, .rx_pin = 17, .de_pin = -1, .baud = 115200};
+    check("auto-direction: init", tfbus_uart_init(&auto_direction) == ESP_OK);
+    check("auto-direction: plain UART mode, no RTS", s_cfg.mode == UART_MODE_UART && s_cfg.rts == -1);
+    fl = tfbus_status_poll(f, sizeof f, 5);
+    reset();
+    rx_at(100, f, fl); // our own frame comes back
+    rx_at(400, r, rl);
+    n = tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
+    check("auto-direction: echo skipped, reply kept", n == (int)rl && memcmp(rx, r, rl) == 0);
+    reset();
+    for (size_t i = 0; i < fl; i++) {
+        rx_at(100 + 10 * (int64_t)i, f + i, 1);
+    }
+    for (size_t i = 0; i < rl; i++) {
+        rx_at(400 + 10 * (int64_t)i, r + i, 1);
+    }
+    n = tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
+    check("auto-direction: echo and reply byte by byte", n == (int)rl && memcmp(rx, r, rl) == 0);
+    reset();
+    rx_at(50, r, rl); // no echo: the reply's TFBUS_START matches the request's, then it differs
+    n = tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
+    check("auto-direction: no echo, fast reply keeps its first byte", n == (int)rl && memcmp(rx, r, rl) == 0);
+    reset();
+    rx_at(100, f, 2); // echo cut short by the reply
+    rx_at(150, r, rl);
+    n = tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
+    check("auto-direction: partial echo, reply still kept", n == (int)rl && memcmp(rx, r, rl) == 0);
+    reset();
+    dl = tfbus_discover(f, sizeof f);
+    rx_at(100, f, dl);
+    rx_at(369000, panel_reply, panel_length);
+    n = tfbus_uart_collect(f, dl, replies, 4, 1000, &garbled);
+    check("auto-direction: collect skips the echo, not garbled",
+          n == 1 && memcmp(replies[0].frame, panel_reply, panel_length) == 0 && !garbled);
+    reset();
+    rx_at(100, f, dl);
+    n = tfbus_uart_collect(f, dl, replies, 4, 1000, &garbled);
+    check("auto-direction: only the echo -> 0, not garbled", n == 0 && !garbled);
+
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

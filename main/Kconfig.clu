@@ -77,8 +77,7 @@ choice CLU_BOARD
             direction (TX 16, RX 17), DS3231 RTC, PCF8575 at 0x24 (relays P10-P17, inputs
             P00-P07) and SSD1306 OLED at 0x3c on I2C SDA 8 / SCL 18, GPIO inputs 48, 47, 21, 15, 14
             as a second module, setup button GPIO0. W5500
-            uses GPIO43/44, the UART0 console pins: the "f8" preset moves the console to
-            USB-Serial-JTAG.
+            uses GPIO43/44, the UART0 console pins: the console defaults to USB-Serial-JTAG.
             See docs/devices/kincony-f8.md.
 
     config CLU_BOARD_KINCONY_A8V3
@@ -109,7 +108,7 @@ choice CLU_BOARD
             W5500 (SCLK 1, MOSI 2, MISO 41, CS 42, INT 43, RST 44), RS485 with automatic
             direction (TX 39, RX 38), DS3231 RTC and PCF8575 at 0x22 (relays P00-P07, inputs
             P10-P17) on I2C SDA 8 / SCL 18, setup button GPIO0. W5500 uses GPIO43/44, the UART0
-            console pins: the "a8v3" preset moves the console to USB-Serial-JTAG.
+            console pins: the console defaults to USB-Serial-JTAG.
             See docs/devices/kincony-kc868-a8v3.md.
 
     config CLU_BOARD_CUSTOM
@@ -117,6 +116,13 @@ choice CLU_BOARD
         help
             Any other board: every pin, interface and chip option below is editable.
             See docs/devices/other-esp32-s3.md.
+endchoice
+
+# W5500 on GPIO43/44 (UART0 console pins): primary console on the native USB. Only a default, so
+# menuconfig can still change it. Kconfig.clu is read before ESP-IDF's Kconfig (root wrapper in
+# CMakeLists.txt) and the first default whose condition holds wins over ESP-IDF's UART default.
+choice ESP_CONSOLE_UART
+    default ESP_CONSOLE_USB_SERIAL_JTAG if CLU_BOARD_KINCONY_F8 || CLU_BOARD_KINCONY_A8V3
 endchoice
 
 config CLU_WIFI_REQUIRED

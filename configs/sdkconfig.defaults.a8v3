@@ -3,7 +3,3 @@
 # preset (CMakePresets.json):
 #   export IDF_PRESET=a8v3; idf.py build flash monitor
 CONFIG_CLU_BOARD_KINCONY_A8V3=y
-
-# W5500 INT / RST use GPIO43/44 (UART0 TX/RX): console on the native USB (USB-C) instead. ESP-IDF
-# choice, so the board option cannot set it.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

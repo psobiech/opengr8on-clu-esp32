@@ -16,6 +16,8 @@
 static const char *TAG = "tfbus_uart";
 static int s_uart = -1;
 static bool s_nowire; // initialised without a UART: only local endpoints answer
+static bool s_auto_direction; // no DE pin: plain UART mode, our own frame may come back as echo
+static bool s_echo_reported;  // whether the transceiver echoes was logged (once per boot)
 static tfbus_uart_local_fn_t s_local[TFBUS_UART_MAX_LOCAL];
 static int s_nlocal;
 
@@ -48,8 +50,8 @@ static int local(const uint8_t *request_frame, size_t request_length, uint8_t *r
 
 esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg)
 {
-    if (cfg->uart_num < 0) {
-        s_nowire = true;
+    s_nowire = cfg->uart_num < 0;
+    if (s_nowire) {
         ESP_LOGI(TAG, "no RS485 wire: emulated modules only");
         return ESP_OK;
     }
@@ -64,7 +66,12 @@ esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg)
     ESP_ERROR_CHECK(uart_driver_install(cfg->uart_num, 512, 0, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(cfg->uart_num, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(cfg->uart_num, cfg->tx_pin, cfg->rx_pin, cfg->de_pin, UART_PIN_NO_CHANGE));
-    ESP_ERROR_CHECK(uart_set_mode(cfg->uart_num, UART_MODE_RS485_HALF_DUPLEX));
+    // RS485 half-duplex mode resets the RX FIFO in the TX_DONE interrupt (to drop the echo) before
+    // releasing RTS. With DE on RTS the transceiver cannot receive until then, so nothing is lost.
+    // An auto-direction transceiver receives at once: a fast module's first reply byte can reach
+    // the FIFO before that interrupt runs and be wiped. Without DE: plain UART, echo skipped in receive().
+    s_auto_direction = cfg->de_pin < 0;
+    ESP_ERROR_CHECK(uart_set_mode(cfg->uart_num, s_auto_direction ? UART_MODE_UART : UART_MODE_RS485_HALF_DUPLEX));
     // ~3 byte times at 115200 -> frame boundary detection
     ESP_ERROR_CHECK(uart_set_rx_timeout(cfg->uart_num, 3));
     s_uart = cfg->uart_num;
@@ -108,9 +115,12 @@ typedef struct {
     bool listen_full_window; /**< Keep listening after the first reply (collect). */
     int got;               /**< Replies kept. */
     size_t framed_bytes;   /**< Received bytes that formed frames (any frame, kept or not). */
+    size_t echo_matched;   /**< Bytes of our own request seen back so far (auto-direction echo). */
+    bool echo_done;        /**< Echo over (complete, mismatched or not expected). */
 } collect_t;
 
 static int receive(collect_t *collector, int timeout_ms);
+static size_t skip_echo(collect_t *collector, tfbus_rx_t *parser, const uint8_t *chunk, size_t chunk_length);
 static void on_frame(const uint8_t *frame, size_t len, void *ctx);
 
 int tfbus_uart_transact(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity, int timeout_ms)
@@ -163,7 +173,7 @@ int tfbus_uart_collect(const uint8_t *request_frame, size_t request_length, tfbu
 
 /**
  * @brief Read the wire until the first kept reply (or, with listen_full_window, until the timeout).
- * @return Bytes received.
+ * @return Bytes received, without the echo of our own request.
  */
 static int receive(collect_t *collector, int timeout_ms)
 {
@@ -173,6 +183,7 @@ static int receive(collect_t *collector, int timeout_ms)
     uint8_t chunk[64];
     uint8_t raw[24];
     size_t nraw = 0, total = 0;
+    collector->echo_done = !s_auto_direction;
     while (collector->listen_full_window || collector->got == 0) {
         int64_t left_us = deadline - esp_timer_get_time();
         if (left_us <= 0) {
@@ -196,11 +207,14 @@ static int receive(collect_t *collector, int timeout_ms)
                 bytes_read += extra_bytes_read;
             }
         }
-        for (int i = 0; i < bytes_read && nraw < sizeof raw; i++) {
-            raw[nraw++] = chunk[i];
+        size_t echo_length = skip_echo(collector, &parser, chunk, (size_t)bytes_read);
+        const uint8_t *received = chunk + echo_length;
+        size_t received_length = (size_t)bytes_read - echo_length;
+        for (size_t i = 0; i < received_length && nraw < sizeof raw; i++) {
+            raw[nraw++] = received[i];
         }
-        total += (size_t)bytes_read;
-        tfbus_rx_push(&parser, chunk, (size_t)bytes_read, on_frame, collector);
+        total += received_length;
+        tfbus_rx_push(&parser, received, received_length, on_frame, collector);
     }
     // Discovery diagnostics: a broadcast got bytes back that do not parse (collision / turnaround).
     const uint8_t *request_frame = collector->request_frame;
@@ -216,10 +230,42 @@ static int receive(collect_t *collector, int timeout_ms)
 }
 
 /**
+ * @brief Length of the echo of our own request at the start of @p chunk.
+ *
+ * Plain UART mode (no DE pin) keeps receiving while we transmit, so an auto-direction transceiver
+ * may hand our frame back ahead of the reply. Bytes equal to the request, in order, are echo. On
+ * the first byte that differs the echo ends: the bytes held back so far go to @p parser after all
+ * (a reply also starts with TFBUS_START).
+ */
+static size_t skip_echo(collect_t *collector, tfbus_rx_t *parser, const uint8_t *chunk, size_t chunk_length)
+{
+    size_t echo_length = 0;
+    while (!collector->echo_done && echo_length < chunk_length) {
+        if (chunk[echo_length] != collector->request_frame[collector->echo_matched]) {
+            tfbus_rx_push(parser, collector->request_frame, collector->echo_matched, on_frame, collector);
+            collector->echo_done = true;
+            if (!s_echo_reported && collector->echo_matched <= 1) { // a reply right away: no echo
+                s_echo_reported = true;
+                ESP_LOGI(TAG, "auto-direction transceiver: no echo of our own frames");
+            }
+            break;
+        }
+        echo_length++;
+        collector->echo_matched++;
+        collector->echo_done = collector->echo_matched == collector->request_length;
+    }
+    if (!s_echo_reported && collector->echo_done && collector->echo_matched == collector->request_length) {
+        s_echo_reported = true;
+        ESP_LOGI(TAG, "auto-direction transceiver: echoes our own frames (skipped)");
+    }
+    return echo_length;
+}
+
+/**
  * @brief RX parser callback: keep module -> CLU frames.
  *
- * The UART drops our own TX in RS485 half-duplex mode (ESP-IDF clears rs485tx_rx_en), so no echo
- * reaches the parser.
+ * The UART drops our own TX in RS485 half-duplex mode (ESP-IDF clears rs485tx_rx_en); in plain
+ * UART mode (no DE pin) skip_echo() removes it, so no echo reaches the parser.
  * @param frame Complete frame.
  * @param len   Frame length.
  * @param ctx   ::collect_t.

@@ -21,7 +21,9 @@ z końcówką `-N8R8` (bez RS485). Pozostałe profile ESP32-S3 nadal wymagają 1
 - Użyj transceivera 3,3 V (MAX3485, SP3485, THVD1450) albo izolowanego (ADM2587E, ISO3082).
   Moduł MAX485 na 5 V wystawia RO na poziomie 5 V, czego GPIO S3 nie tolerują.
 - Moduły z automatycznym kierunkiem (bez pinu DE) działają z `CLU_RS485_DE_GPIO=-1`. Wolniej
-  przełączają kierunek, więc szybko odpowiadające moduły mogą zostać pominięte.
+  przełączają kierunek, więc szybko odpowiadające moduły mogą zostać pominięte. Bez pinu DE UART
+  pracuje w zwykłym trybie (nie RS485 half-duplex): ten tryb czyści bufor odbioru po nadaniu i
+  gubił pierwszy bajt szybkiej odpowiedzi (np. Grenton SMART PANEL); własne echo jest pomijane.
 - Zamontuj terminator 120 Ω po stronie CLU oraz rezystory polaryzujące, jeśli transceiver nie ma
   funkcji fail-safe.
 - **Nigdy nie podłączaj dwóch masterów (prawdziwej CLU i tej) do tej samej magistrali.**
@@ -51,7 +53,9 @@ ending in `-N8R8` (no RS485). Other ESP32-S3 profiles still require 16 MB flash.
 - Use a 3.3 V transceiver (MAX3485, SP3485, THVD1450) or an isolated one (ADM2587E, ISO3082).
   A 5 V MAX485 module drives RO at 5 V, which ESP32-S3 GPIOs do not tolerate.
 - Auto-direction modules (without a DE pin) work with `CLU_RS485_DE_GPIO=-1`. They switch direction
-  more slowly, so fast-responding modules may be missed.
+  more slowly, so fast-responding modules may be missed. Without a DE pin the UART runs in plain
+  mode (not RS485 half-duplex): that mode clears the receive buffer after sending and lost the first
+  byte of a fast reply (e.g. Grenton SMART PANEL); our own echo is skipped.
 - Fit a 120 Ω terminator on the CLU side and biasing resistors if the transceiver lacks fail-safe
   support.
 - **Never connect two masters (a real CLU and this one) to the same bus.**

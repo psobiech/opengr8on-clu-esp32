@@ -19,7 +19,7 @@ typedef struct {
     int uart_num;   /**< UART port number; < 0 = no wire (only local endpoints, e.g. emulated modules). */
     int tx_pin;     /**< TX GPIO. */
     int rx_pin;     /**< RX GPIO. */
-    int de_pin;     /**< RS485 driver-enable GPIO (UART RTS). */
+    int de_pin;     /**< RS485 driver-enable GPIO (UART RTS); < 0 = auto-direction transceiver (plain UART mode). */
     int baud;       /**< Baud rate. */
 } tfbus_uart_cfg_t;
 

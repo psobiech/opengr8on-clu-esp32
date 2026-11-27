@@ -501,6 +501,7 @@ wykrywa CLU, pokazuje moduły, wartości na żywo i logi (telnet).
 | `CLU_MQTT_HA_PREFIX` | `homeassistant` | prefiks discovery |
 | `CLU_MQTT_DIAGNOSTICS` | y | encje diagnostyczne firmware |
 | `CLU_MQTT_DIAG_INTERVAL` | 30 s | próbkowanie diagnostyki |
+| `CLU_MQTT_LOG` | **n** | log (ESP_LOG, Lua `print`) na `<base>/system/log`, linia na wiadomość, QoS 0; bufor `CLU_MQTT_LOG_BUFFER` (4096 B) na czas rozłączenia |
 | `CLU_MQTT_OBJECT_API` | **n** | surowe API obiektów (zob. niżej) |
 
 Klient łączy się, gdy CLU dostanie adres IP (bez czekania na skrypty Lua), o ile cecha lokalnej
@@ -576,6 +577,7 @@ tylko przy zmianie.
 <base>/system/network/rssi | ip                        dBm | text
 <base>/system/tfbus/online | total | missed_polls      counters
 <base>/system/tfbus/modules/<module>                   ON/OFF
+<base>/system/log                                      linie logu (CLU_MQTT_LOG, nie retained)
 ```
 
 ### Surowe API obiektów

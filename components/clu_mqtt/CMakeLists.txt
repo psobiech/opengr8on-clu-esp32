@@ -2,7 +2,7 @@ idf_component_register(
     SRCS "clu_mqtt.c"
     INCLUDE_DIRS "include"
     REQUIRES clu_lua lua
-    PRIV_REQUIRES mqtt mbedtls
+    PRIV_REQUIRES mqtt mbedtls esp_ringbuf log
 )
 
 # ESP-IDF first evaluates this file in script mode to collect requirements; build commands

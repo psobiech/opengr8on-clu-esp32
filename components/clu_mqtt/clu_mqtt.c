@@ -5,10 +5,12 @@
  * The MQTT task only queues inbound commands; mqtt.lua (Lua task) polls them with
  * `__clu.mqtt_recv()`, publishes state and Home Assistant discovery, and republishes everything when
  * the connection generation changes. Retained `<root>/status` online/offline is the availability
- * topic (LWT).
+ * topic (LWT). With CONFIG_CLU_MQTT_LOG a vprintf hook also forwards the log to `<root>/system/log`.
  */
 #include "clu_mqtt.h"
 
+#include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +20,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/ringbuf.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "mqtt_client.h"
@@ -76,6 +79,13 @@ static const char *password(void) { return setting(s_cfg.password, CONFIG_CLU_MQ
 static bool s_running;
 static volatile bool s_connected;
 static volatile int s_gen; // bumped on every (re)connect: the Lua side republishes everything
+
+#if CONFIG_CLU_MQTT_LOG
+static void log_forwarding_start(void);
+static int log_hook(const char *format, va_list arguments);
+static void log_queue_line(const char *format, va_list arguments);
+static void log_publish_task(void *arg);
+#endif
 
 bool clu_mqtt_connected(void)
 {
@@ -431,4 +441,110 @@ void clu_mqtt_init(const clu_mqtt_cfg_t *cfg)
     if (s_online) {
         apply(); // network came up before init
     }
+#if CONFIG_CLU_MQTT_LOG
+    log_forwarding_start();
+#endif
 }
+
+#if CONFIG_CLU_MQTT_LOG
+// ---------------------------------------------------------------------------
+// Log forwarding: every log line -> <root>/system/log (QoS 0, not retained)
+// ---------------------------------------------------------------------------
+#define LOG_LINE_MAX             256 // one formatted log line (on the logging task's stack); longer lines are cut
+#define LOG_DISCONNECTED_POLL_MS 500
+
+static RingbufHandle_t s_log_ring; // whole lines, without line ends; full = newer lines dropped
+static TaskHandle_t s_log_task;
+static vprintf_like_t s_log_previous_vprintf;
+static atomic_uint s_log_dropped_lines;
+static char s_log_topic[80];
+
+/**
+ * @brief Create the line buffer and the publishing task, then hook the log output (chained to the
+ * previous hook: UART, telnet).
+ */
+static void log_forwarding_start(void)
+{
+    snprintf(s_log_topic, sizeof s_log_topic, "%s/system/log", s_root);
+    s_log_ring = xRingbufferCreate(CONFIG_CLU_MQTT_LOG_BUFFER, RINGBUF_TYPE_NOSPLIT);
+    if (!s_log_ring) {
+        ESP_LOGE(TAG, "no memory for %d byte log buffer, log forwarding off", CONFIG_CLU_MQTT_LOG_BUFFER);
+        return;
+    }
+    // TLS writes run on this task's stack.
+    if (xTaskCreate(log_publish_task, "mqtt_log", 4096, NULL, 1, &s_log_task) != pdPASS) {
+        ESP_LOGE(TAG, "no memory for the log task, log forwarding off");
+        vRingbufferDelete(s_log_ring);
+        s_log_ring = NULL;
+        return;
+    }
+    s_log_previous_vprintf = esp_log_set_vprintf(log_hook);
+}
+
+/** @brief vprintf hook: print as before, then queue the formatted line. Any task, inside the log call. */
+static int log_hook(const char *format, va_list arguments)
+{
+    va_list arguments_copy;
+    va_copy(arguments_copy, arguments);
+    int printed_count = s_log_previous_vprintf(format, arguments);
+    // The publishing task's own log lines (esp-mqtt errors) would feed back into the buffer.
+    if (!xPortInIsrContext() && xTaskGetCurrentTaskHandle() != s_log_task) {
+        log_queue_line(format, arguments_copy);
+    }
+    va_end(arguments_copy);
+    return printed_count;
+}
+
+/**
+ * @brief Format one line into the ring buffer without its line end; never blocks.
+ *
+ * Separate (noinline) from log_hook() so the line buffer is not on the stack while the previous
+ * hook (telnet: its own line buffer) runs.
+ */
+static __attribute__((noinline)) void log_queue_line(const char *format, va_list arguments)
+{
+    char line[LOG_LINE_MAX];
+    int line_length = vsnprintf(line, sizeof line, format, arguments);
+    if (line_length <= 0) {
+        return;
+    }
+    if (line_length >= (int)sizeof line) {
+        line_length = sizeof line - 1;
+        memcpy(line + line_length - 3, "...", 3);
+    }
+    while (line_length > 0 && (line[line_length - 1] == '\n' || line[line_length - 1] == '\r')) {
+        line_length--;
+    }
+    if (line_length > 0 && xRingbufferSend(s_log_ring, line, line_length, 0) != pdTRUE) {
+        atomic_fetch_add(&s_log_dropped_lines, 1);
+    }
+}
+
+/**
+ * @brief Publish buffered lines while the broker is connected; while it is not, they wait in the
+ * ring buffer (boot log arrives after the first connect).
+ */
+static void log_publish_task(void *arg)
+{
+    for (;;) {
+        if (!s_connected) {
+            vTaskDelay(pdMS_TO_TICKS(LOG_DISCONNECTED_POLL_MS));
+            continue;
+        }
+        size_t line_length;
+        char *line = xRingbufferReceive(s_log_ring, &line_length, pdMS_TO_TICKS(1000));
+        if (!line) {
+            continue;
+        }
+        unsigned dropped_lines = atomic_exchange(&s_log_dropped_lines, 0);
+        if (dropped_lines) {
+            char notice[48];
+            int notice_length = snprintf(notice, sizeof notice, "(%u log lines dropped)", dropped_lines);
+            esp_mqtt_client_publish(s_client, s_log_topic, notice, notice_length, 0, 0);
+        }
+        // Blocking (bounded by the network timeout): a slow broker slows this task, not the loggers.
+        esp_mqtt_client_publish(s_client, s_log_topic, line, (int)line_length, 0, 0);
+        vRingbufferReturnItem(s_log_ring, line);
+    }
+}
+#endif

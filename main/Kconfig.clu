@@ -1065,6 +1065,25 @@ menu "OpenGr8on MQTT / Home Assistant"
             Heap, RSSI etc. change all the time: they are sampled (and published when changed)
             at this interval instead of every state scan.
 
+    config CLU_MQTT_LOG
+        bool "Publish log output (diagnostic)"
+        default n
+        help
+            Every ESP_LOG line (also Lua print / DebugLog) at or above the runtime log level is
+            published to <root>/system/log, one message per line, QoS 0, not retained.
+            Lines logged while the broker is not connected wait in a RAM buffer and are sent
+            after (re)connecting; when the buffer is full, newer lines are dropped and a
+            "(N log lines dropped)" notice follows. Lines logged before MQTT init (early boot)
+            and the discovery PIN line are never captured.
+            Logs show IPs, object names and errors: anyone who can subscribe on the broker
+            reads them, so restrict the topic with broker ACLs.
+
+    config CLU_MQTT_LOG_BUFFER
+        int "Log buffer [bytes, internal RAM]"
+        range 1024 32768
+        default 4096
+        depends on CLU_MQTT_LOG
+
     config CLU_MQTT_OBJECT_API
         bool "Raw object API (get/set any feature, call any method)"
         default n

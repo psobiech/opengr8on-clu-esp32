@@ -548,7 +548,7 @@ konfiguracja retained `homeassistant/device/<object_id>/config` z encjami w `cmp
 | `opengr8on_CLU<serial>_var` | cechy użytkownika CLU |
 | `opengr8on_CLU<serial>_system` | diagnostyka firmware (`CLU_MQTT_DIAGNOSTICS`) |
 | `opengr8on_CLU<serial>_<moduł>` | moduł (osobne urządzenie HA) |
-| `opengr8on_CLU<serial>_<obiekt>` | obiekt z `subdevice = true` (przycisk i ekran panelu): urządzenie pod modułem |
+| `opengr8on_CLU<serial>_<obiekt>` | obiekt z `subdevice = true` (przycisk i ekran panelu, LED_CHANNEL, LED_CCT): urządzenie pod modułem |
 
 Pierwsze trzy to jedno urządzenie HA (te same `ids`). Konfiguracje są wysyłane przy każdym połączeniu
 i gdy HA opublikuje `online` na `homeassistant/status`. Encja, która zniknęła po zmianie OM.LUA lub
@@ -561,9 +561,9 @@ starszego firmware (`homeassistant/<component>/opengr8on_CLU<serial>/<id>/config
 | DOUT (4) | `switch` | ON/OFF → SwitchOn/SwitchOff |
 | DIN (3) | `binary_sensor` + `event` | — |
 | DIMM (5) | `light` (schemat JSON, `brightness`) | jasność → Value; ON → SwitchOn (ostatnia wartość), OFF → SwitchOff; `transition` → Ramp (ON/OFF) |
-| LED_CHANNEL (49) | `light` (schemat JSON, `brightness`) | jasność → SetValue; ON → SwitchOn (ostatnia wartość), OFF → SwitchOff; `transition` → Ramp |
-| LED_CCT (72) | `light` (schemat JSON, `color_temp`, 2700–6500 K) | jak LED_CHANNEL + temperatura → SetColorTemp |
-| LEDRGB (9) | `light` (schemat JSON, `rgbw`) | kolor/jasność → SetRGBvalue + SetWhiteValue; ON → ostatni kolor, OFF → SwitchOff; `transition` → Ramp |
+| LED_CHANNEL (49) | własne urządzenie pod modułem: `light` (schemat JSON, `brightness`), `event` (value_change, switch_on/off, value_rise/lower, out_of_range), `number` Ramp Time (config) | jasność → SetValue; ON → SwitchOn (ostatnia wartość), OFF → SwitchOff; `transition` → Ramp; Ramp Time → RampTime (0–15000 ms) |
+| LED_CCT (72) | własne urządzenie pod modułem: `light` (schemat JSON, `color_temp`, 2700–6500 K), `event` (value_change, color_temp_change, switch_on/off, out_of_range), `number` Ramp Time (config) | jak LED_CHANNEL + temperatura → SetColorTemp |
+| LEDRGB (9) | `light` (schemat JSON, `rgbw`), `event` (jak LED_CHANNEL), `number` Ramp Time / Red / Green / Blue Correction (config) | kolor/jasność → SetRGBvalue + SetWhiteValue; ON → ostatni kolor, OFF → SwitchOff; `transition` → Ramp; Ramp Time → RampTime (0–15000 ms), korekcje → Red/Green/BlueCorrection (0–100 %) |
 | BUTTON (7) | `event` (press, release, short_press, long_press, hold, click) | — |
 | PANEL_BUTTON (30) | własne urządzenie pod panelem: `event` jak BUTTON, `button` LED Green On / LED Red On / LED Off / LED Green Blink / LED Red Blink, `text` Label, `select` Mode | PRESS → LedSwitchOn / RedLedSwitchOn / LedSwitchOff / ShowOK / ShowError (panel nie zgłasza stanu LED); Label → SetLabel (do 15 znaków); Mode → SetMode (Monostable / Bistable / Locked) |
 | ROLLER_SHUTTER (24) | `cover` (0 zamknięta … 100 otwarta) | OPEN/CLOSE → HoldUp/HoldDown, STOP, pozycja → SetPosition |

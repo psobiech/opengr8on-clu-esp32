@@ -276,6 +276,25 @@ check("LED_CCT -> color_temp light", cct and cct.p:find('"sup_clrm":["color_temp
 check("LED_CCT state (off)", (find("grenton/CLU100000001/CCT0001/state") or {}).p == '{"color_mode":"color_temp","color_temp":4600,"state":"OFF"}')
 check("LEDRGB state", (find("grenton/CLU100000001/LED0001/state") or {}).p
   == '{"brightness":200,"color":{"b":0,"g":128,"r":255,"w":64},"color_mode":"rgbw","state":"ON"}')
+local led_event, led_ramp = config("event", "LED0001_event"), config("number", "LED0001_3")
+check("LEDRGB -> events, Ramp Time and R/G/B Correction numbers (config) on the module device",
+  led_event and led_event.p:find('"evt_typ":["value_change","switch_on","switch_off","value_rise","value_lower","out_of_range"]', 1, true)
+  and not led_event.p:find('"dev_cla"', 1, true)
+  and led_event.t == led.t
+  and led_ramp and led_ramp.p:find('"name":"LED0001 Ramp Time"', 1, true) and led_ramp.p:find('"max":15000', 1, true)
+  and led_ramp.p:find('"ent_cat":"config"', 1, true)
+  and (config("number", "LED0001_4") or {}).p:find('"name":"LED0001 Red Correction"', 1, true)
+  and (config("number", "LED0001_5") or {}).p:find('"name":"LED0001 Green Correction"', 1, true)
+  and (config("number", "LED0001_6") or {}).p:find('"name":"LED0001 Blue Correction"', 1, true)
+  and (config("number", "LED0001_6") or {}).p:find('"max":100', 1, true))
+check("LED_CHANNEL: own device under the module (light, events, Ramp Time)",
+  lch and lch.t == DEVICE_CFG .. NODE .. "_LCH0001/config" and not lch.p:find('"name"', 1, true)
+  and encoded(lch.node.dev.via_device) == '"opengr8on_CLU100000001_20c85581"'
+  and (config("event", "LCH0001_event") or {}).t == lch.t
+  and (config("number", "LCH0001_3") or {}).p:find('"name":"Ramp Time"', 1, true))
+check("LED_CCT: own device, colour temperature event",
+  cct and cct.t == DEVICE_CFG .. NODE .. "_CCT0001/config"
+  and (config("event", "CCT0001_event") or {}).p:find('"evt_typ":["value_change","color_temp_change","switch_on","switch_off","out_of_range"]', 1, true))
 check("no entity for POW/STO/remote CLU", config("switch", "CLU100000002") == nil
   and config("sensor", "STO99999") == nil
   and count("grenton/CLU100000001/CLU100000002") == 0)
@@ -678,12 +697,22 @@ light("CCT0001", "OFF")
 check("LED_CCT OFF -> SwitchOff", call(1) == "CCT0001,5,0,nil,nil")
 run(2)
 check("LED_CCT state (on)", (find("grenton/CLU100000001/CCT0001/state") or {}).p == '{"brightness":100,"color_mode":"color_temp","color_temp":4600,"state":"ON"}')
+command("LED0001_3/set", "20000")
+command("LED0001_4/set", "80")
+check("LEDRGB Ramp Time (clamped) / Red Correction -> features", LED0001:get(7) == 15000 and LED0001:get(10) == 80)
+command("CCT0001_3/set", "500")
+check("LED_CCT Ramp Time -> feature 5", CCT0001:get(5) == 500)
 
 -- ---- events -----------------------------------------------------------------------
 __fire("DIN0001", 6)
 run(1)
 local e = find("grenton/CLU100000001/DIN0001/event")
 check("button click event", e ~= nil and e.p == '{"event_type":"click"}' and e.r == false)
+__fire("LED0001", 5); __fire("CCT0001", 1)
+run(1)
+check("LEDRGB OnOutOfRange / LED_CCT OnColorTempChange events",
+  (find("grenton/CLU100000001/LED0001/event") or {}).p == '{"event_type":"out_of_range"}'
+  and (find("grenton/CLU100000001/CCT0001/event") or {}).p == '{"event_type":"color_temp_change"}')
 __fire("DIN0001", 4); __fire("DIN0001", 4)
 run(1)
 local n_ev = 0

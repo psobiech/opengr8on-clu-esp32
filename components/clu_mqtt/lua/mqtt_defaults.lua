@@ -40,6 +40,32 @@ local read_x, write_x = panel_setting("x")
 local read_y, write_y = panel_setting("y")
 local read_font, write_font = panel_setting("font")
 
+-- LED_RGBW_DIN (drv_ledrgb.c, drv_ledch.c): the light, its Grenton events and RampTime (ms) as a
+-- config number; LEDRGB also the R/G/B corrections (%).
+local LIGHT_EVENTS = { [0] = "value_change", [1] = "switch_on", [2] = "switch_off", [3] = "value_rise",
+                       [4] = "value_lower", [5] = "out_of_range" }               -- LEDRGB, LED_CHANNEL
+local CCT_EVENTS = { [0] = "value_change", [1] = "color_temp_change", [2] = "switch_on",
+                     [3] = "switch_off", [4] = "out_of_range" }                   -- LED_CCT
+
+local function ramp_time_number(feature, subdevice)
+  return { kind = "number", feature = feature, min = 0, max = 15000, step = 10, unit = "ms",
+           name_suffix = "Ramp Time", icon = "mdi:timer-outline", entity_category = "config",
+           subdevice = subdevice }
+end
+
+local function correction_number(feature, colour)
+  return { kind = "number", feature = feature, min = 0, max = 100, step = 1, unit = "%",
+           name_suffix = colour .. " Correction", icon = "mdi:tune-vertical", entity_category = "config" }
+end
+
+-- LED_CHANNEL / LED_CCT: each its own device under the module (the module declares all of them
+-- next to the LEDRGB, whichever OM uses).
+local function channel_entities(events, ramp_feature)
+  return { { kind = "light", subdevice = true },
+           { kind = "event", events = events, device_class = false, subdevice = true },
+           ramp_time_number(ramp_feature, true) }
+end
+
 local DEFAULTS = {
   [3] = { { kind = "binary_sensor" }, { kind = "event" } },                         -- DIN
   [4] = { { kind = "switch" } },                                                    -- DOUT
@@ -54,7 +80,11 @@ local DEFAULTS = {
          { kind = "button", name_suffix = "start", execute = 0 },
          { kind = "button", name_suffix = "stop", execute = 1 } },                   -- Timer
   [7] = { { kind = "event" } },                                                     -- BUTTON
-  [9] = { { kind = "light" } },                                                     -- LEDRGB
+  [9] = { { kind = "light" },
+          { kind = "event", events = LIGHT_EVENTS, device_class = false },
+          ramp_time_number(7),
+          correction_number(10, "Red"), correction_number(11, "Green"),
+          correction_number(12, "Blue") },                                          -- LEDRGB
   [12] = { { kind = "sensor", device_class = "voltage", unit = "V" } },            -- PowerSupplyVoltage
   -- Calendar: State (Start / Stop), ToNextRun [min], OnCalendar
   [15] = { { kind = "switch", feature = 3, on = 0, off = 1 },
@@ -99,8 +129,8 @@ local DEFAULTS = {
            { kind = "switch", feature = 5, name_suffix = "locked" } },              -- PresenceSensor v2
   [47] = { { kind = "sensor" } },                                                   -- Statistics
   [48] = { { kind = "sensor", feature = 10, state_class = "total_increasing" } },   -- StatisticsPulse
-  [49] = { { kind = "light" } },                                                    -- LED_CHANNEL
-  [72] = { { kind = "light" } },                                                    -- LED_CCT
+  [49] = channel_entities(LIGHT_EVENTS, 1),                                         -- LED_CHANNEL
+  [72] = channel_entities(CCT_EVENTS, 5),                                           -- LED_CCT
   [73] = { { kind = "sensor", feature = 1, name_suffix = "active sensors",           -- ONE_WIRE_HUB
              icon = "mdi:thermometer-lines", entity_category = "diagnostic" },
            { kind = "button", execute = 0, name_suffix = "refresh sensors",

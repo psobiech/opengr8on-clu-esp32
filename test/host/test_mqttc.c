@@ -254,7 +254,7 @@ int main(void)
     check("connected: 'online' retained, generation bumped", clu_mqtt_connected() && s_gen == 1 &&
                                                              !strcmp(s_pubs[0], "grenton/CLU330017203/status=online q1 r1"));
     static const char *want_subs[] = {
-        "grenton/CLU330017203/+/set", "grenton/CLU330017203/+/position/set", "grenton/CLU330017203/system/+/+/set",
+        "grenton/CLU330017203/+/set", "grenton/CLU330017203/+/+/set", "grenton/CLU330017203/system/+/+/set",
         "grenton/CLU330017203/+/feature/+/get", "grenton/CLU330017203/+/feature/+/set",
         "grenton/CLU330017203/+/execute/+", "homeassistant/status",
     };

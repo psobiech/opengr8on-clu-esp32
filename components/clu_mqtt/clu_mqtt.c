@@ -98,14 +98,17 @@ bool clu_mqtt_connected(void)
 // esp-mqtt events (MQTT task)
 // ---------------------------------------------------------------------------
 /**
- * @brief Subscribe to the command topics (`<root>/+/set`, position, system tree, object API, HA birth).
+ * @brief Subscribe to the command topics (`<root>/+/set`, `<root>/+/+/set`, system tree, object API,
+ *        HA birth).
  */
 static void subscribe_all(esp_mqtt_client_handle_t client_handle)
 {
     char topic_buffer[MAX_TOPIC];
     snprintf(topic_buffer, sizeof topic_buffer, "%s/+/set", s_root);
     esp_mqtt_client_subscribe(client_handle, topic_buffer, 0);
-    snprintf(topic_buffer, sizeof topic_buffer, "%s/+/position/set", s_root);
+    // Second level: object sub-commands (position/set, temperature/set, preset/set, mode/set) and
+    // user features ("<root>/var/<name>/set").
+    snprintf(topic_buffer, sizeof topic_buffer, "%s/+/+/set", s_root);
     esp_mqtt_client_subscribe(client_handle, topic_buffer, 0);
     // Firmware entities live in a tree: "<root>/system/clu/restart/set".
     snprintf(topic_buffer, sizeof topic_buffer, "%s/system/+/+/set", s_root);

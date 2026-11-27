@@ -28,6 +28,9 @@ niezweryfikowana. Stan modułów: [README](../README.md#moduły-tf-bus).
   `02 02 10 [U LE u16, 0,01 V]`. Value% = U / MaxValue × 100 bez zaokrąglania (prawdziwe CLU:
   23,13 V przy MaxValue 24 → 96,375). Zdarzenia zmiany co Sensitivity, OnOutOfRange / OnInRange
   przy przekroczeniu MinValue / MaxValue. IO_MODULE_DIN_8 wysyła ten sam rekord, niesprawdzony.
+- Czujniki paneli (temperatura, światło): pierwsza ramka stanu po zaadresowaniu przychodzi przed
+  uruchomieniem OM.LUA. Wartość jest zapamiętana i trafia do Value w chwili utworzenia obiektu, bez
+  zdarzeń (panel raportujący tylko zmiany miałby inaczej Value 0 do następnej zmiany).
 - `Switch*` z `Time > 0` po upływie czasu przywraca poprzednią wartość.
 - `Hold*` (wywoływane z OnHold przycisku): przerwa dłuższa niż ok. 0,5 s zaczyna nowe
   przytrzymanie w przeciwnym kierunku (od końca zakresu zawsze w stronę środka).
@@ -135,6 +138,9 @@ Module support status: [README](../README.md#moduły-tf-bus).
   `02 02 10 [U LE u16, 0.01 V]`. Value% = U / MaxValue × 100, not rounded (real CLU: 23.13 V with
   MaxValue 24 → 96.375). Change events every Sensitivity, OnOutOfRange / OnInRange when crossing
   MinValue / MaxValue. IO_MODULE_DIN_8 sends the same record, unverified.
+- Panel sensors (temperature, light): the first state frame after addressing arrives before
+  OM.LUA runs. The value is kept and becomes Value when the object is created, without events (a
+  panel that reports only changes would otherwise show Value 0 until the next change).
 - `Switch*` with `Time > 0` restores the previous value once the timer expires.
 - `Hold*` (called from a button's OnHold): a gap longer than approx. 0.5 s starts a new hold in the
   opposite direction (from either end of the range, always toward the middle).

@@ -691,10 +691,11 @@ int main(void)
         status(m, "03 06 01 01 00 07 02 10 d7 00 08 02 10 12 00"); // touch-panel style event record
         check_posts("SMART_PANEL TLV button event record: ignored", "");
 
-        // ext byte (10), frames of a real panel; events as the real CLU fired them
+        // ext byte (10), frames of a real panel; events as the real CLU fired them. The frames
+        // above already carried 23.0 C: PT gets it when declared, the same first frame posts nothing.
+        posts_reset();
         m->drv->io_new(m, 29, 0, "PAN");
         m->drv->io_new(m, 20, 0, "PT");
-        posts_reset();
         status(m, "00 00 00 00 e6 00 14 00 00 00 00 cc 01");
         status(m, "00 00 00 00 00 00 00 00 00 00 80 00 00"); // display off
         status(m, "01 00 00 00 00 00 00 00 00 00 80 00 00"); // display on (byte 0 is not a button)
@@ -1002,6 +1003,25 @@ int main(void)
         drv_queue_frame(m, 0x30, big, 1);
         s_queue_full = false;
         check_frames("queue helpers: oversized records / full queue dropped (logged)", "");
+    }
+
+    // ---------------- SMART_PANEL_FM_4: state frame before OM.LUA declares the sensors
+    {
+        // The first poll after addressing comes before OM.LUA runs; a panel that reports the
+        // temperature only on change must not leave Value 0 until the next change.
+        tfbus_module_t *m = module(&tfbus_drv_smart_panel_fm4, 0x17);
+        posts_reset();
+        status(m, "00 00 00 00 d5 00 64 00 00 00 00 00 00"); // 21.3 C, light 10.0 %
+        check_posts("SMART_PANEL state before the sensors are declared: nothing posted", "");
+        m->drv->io_new(m, 20, 0, "EARLYT");
+        m->drv->io_new(m, 21, 0, "EARLYL");
+        check_posts("SMART_PANEL sensors declared: the earlier values posted, no events",
+                    "EARLYT[0]=21.3 EARLYL[0]=10 ");
+        posts_reset();
+        status(m, "00 00 00 00 d5 00 64 00 00 00 00 00 00");
+        status(m, "00 00 00 00 d6 00 64 00 00 00 00 00 00");
+        check_posts("SMART_PANEL after declaring: same value nothing, change -> Value + events",
+                    "EARLYT[0]=21.4 EARLYT!0 EARLYT!1 ");
     }
 
     // ---------------- SMART_PANEL_FM_4: runtime features, sensors, freedraw, button LEDs

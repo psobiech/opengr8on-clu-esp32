@@ -357,9 +357,9 @@ static void io_new(tfbus_module_t *module, int cls, int channel_index, const cha
     } else if (cls == CLS_PANEL && channel_index == 0) {
         strlcpy(panel_state->panel_name, name, sizeof panel_state->panel_name);
     } else if (cls == CLS_TEMP) {
-        strlcpy(panel_state->temp.name, name, sizeof panel_state->temp.name);
+        panel_sensor_name(&panel_state->temp, name);
     } else if (cls == CLS_LIGHT) {
-        strlcpy(panel_state->light.name, name, sizeof panel_state->light.name);
+        panel_sensor_name(&panel_state->light, name);
     }
 }
 

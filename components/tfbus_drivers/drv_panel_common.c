@@ -5,6 +5,7 @@
 #include "drv_panel_common.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "clu_lua.h"
 
@@ -15,14 +16,15 @@ enum { EV_CHANGE = 0, EV_ON = 1, EV_OFF = 2 };
 
 void panel_sensor_update(panel_sensor_t *sensor, int32_t new_value)
 {
-    if (!sensor->name[0]) {
-        return;
-    }
-    if (!sensor->have) {
+    if (!sensor->have || !sensor->name[0]) {
+        // First value, or a value before OM.LUA declared the sensor (the first poll after
+        // addressing comes before OM.LUA runs): kept, posted once the object is named.
         sensor->have = true;
         sensor->value = sensor->last_event_value = new_value;
         sensor->out_of_range = new_value < sensor->min || new_value > sensor->max;
-        clu_lua_post_number(sensor->name, 0, (float)new_value / 100.0f);
+        if (sensor->name[0]) {
+            clu_lua_post_number(sensor->name, 0, (float)new_value / 100.0f);
+        }
         return;
     }
     if (new_value == sensor->value) {
@@ -41,6 +43,14 @@ void panel_sensor_update(panel_sensor_t *sensor, int32_t new_value)
         clu_lua_post_event(sensor->name, SEV_RANGE);
     }
     sensor->out_of_range = oor;
+}
+
+void panel_sensor_name(panel_sensor_t *sensor, const char *name)
+{
+    strlcpy(sensor->name, name, sizeof sensor->name);
+    if (sensor->have) {
+        clu_lua_post_number(sensor->name, 0, (float)sensor->value / 100.0f);
+    }
 }
 
 void panel_button_event(char (*btn_names)[24], int button_count, uint32_t *values, int event_value)

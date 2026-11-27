@@ -29,6 +29,16 @@ typedef struct {
 void panel_sensor_update(panel_sensor_t *sensor, int32_t new_value);
 
 /**
+ * @brief Bind a sensor to its Lua object (io_new) and post the value received before that.
+ *
+ * The first state frame after addressing arrives before OM.LUA creates the objects; a panel that
+ * reports temperature only on change would otherwise leave Value 0 until the next change.
+ *
+ * @param sensor Sensor.
+ * @param name   Lua object name.
+ */
+void panel_sensor_name(panel_sensor_t *sensor, const char *name);
+/**
  * @brief Apply a panel button event record (TOUCH_PANEL_FM_4: TLV 0x08, VAL = button*7 + event).
  *
  * OnSwitchOn / OnSwitchOff also update Value.

@@ -1081,6 +1081,31 @@ int main(void)
         check("SMART_PANEL button ShowOK / LedSwitchOff, unknown method sends nothing",
               strncmp(s_frames, "aa131801000", 11) == 0 && strstr(s_frames, " aa1318010004") &&
                   strlen(s_frames) == 2 * 2 * 7 + 2);
+        // OM passes the XML `set` attribute (the LED_CMD byte): ShowError execute(0, 1),
+        // RedLedSwitchOn execute(2, 16), LedSwitchOff execute(2, 4); an unknown byte sends nothing
+        frames_reset();
+        lua_exec(m, 30, 0, 0, 1, 1);
+        lua_exec(m, 30, 0, 2, 1, 16);
+        lua_exec(m, 30, 0, 2, 1, 4);
+        lua_exec(m, 30, 0, 2, 1, 3);
+        check("SMART_PANEL button LED_CMD from the argument (ShowError, RedLedSwitchOn, LedSwitchOff)",
+              strncmp(s_frames, "aa1318010001", 12) == 0 && strstr(s_frames, " aa1318010010") &&
+                  strstr(s_frames, " aa1318010004") && strlen(s_frames) == 3 * (2 * 7 + 1));
+
+        // SetLabel(text): Label (feature 4) cut to 15 characters, DISPLAY_BLOCK [button, 0x0a, text]
+        frames_reset();
+        {
+            int obj = new_obj();
+            lua_pushstring(L, "Kitchen light 12345");
+            m->drv->io_execute(m, L, obj, 30, 0, 3, obj + 1, 1);
+            lua_getfield(L, obj, "_f");
+            lua_rawgeti(L, -1, 4);
+            check("SMART_PANEL SetLabel -> Label feature + DISPLAY_BLOCK 0x0a",
+                  !strcmp(lua_tostring(L, -1), "Kitchen light 1") &&
+                      strncmp(s_frames, "aa1330000a4b69746368656e206c696768742031000000000000", 50) == 0 &&
+                      strlen(s_frames) == 2 * (3 + 22 + 1) + 1); // header, 22-byte block, CRC
+            lua_settop(L, obj - 1);
+        }
         {
             int obj = new_obj();
             check("SMART_PANEL execute on another class / channel -> -1",

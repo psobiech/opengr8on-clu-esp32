@@ -26,7 +26,8 @@
  * PANEL_PAGE texts (runtime set() on a real CLU): 0x31 [12, p, field, slot, text...] (text up to 18
  * bytes, zero padded): PageName field 01 slot 00, Object_1_Name field 04 slot 01. Object_n_Id /
  * Object_n_Name of slots 2..4 (field 03 / 04, slot n) follow the init headers (inferred).
- * NOT YET DECODED: button labels / icons, PageType values, CustomIcon, DistributedLogicGroup.
+ * PANEL_BUTTON Label (feature 4 / SetLabel): DISPLAY_BLOCK sub 0x0a with the text.
+ * NOT YET DECODED: button icons, PageType values, CustomIcon, DistributedLogicGroup.
  *
  * Runtime: LED_CMD 0x18 [mask, 0, cmd]; TFBUS_CMD (PANEL execute -> sub-cmd): SwitchOnDisplay 0x00,
  * ShowButtons 0x03 [0,0,0,0], ClearScreen 0x04, PrintText 0x0a, DisplayContent 0x09, Draw 0x19,
@@ -79,6 +80,7 @@ enum { LED_OK = 0x00, LED_ERROR = 0x01, LED_ON = 0x02, LED_OFF = 0x04, LED_RED_O
 #define PAGES 4
 #define SLOTS 4
 #define ICON_LEN 20
+#define LABEL_LEN 15 /**< PANEL_BUTTON Label (interface range 0-15). */
 #define PAGE_TEXT_LEN 18 /**< 0x31 payload 22 = cmd 0x12, page, field, slot + text. */
 /** @brief PANEL_PAGE header fields (0x31 0x12 [p, field, slot]). */
 enum { PAGE_FIELD_TYPE = 0x00, PAGE_FIELD_NAME = 0x01, PAGE_FIELD_OBJECT_ID = 0x03, PAGE_FIELD_OBJECT_NAME = 0x04,
@@ -138,6 +140,7 @@ typedef struct {
     panel_sensor_t temp, light;
     uint16_t reg[NREGS];
     char icon[4][ICON_LEN + 1];
+    char label[BTN][LABEL_LEN + 1]; // PANEL_BUTTON Label (feature 4 / SetLabel)
     struct {
         char name[PAGE_TEXT_LEN + 1];
         char object_id[SLOTS][PAGE_TEXT_LEN + 1];
@@ -149,6 +152,8 @@ typedef struct {
 
 static void led(tfbus_module_t *module, int button_index, uint8_t cmd);
 static void send_mode(tfbus_module_t *module, int button_index);
+static void send_label(tfbus_module_t *module, int button_index);
+static void set_label(tfbus_module_t *module, int button_index, const char *text);
 
 /** @brief Driver state of @p module, allocated (with sensor / register defaults) on first use. */
 static sp4_t *ctx(tfbus_module_t *module)
@@ -205,10 +210,32 @@ static void send_button(tfbus_module_t *module, int button_index, bool led_commi
     if (led_commit) {
         drv_queue_frame(module, 0x18, (uint8_t[]){0x00, 0x00, 0x02}, 3);
     }
-    static const uint8_t subs[3] = {0x0a, 0x00, 0x01};
-    for (int i = 0; i < 3; i++) {
-        uint8_t blk[22] = {(uint8_t)button_index, subs[i]};
+    send_label(module, button_index);
+    static const uint8_t icon_subs[2] = {0x00, 0x01}; // IconA / IconB (not decoded: sent empty)
+    for (int i = 0; i < 2; i++) {
+        uint8_t blk[22] = {(uint8_t)button_index, icon_subs[i]};
         drv_queue_frame(module, 0x30, blk, sizeof blk);
+    }
+}
+
+/**
+ * @brief Send one button's Label: DISPLAY_BLOCK 0x30 [button, 0x0a, text, zero padded] (SetLabel,
+ * confirmed by a capture; the panel shows it at the button).
+ */
+static void send_label(tfbus_module_t *module, int button_index)
+{
+    uint8_t blk[22] = {(uint8_t)button_index, 0x0a};
+    const char *label = ctx(module)->label[button_index];
+    memcpy(blk + 2, label, strlen(label));
+    drv_queue_frame(module, 0x30, blk, sizeof blk);
+}
+
+/** @brief Store button @p button_index's Label (cut to LABEL_LEN) and send it once initialised. */
+static void set_label(tfbus_module_t *module, int button_index, const char *text)
+{
+    strlcpy(ctx(module)->label[button_index], text, sizeof ctx(module)->label[button_index]);
+    if (ctx(module)->initialized) {
+        send_label(module, button_index);
     }
 }
 
@@ -405,6 +432,8 @@ static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int c
             panel_state->hold_delay[channel_index] = (uint16_t)luaL_optinteger(L, val, 1000);
         } else if (idx == 3) {
             panel_state->hold_interval[channel_index] = (uint16_t)luaL_optinteger(L, val, 100);
+        } else if (idx == 4) { // Label
+            set_label(module, channel_index, lua_type(L, val) == LUA_TSTRING ? lua_tostring(L, val) : "");
         }
         return false;
     }
@@ -498,7 +527,12 @@ static int panel_execute(tfbus_module_t *module, lua_State *L, int idx, int firs
 }
 
 /**
- * @brief tfbus_driver_t::io_execute: PANEL methods, PANEL_BUTTON ShowOK (0) / LedSwitchOn (1) / LedSwitchOff (2).
+ * @brief tfbus_driver_t::io_execute: PANEL methods, PANEL_BUTTON LED methods.
+ *
+ * The interface shares execute indices between LED methods and tells them apart by the XML `set`
+ * attribute, which OM passes as the argument: it is the LED_CMD byte. ShowOK execute(0, 0),
+ * ShowError (0, 1), LedSwitchOn (1, 2), RedLedSwitchOn (2, 16), LedSwitchOff (2, 4). Without an
+ * argument, 0 / 1 / 2 are ShowOK / LedSwitchOn / LedSwitchOff (the methods of older interfaces).
  */
 static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, int channel_index, int idx, int first,
                       int nargs)
@@ -509,14 +543,33 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
     if (cls != CLS_BUTTON || channel_index < 0 || channel_index >= BTN) {
         return -1;
     }
-    switch (idx) {
-    case 0: led(module, channel_index, LED_OK); return 0;     // ShowOK
-    case 1: led(module, channel_index, LED_ON); return 0;     // LedSwitchOn
-    case 2: led(module, channel_index, LED_OFF); return 0;    // LedSwitchOff
-    default:
+    if (idx == 3) { // SetLabel(text): sets Label (feature 4)
+        const char *text = nargs > 0 ? luaL_tolstring(L, first, NULL) : "";
+        set_label(module, channel_index, text);
+        lua_getfield(L, obj, "_f");
+        lua_pushstring(L, ctx(module)->label[channel_index]);
+        lua_rawseti(L, -2, 4);
+        lua_pop(L, 1);
+        return 0;
+    }
+    static const uint8_t default_led_cmd[] = {LED_OK, LED_ON, LED_OFF};
+    if (idx < 0 || idx > 2) {
         ESP_LOGW(TAG, "%s: execute(%d) not decoded yet", ctx(module)->btn[channel_index], idx);
         return 0;
     }
+    uint8_t led_cmd = default_led_cmd[idx];
+    if (nargs > 0) {
+        lua_Integer requested_cmd = luaL_optinteger(L, first, led_cmd);
+        if (requested_cmd != LED_OK && requested_cmd != LED_ERROR && requested_cmd != LED_ON &&
+            requested_cmd != LED_OFF && requested_cmd != LED_RED_ON) {
+            ESP_LOGW(TAG, "%s: execute(%d, %d): unknown LED command", ctx(module)->btn[channel_index], idx,
+                     (int)requested_cmd);
+            return 0;
+        }
+        led_cmd = (uint8_t)requested_cmd;
+    }
+    led(module, channel_index, led_cmd);
+    return 0;
 }
 
 static void button_edges(sp4_t *panel_state, uint16_t changed, uint16_t values, int64_t now);

@@ -531,11 +531,12 @@ przeciwnym razie wbudowany pakiet publicznych CA.
 
 Urządzenie CLU: model = płytka (menuconfig „Board”), `hw_version` = układ i jego rewizja,
 `sw_version` = wersja tego firmware (nie wersja Grentona zgłaszana do OM). Urządzenie modułu:
-producent Grenton (moduły płytki: OpenGr8on), `sw_version` / `hw_version` z VERSION_QUERY magistrali
+producent Grenton (moduły płytki: OpenGr8on, moduły węzłów MySensors: MySensors), `sw_version` / `hw_version` z VERSION_QUERY magistrali
 (konfiguracje są wysyłane ponownie, gdy wersje pojawią się po zbudowaniu encji). Encje modułu znanego
 masterowi magistrali są dostępne tylko, gdy CLU jest online **i** łącze modułu
 (`<base>/system/tfbus/modules/<module>`) = ON — moduł, który przestał odpowiadać, pokazuje encje
-jako niedostępne zamiast starych wartości. Temat łącza jest publikowany także bez diagnostyki.
+jako niedostępne zamiast starych wartości (moduł, którego master jeszcze nie zna, dostaje to, gdy się
+pojawi). Temat łącza jest publikowany także bez diagnostyki.
 
 Discovery jest per urządzenie HA, ze skróconymi kluczami HA (`stat_t`, `cmd_t`, `dev`, …): jedna
 konfiguracja retained `homeassistant/device/<object_id>/config` z encjami w `cmps`.
@@ -546,6 +547,7 @@ konfiguracja retained `homeassistant/device/<object_id>/config` z encjami w `cmp
 | `opengr8on_CLU<serial>_var` | cechy użytkownika CLU |
 | `opengr8on_CLU<serial>_system` | diagnostyka firmware (`CLU_MQTT_DIAGNOSTICS`) |
 | `opengr8on_CLU<serial>_<moduł>` | moduł (osobne urządzenie HA) |
+| `opengr8on_CLU<serial>_<obiekt>` | obiekt z `subdevice = true` (przycisk panelu): urządzenie pod modułem |
 
 Pierwsze trzy to jedno urządzenie HA (te same `ids`). Konfiguracje są wysyłane przy każdym połączeniu
 i gdy HA opublikuje `online` na `homeassistant/status`. Encja, która zniknęła po zmianie OM.LUA lub
@@ -561,14 +563,15 @@ starszego firmware (`homeassistant/<component>/opengr8on_CLU<serial>/<id>/config
 | LED_CHANNEL (49) | `light` (schemat JSON, `brightness`) | jasność → SetValue; ON → SwitchOn (ostatnia wartość), OFF → SwitchOff; `transition` → Ramp |
 | LED_CCT (72) | `light` (schemat JSON, `color_temp`, 2700–6500 K) | jak LED_CHANNEL + temperatura → SetColorTemp |
 | LEDRGB (9) | `light` (schemat JSON, `rgbw`) | kolor/jasność → SetRGBvalue + SetWhiteValue; ON → ostatni kolor, OFF → SwitchOff; `transition` → Ramp |
-| BUTTON (7), PANEL_BUTTON (30) | `event` (press, release, short_press, long_press, hold, click) | — |
+| BUTTON (7) | `event` (press, release, short_press, long_press, hold, click) | — |
+| PANEL_BUTTON (30) | własne urządzenie pod panelem: `event` jak BUTTON, `button` LED Green On / LED Red On / LED Off / LED Green Blink / LED Red Blink, `text` Label, `select` Mode | PRESS → LedSwitchOn / RedLedSwitchOn / LedSwitchOff / ShowOK / ShowError (panel nie zgłasza stanu LED); Label → SetLabel (do 15 znaków); Mode → SetMode (Monostable / Bistable / Locked) |
 | ROLLER_SHUTTER (24) | `cover` (0 zamknięta … 100 otwarta) | OPEN/CLOSE → HoldUp/HoldDown, STOP, pozycja → SetPosition |
 | PANELSENSTEMP (20) / PANELSENSLIGHT (21) | `sensor` °C / % | — |
 | PowerSupplyVoltage (12) | `sensor` V | — |
 | AnalogIN (12, moduł ANALOG_DIN) | `sensor` Value (bez jednostki: zależy od wejścia i `Scale`) | — |
 | ONEW_SENSOR (23) | `sensor` °C | — |
 | ONE_WIRE_HUB (73) | `sensor` aktywne czujniki (diagnostyka), `button` RefreshSensors | PRESS → RefreshSensors |
-| PANEL (29, SMART_PANEL_FM_4) | `event` (gesture_up/down/left/right, proximity, page_change, display_on/off) | — |
+| PANEL (29, SMART_PANEL_FM_4) | `event` (gesture_up/down/left/right, proximity, page_change, display_on/off), `button` display on / beep | PRESS → SwitchOnDisplay / SetBeep (brak polecenia wyłączenia ekranu) |
 | Calendar (15) | `switch` State, `sensor` ToNextRun (min), `event` calendar | ON/OFF → Start/Stop |
 | SunriseSunsetCalendar (39) | `sensor` wschód / zachód (timestamp), `binary_sensor` dzień | — |
 | Statistics (47) / StatisticsPulse (48) | `sensor` Value | — |
@@ -637,12 +640,14 @@ MQTT.hide("system")                                  -- no firmware entities
 MQTT.publish("custom/topic", "payload", true)        -- retained; MQTT.connected(), MQTT.root
 ```
 
-- Rodzaje: `switch`, `light` (DIMM / LED_CHANNEL: jasność, LED_CCT: jasność + temperatura, LEDRGB: RGBW, inne: ON/OFF), `binary_sensor`, `sensor`, `number`, `text`, `cover`, `event`, `button`, `module`.
-- Opcje: `name` (zastępuje etykietę obiektu), `name_suffix` (dopisywany do etykiety), `feature`,
+- Rodzaje: `switch`, `light` (DIMM / LED_CHANNEL: jasność, LED_CCT: jasność + temperatura, LEDRGB: RGBW, inne: ON/OFF), `binary_sensor`, `sensor`, `number`, `text` (`max` = długość), `select` (`map = {[wartość] = "opcja"}`), `cover`, `event`, `button`, `module`.
+- Opcje: `name` (zastępuje etykietę obiektu), `name_suffix` (dopisywany do etykiety), `subdevice = true`
+  (obiekt modułu jako osobne urządzenie HA pod modułem, nazwane etykietą; encja ma wtedy nazwę
+  `name_suffix` albo nazwę urządzenia), `feature`,
   `unit`, `device_class`, `state_class`, `icon`, `entity_category`, `events`; czujniki także
   `text = true` (stan tekstowy), `map = {[v] = "label"}` (enum), `fn = function(v) … end`
   (przekształcenie wartości, też `binary_sensor`); `number`: `min` / `max` / `step` / `mode`
-  (domyślnie cały zakres int32, krok 0.001, `box`); przyciski `execute = idx` (lub
+  (domyślnie cały zakres int32, krok 0.001, `box`); przyciski `execute = idx` (+ `args = {…}`) (lub
   `press = function(o) … end`).
 - Cechy użytkownika CLU wybiera się po nazwie: `MQTT.expose("temperatura", { kind = "sensor" })`,
   `MQTT.hide("temperatura")`.

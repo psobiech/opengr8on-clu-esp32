@@ -20,6 +20,7 @@ local outbox, logs = 0, {} -- fake esp-mqtt outbox bytes; C.log messages
 local module_statuses = {
   [0x13ab6c81] = { online = true, fails = 0, hw_ver = 2, fw_ver = "2.2.4" },
   [0x20c85581] = { online = false, fails = 9 },
+  [0x30000001] = { online = true, fails = 0 }, -- SMART PANEL
 }
 __clu = {
   root = here .. "fixtures",
@@ -50,6 +51,7 @@ __clu = {
              tfbus_fails = sys_fails }
   end,
   tfbus_module = function(sn) return module_statuses[sn] end,
+  ms_slots = function() return { { module = 1, sn = 0x0a000004, kind = "din", channel = 1 } } end, -- MySensors
   -- On-board modules: GPIO input module (DIN1 + DIN3 wired, DOUT drive nothing), ANALOG_DIN
   -- (AnalogIN 1 set up, 1-Wire hub); the ONE_WIRE sensor module and the rest are not restricted.
   local_channels = function(sn)
@@ -114,10 +116,13 @@ ONS0001 = OBJECT:new(23, mm_onewire, 0, "ONS0001")
 HUB0001 = OBJECT:new(73, mm_analog, 0, "HUB0001")
 mm_panel = OBJECT:new(2, 0x30000001, 0x03, "30000001")
 PAN0001 = OBJECT:new(29, mm_panel, 0, "PAN0001")
+PBT0001 = OBJECT:new(30, mm_panel, 0, "PBT0001")
 CAL0001 = OBJECT:new(15, "CAL0001")
 SUN0001 = OBJECT:new(39, "SUN0001")
 STA0001 = OBJECT:new(47, "STA0001")
 PUL0001 = OBJECT:new(48, "PUL0001")
+mm_mysensors = OBJECT:new(2, 0x0a000004, 0x1e, "0a000004") -- not on the bus yet
+MSI0001 = OBJECT:new(3, mm_mysensors, 0, "MSI0001")
 -- one more CLU user feature, as OM declares it (the fixture has number and string ones)
 _type["flag"] = "boolean"
 flag = true
@@ -183,11 +188,22 @@ SCH0001._f[1], SCH0001._f[2] = 1, 42
 THE0001._f[3], THE0001._f[14] = 21.5, 20.25
 AIN0001._f[0] = 3.3
 ONS0001._f[0] = 21.5
+PBT0001._f[1] = 0 -- Mode Monostable
 CLU100000001._f[0], CLU100000001._f[2] = 120, 1 -- Uptime, State (C hooks on the device)
--- per-entity configs of an earlier firmware, persisted
+-- per-entity configs of an earlier firmware, persisted; a panel button published in its panel's config
 __persist.section("mqtt").configs = { "homeassistant/switch/opengr8on_CLU100000001/DOU0001/config" }
+local PANEL_CFG = DEVICE_CFG .. NODE .. "_30000001/config"
+__persist.section("mqtt").devices = { [PANEL_CFG] = { event_PBT0001_event = "event" } }
 connected, gen = true, 1
 run()
+local panel_config_index, button_config_index
+for message_index, message in ipairs(pubs) do
+  if message.t == PANEL_CFG and not panel_config_index then panel_config_index = message_index end
+  if message.t == DEVICE_CFG .. NODE .. "_PBT0001/config" and not button_config_index then button_config_index = message_index end
+end
+check("entity moved to its own device: removed from the old config first", panel_config_index and button_config_index
+  and panel_config_index < button_config_index
+  and pubs[panel_config_index].p:find('"event_PBT0001_event":{"p":"event"}', 1, true) ~= nil)
 check("per-entity configs of earlier firmware cleared once",
   (find("homeassistant/switch/opengr8on_CLU100000001/DOU0001/config") or {}).p == ""
   and __persist.section("mqtt").configs == nil)
@@ -298,11 +314,12 @@ local timer_pubs = count("grenton/CLU100000001/TMR0001/state")
 run(20) -- 2 s of 100 ms scans while the timer counts
 check("running Timer: at most one state per second",
       count("grenton/CLU100000001/TMR0001/state") - timer_pubs <= 3)
-check("Timer -> Start/Stop buttons", config("button", "TMR0001_2") ~= nil
-  and config("button", "TMR0001_3") ~= nil)
+check("Timer -> Start/Stop buttons named after the object",
+  (config("button", "TMR0001_2") or {}).p:find('"name":"TMR0001 start"', 1, true) ~= nil
+  and (config("button", "TMR0001_3") or {}).p:find('"name":"TMR0001 stop"', 1, true) ~= nil)
 local sched = config("sensor", "SCH0001")
 check("Scheduler -> value sensor", sched and (find("grenton/CLU100000001/SCH0001/state") or {}).p == "42")
-check("Scheduler -> switch", config("switch", "SCH0001_2") ~= nil)
+check("Scheduler -> running switch", (config("switch", "SCH0001_2") or {}).p:find('"name":"SCH0001 running"', 1, true) ~= nil)
 local thermo = config("climate", "THE0001")
 check("Thermostat -> climate discovery", thermo and thermo.p:find('"curr_temp_t":"~/state"', 1, true)
   and thermo.p:find('"temp_cmd_t":"~/temperature/set"', 1, true)
@@ -313,7 +330,10 @@ check("Thermostat state from interface features", thermo_state and thermo_state.
   and thermo_state.current_temperature == 20.3 and thermo_state.action == "heating")
 local presence = config("binary_sensor", "PRE0001")
 check("PresenceSensor -> occupancy", presence and presence.p:find('"dev_cla":"occupancy"', 1, true))
-check("PresenceSensor -> Locked switch", config("switch", "PRE0001_2") ~= nil)
+check("PresenceSensor -> locked switch", (config("switch", "PRE0001_2") or {}).p:find('"name":"PRE0001 locked"', 1, true) ~= nil)
+local mysensors_input = config("binary_sensor", "MSI0001")
+check("MySensors module: MySensors manufacturer; not on the bus yet -> CLU availability only", mysensors_input
+  and mysensors_input.node.dev.mf == "MySensors" and mysensors_input.node.avty == nil)
 local hub = config("sensor", "HUB0001")
 check("ONE_WIRE_HUB -> active sensors (diagnostic) + refresh button", hub and hub.p:find('"name":"HUB0001 active sensors"', 1, true)
   and hub.p:find('"ent_cat":"diagnostic"', 1, true)
@@ -332,6 +352,27 @@ check("SunriseSunset -> sunrise / sunset timestamps, day binary_sensor", sunrise
 check("SunriseSunset timestamp state", ((find("grenton/CLU100000001/SUN0001/state") or {}).p or ""):match("^%d+%-%d+%-%d+T%d+:%d+:%d+%+00:00$") ~= nil)
 check("Statistics -> value sensors", (find("grenton/CLU100000001/STA0001/state") or {}).p == "0"
   and (config("sensor", "PUL0001") or {}).p:find('"stat_cla":"total_increasing"', 1, true) ~= nil)
+check("SMART_PANEL PANEL -> display on / beep buttons",
+  (config("button", "PAN0001_2") or {}).p:find('"name":"PAN0001 display on"', 1, true) ~= nil
+  and (config("button", "PAN0001_3") or {}).p:find('"name":"PAN0001 beep"', 1, true) ~= nil)
+local panel_button = config("event", "PBT0001_event")
+check("PANEL_BUTTON: own device under the panel", panel_button
+  and panel_button.t == DEVICE_CFG .. NODE .. "_PBT0001/config"
+  and encoded(panel_button.node.dev) == '{"ids":["opengr8on_CLU100000001_PBT0001"],"mf":"Grenton","name":"PBT0001","via_device":"opengr8on_CLU100000001_30000001"}')
+check("PANEL_BUTTON device: available with the panel", panel_button and panel_button.node.avty_mode == "all"
+  and panel_button.node.avty[2].t == "grenton/CLU100000001/system/tfbus/modules/30000001")
+check("PANEL_BUTTON -> event named after the device (null), LED on / off buttons",
+  panel_button and not panel_button.p:find('"name"', 1, true)
+  and (config("button", "PBT0001_2") or {}).p:find('"name":"LED Green On"', 1, true) ~= nil
+  and (config("button", "PBT0001_3") or {}).p:find('"name":"LED Red On"', 1, true) ~= nil
+  and (config("button", "PBT0001_4") or {}).p:find('"name":"LED Off"', 1, true) ~= nil
+  and (config("button", "PBT0001_5") or {}).p:find('"name":"LED Green Blink"', 1, true) ~= nil
+  and (config("button", "PBT0001_6") or {}).p:find('"name":"LED Red Blink"', 1, true) ~= nil)
+local label_cfg, mode_cfg = config("text", "PBT0001_7"), config("select", "PBT0001_8")
+check("PANEL_BUTTON -> Label text (max 15), Mode select (config)", label_cfg and mode_cfg
+  and label_cfg.p:find('"max":15', 1, true) and label_cfg.p:find('"ent_cat":"config"', 1, true)
+  and mode_cfg.p:find('"ops":["Monostable","Bistable","Locked"]', 1, true) and mode_cfg.p:find('"name":"Mode"', 1, true)
+  and (find("grenton/CLU100000001/PBT0001_8/state") or {}).p == "Monostable")
 local number_feature = config("number", "var_restored")
 check("user features: own config of the CLU device", number_feature
   and number_feature.t == DEVICE_CFG .. NODE .. "_var/config" and number_feature.node.dev.name == "CLU TEST")
@@ -505,6 +546,19 @@ check("boolean user feature off", flag == false)
 command("var/flag/set", "ON")
 check("boolean user feature on", flag == true)
 command("HUB0001_2/set", "PRESS")
+executed = {}
+for button_index = 2, 6 do command("PBT0001_" .. button_index .. "/set", "PRESS") end
+command("PAN0001_2/set", "PRESS")
+command("PAN0001_3/set", "PRESS")
+command("PBT0001_7/set", "Kitchen light over 15")
+check("Label text -> Label feature, cut to 15", PBT0001:get(4) == "Kitchen light o")
+command("PBT0001_8/set", "Locked")
+command("PBT0001_8/set", "locked") -- not an option: ignored
+check("Mode select -> Mode feature (case kept)", PBT0001:get(1) == 2)
+run(2)
+check("Mode select state follows", (find("grenton/CLU100000001/PBT0001_8/state") or {}).p == "Locked")
+check("panel buttons -> LED methods with OM's LED_CMD byte, SwitchOnDisplay, SetBeep",
+  table.concat(executed, " ") == "PBT0001:1(2) PBT0001:2(16) PBT0001:2(4) PBT0001:0(0) PBT0001:0(1) PAN0001:0 PAN0001:21")
 command("CAL0001/set", "OFF")
 check("Calendar switch off -> Stop", CAL0001:get(3) == 0)
 
@@ -608,6 +662,17 @@ check("late VERSION_QUERY: module configs resent with the versions",
 pubs = {}
 run(20)
 check("versions unchanged: configs not resent again", count(CFG) == 0)
+
+-- ---- a module the bus master finds after the build: link availability added -------------------
+module_statuses[0x0a000004] = { online = true, fails = 0 }
+pubs = {}
+run(20)
+local found_module = config("binary_sensor", "MSI0001")
+check("module found later: its config gets the link availability", found_module and found_module.node.avty
+  and found_module.node.avty[2].t == "grenton/CLU100000001/system/tfbus/modules/0a000004")
+pubs = {}
+run(20)
+check("found module: configs not resent again", count(CFG) == 0)
 
 -- ---- HA restart -------------------------------------------------------------------
 local before = count(CFG)

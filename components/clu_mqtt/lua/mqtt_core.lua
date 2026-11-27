@@ -34,6 +34,8 @@ local function load_labels()
 end
 
 local device, origin, module_devices
+local module_mysensors_serials -- serials of the MySensors modules, per build
+local object_devices -- object -> its own HA device (opts.subdevice), per build
 local module_link_topics -- module device -> its link topic (availability of its entities)
 
 -- TF-Bus versions of a module as HA device fields: sw_version, hw_version (nil, nil until the
@@ -66,10 +68,52 @@ local function add_module_link(module, module_dev)
   }
 end
 
+-- Hidden entity (no discovery, publishes nothing) of a module the bus master does not know yet
+-- (not found on the bus when the entities were built): rebuild once it shows up, so its entities
+-- get the link availability and its versions.
+local function add_module_watch(module)
+  entities[#entities + 1] = {
+    obj = module,
+    base = "system/tfbus/modules/" .. module._name,
+    states = {
+      [""] = function()
+        if clu.tfbus_module(module._sn) then dirty = true end
+      end,
+    },
+  }
+end
+
+-- JSON null: json() encodes any non-data value as null (a nil table field would be left out).
+local JSON_NULL = function() end
+
+-- HA device of an object on a module (opts.subdevice, e.g. a panel button): named after its label,
+-- under its module's device, available with the module.
+local function object_device(object, parent_dev)
+  local object_dev = object_devices[object]
+  if not object_dev then
+    object_dev = {
+      identifiers = { NODE .. "_" .. object._name },
+      name = labels[object._name] or object._name,
+      manufacturer = parent_dev.manufacturer,
+      via_device = parent_dev.identifiers[1],
+    }
+    object_devices[object] = object_dev
+    module_link_topics[object_dev] = module_link_topics[parent_dev]
+  end
+  return object_dev
+end
+
+-- Serials of the modules emulated for MySensors nodes (__clu.ms_slots, MySensors builds only).
+local function mysensors_serials()
+  local serials = {}
+  for _, slot in ipairs(clu.ms_slots and clu.ms_slots() or {}) do serials[slot.sn] = true end
+  return serials
+end
+
 -- Home Assistant device of a module object (class 2): CLU > module > its inputs / outputs.
--- On-board modules (clu_localio) are emulated by this firmware, the rest are Grenton modules on the
--- bus. Only modules the bus master knows (__clu.tfbus_module) get the link availability: a module
--- missing from the bus when the entities are built stays available until the next build.
+-- Manufacturer: on-board modules (clu_localio) are emulated by this firmware, MySensors modules
+-- stand for MySensors nodes, the rest are Grenton modules on the bus. Modules the bus master knows
+-- (__clu.tfbus_module) get the link availability; one it does not know yet is watched.
 local function module_device(module)
   local module_dev = module_devices[module]
   if not module_dev then
@@ -80,14 +124,16 @@ local function module_device(module)
     module_dev = {
       identifiers = { NODE .. "_" .. module._name },
       name = model .. " " .. sn,
-      manufacturer = on_board and "OpenGr8on" or "Grenton",
+      manufacturer = on_board and "OpenGr8on" or module_mysensors_serials[module._sn] and "MySensors"
+                     or "Grenton",
       model = model,
       serial_number = sn,
       via_device = NODE,
     }
     module_dev.sw_version, module_dev.hw_version = module_versions(module_status)
     module_devices[module] = module_dev
-    if module_status then add_module_link(module, module_dev) end
+    if module_status then add_module_link(module, module_dev)
+    elseif clu.tfbus_module then add_module_watch(module) end
   end
   return module_dev
 end
@@ -175,6 +221,8 @@ local function build()
   }
   origin = { name = "opengr8on-clu-esp32", sw_version = device.sw_version }
   entities, by_base, by_object, stateful, module_devices, module_link_topics = {}, {}, {}, {}, {}, {}
+  module_mysensors_serials = mysensors_serials()
+  object_devices = {}
 
   local function add(name, object, entity_options)
     for entity_index, options in ipairs(entity_options or {}) do
@@ -186,6 +234,7 @@ local function build()
         entity.obj = object
         local module = object._class == 2 and object or object._module -- module itself / its IO
         if type(module) == "table" and module._sn ~= nil then entity.device = module_device(module) end
+        if options.subdevice and entity.device then entity.device = object_device(object, entity.device) end
         -- e.base: topic path under root. First state-bearing entity of an object owns
         -- <root>/<obj>; later ones get <obj>_<n>; opts.group prefixes a path ("system/memory").
         local base = options.base or name
@@ -201,8 +250,11 @@ local function build()
           entity.states[""], entity.states.state = entity.states.state, nil
           entity.disc.state_topic = "~"
         end
-        -- opts.name replaces the object's label, opts.name_suffix follows it ("Sun sunrise")
+        -- opts.name replaces the object's label, opts.name_suffix follows it ("Sun sunrise"). On the
+        -- object's own device (opts.subdevice) HA prefixes the device name (the label) itself: the
+        -- suffix alone, or null = named after the device.
         if options.name then entity.name = options.name
+        elseif options.subdevice then entity.name = options.name_suffix or JSON_NULL
         elseif options.name_suffix then entity.name = (labels[name] or name) .. " " .. options.name_suffix
         else entity.name = labels[name] or entity.default_name or name end
         if options.device_class then entity.disc.device_class = options.device_class end
@@ -423,20 +475,29 @@ local function publish_discovery()
     persisted_mqtt.configs, changed = nil, true
   end
   local published = persisted_mqtt.devices or {}
-  local current = {}
+  local current, payloads, removing = {}, {}, {}
   for _, discovery_config in ipairs(discovery_configs()) do
     local platforms, removed = {}, {}
     for component_key, entity in pairs(discovery_config.entities) do platforms[component_key] = entity.comp end
     for component_key, platform in pairs(published[discovery_config.topic] or {}) do
       if not platforms[component_key] then removed[component_key] = platform end
     end
-    enqueue(discovery_config.topic, config_payload(discovery_config, removed), true, 1, true)
     current[discovery_config.topic] = platforms
+    payloads[#payloads + 1] = { topic = discovery_config.topic, payload = config_payload(discovery_config, removed) }
+    removing[discovery_config.topic] = next(removed) ~= nil
   end
-  -- A whole device gone (module removed from OM, all user features / internals hidden): empty
-  -- config, HA deletes its entities.
+  -- Removals first: an entity moving to another config (e.g. onto its own sub-device) keeps its
+  -- unique_id, which HA only accepts once the old entity is gone. A whole device gone (module
+  -- removed from OM, all user features / internals hidden): empty config, HA deletes its entities.
   for topic in pairs(published) do
     if not current[topic] then enqueue(topic, "", true, 1, true) end
+  end
+  for _, removals_first in ipairs({ true, false }) do
+    for _, config_message in ipairs(payloads) do
+      if removing[config_message.topic] == removals_first then
+        enqueue(config_message.topic, config_message.payload, true, 1, true)
+      end
+    end
   end
   if changed or __ser(current) ~= __ser(published) then
     persisted_mqtt.devices = current
@@ -651,7 +712,7 @@ function MQTT.expose(object, options)
   local name = obj_name(object)
   if type(options) == "string" then options = { kind = options } end
   if type(options) ~= "table" or not KINDS[options.kind] then
-    error("MQTT.expose: kind must be one of switch, light, binary_sensor, sensor, number, text, climate, cover, event, button, module", 2)
+    error("MQTT.expose: kind must be one of switch, light, binary_sensor, sensor, number, text, select, climate, cover, event, button, module", 2)
   end
   local override_list = overrides[name]
   if not override_list then override_list = {}; overrides[name] = override_list end

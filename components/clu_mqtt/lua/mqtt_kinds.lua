@@ -89,33 +89,64 @@ end
 
 local TEXT_MAX = 255 -- HA's limit for a text entity's state and command
 
--- Longest prefix of text up to TEXT_MAX bytes that does not split a UTF-8 sequence.
-local function text_prefix(text)
-  if #text <= TEXT_MAX then return text end
-  local cut = TEXT_MAX
+-- Longest prefix of text up to max_length bytes that does not split a UTF-8 sequence.
+local function text_prefix(text, max_length)
+  if #text <= max_length then return text end
+  local cut = max_length
   while cut > 0 and (text:byte(cut + 1) or 0) & 0xC0 == 0x80 do cut = cut - 1 end
   return text:sub(1, cut)
 end
 
--- Text: the feature as a string (cut to TEXT_MAX bytes); a command sets it verbatim (not upper-cased).
+-- Text: the feature as a string, cut to opts.max (default TEXT_MAX) bytes; a command sets it
+-- verbatim (not upper-cased).
 KINDS.text = function(object, options)
   local feature = options.feature or 0
+  local max_length = math.min(options.max or TEXT_MAX, TEXT_MAX)
   return {
     comp = "text",
     raw = true,
-    disc = { state_topic = "~/state", command_topic = "~/set", max = TEXT_MAX },
+    disc = { state_topic = "~/state", command_topic = "~/set", max = max_length },
     states = {
       state = function()
         local value = feat(object, feature)
         if value == nil then return nil end
-        return text_prefix(tostring(value))
+        return text_prefix(tostring(value), max_length)
       end,
     },
-    cmds = { set = function(payload) object:set(feature, payload) end },
+    cmds = { set = function(payload) object:set(feature, text_prefix(payload, max_length)) end },
   }
 end
 
--- Button: payload PRESS calls opts.press(o) or o:execute(opts.execute).
+-- Select: opts.map = {[value] = "option"} for the feature; choosing an option sets its value.
+-- An unmapped value publishes no state.
+KINDS.select = function(object, options)
+  local feature = options.feature or 0
+  local option_names, values_by_option = {}, {}
+  for value, option_name in pairs(options.map) do
+    option_names[#option_names + 1] = option_name
+    values_by_option[option_name] = value
+  end
+  table.sort(option_names, function(left, right) return values_by_option[left] < values_by_option[right] end)
+  return {
+    comp = "select",
+    raw = true,
+    disc = { state_topic = "~/state", command_topic = "~/set", options = option_names },
+    states = {
+      state = function()
+        local value = feat(object, feature)
+        return value ~= nil and options.map[math.tointeger(tonumber(value)) or value] or nil
+      end,
+    },
+    cmds = {
+      set = function(payload)
+        local value = values_by_option[payload]
+        if value ~= nil then object:set(feature, value) end
+      end,
+    },
+  }
+end
+
+-- Button: payload PRESS calls opts.press(o) or o:execute(opts.execute, table.unpack(opts.args)).
 KINDS.button = function(object, options)
   return {
     comp = "button",
@@ -124,7 +155,7 @@ KINDS.button = function(object, options)
       set = function(payload)
         if payload ~= "PRESS" then return end
         if options.press then options.press(object)
-        elseif options.execute then object:execute(options.execute) end
+        elseif options.execute then object:execute(options.execute, table.unpack(options.args or {})) end
       end,
     },
   }

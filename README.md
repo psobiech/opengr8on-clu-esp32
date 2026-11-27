@@ -306,7 +306,7 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 | IO_MODULE_DIN_8 (0x1e), RELAY_DIN_4 (0x15) | ✅ | DOUT/DIN, czasowe Switch*, click/hold ze zboczy wejść |
 | ROLLER_SH_DIN_3 (0x2a), ROLLER_SH_DIN (0x17) | 🟡 | maska bitowa ruch/stop niezweryfikowana |
 | TOUCH_PANEL_FM_4 (0x1c) | 🟡 | przyciski, temperatura, światło, buzzer; LED niezweryfikowane |
-| SMART_PANEL_FM_4 (0x03) | 🟡 | przyciski, czujniki, LED, PrintText/Draw/Beep; brak konfiguracji stron/gestów |
+| SMART_PANEL_FM_4 (0x03) | 🟡 | przyciski (LED, etykiety, tryb), czujniki, rysowanie (PrintText/PrintFloat/DrawLine/DrawPoint/DrawBox/DrawIcon), strony (SetPageNr/Next/Prev), Beep; brak konfiguracji stron i ikon przycisków |
 | DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](docs/TFBUS.md#dimmer_mosfet_din) |
 | LED_RGBW_DIN (0x18) | 🟡 | LEDRGB, LED_CHANNEL ×4, LED_CCT ×2, PowerSupplyVoltage; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](docs/TFBUS.md#led_rgbw_din) |
 | Pozostałe moduły TF-Bus (ściemniacze FM, LED FM, analogowe itd.) | ❌ | brak sterowników |
@@ -571,7 +571,7 @@ starszego firmware (`homeassistant/<component>/opengr8on_CLU<serial>/<id>/config
 | AnalogIN (12, moduł ANALOG_DIN) | `sensor` Value (bez jednostki: zależy od wejścia i `Scale`) | — |
 | ONEW_SENSOR (23) | `sensor` °C | — |
 | ONE_WIRE_HUB (73) | `sensor` aktywne czujniki (diagnostyka), `button` RefreshSensors | PRESS → RefreshSensors |
-| PANEL (29, SMART_PANEL_FM_4) | `event` (gesture_up/down/left/right, proximity, page_change, display_on/off), `button` display on / beep | PRESS → SwitchOnDisplay / SetBeep (brak polecenia wyłączenia ekranu) |
+| PANEL (29, SMART_PANEL_FM_4) | `event` (gesture_up/down/left/right, proximity, page_change, display_on/off), `button` Display On / Beep / Display Clear / Display Show Buttons / Display Next Page / Display Previous Page, `text` Display Text, `number` Display X / Y / Display Page, `select` Display Font | Display Clear: wybudzenie + ClearScreen + wyświetlenie; Display Text: wybudzenie + PrintText(X, Y, tekst ≤ 16 znaków, czcionka) + wyświetlenie, bez czyszczenia (Clear, potem kilka Text składa ekran); każda encja kończy rysowanie sama (inaczej panel pokazuje `! TIMEOUT !`), Draw zamiast DisplayContent na panelach z fwApiVer < 5; Display Page → SetPageNr (stan: ostatnio ustawiona strona); brak polecenia wyłączenia ekranu |
 | Calendar (15) | `switch` State, `sensor` ToNextRun (min), `event` calendar | ON/OFF → Start/Stop |
 | SunriseSunsetCalendar (39) | `sensor` wschód / zachód (timestamp), `binary_sensor` dzień | — |
 | Statistics (47) / StatisticsPulse (48) | `sensor` Value | — |
@@ -640,7 +640,8 @@ MQTT.hide("system")                                  -- no firmware entities
 MQTT.publish("custom/topic", "payload", true)        -- retained; MQTT.connected(), MQTT.root
 ```
 
-- Rodzaje: `switch`, `light` (DIMM / LED_CHANNEL: jasność, LED_CCT: jasność + temperatura, LEDRGB: RGBW, inne: ON/OFF), `binary_sensor`, `sensor`, `number`, `text` (`max` = długość), `select` (`map = {[wartość] = "opcja"}`), `cover`, `event`, `button`, `module`.
+- Rodzaje: `switch`, `light` (DIMM / LED_CHANNEL: jasność, LED_CCT: jasność + temperatura, LEDRGB: RGBW, inne: ON/OFF), `binary_sensor`, `sensor`, `number`, `text` (`max` = długość), `select` (`map = {[wartość] = "opcja"}`; `number` / `text` / `select` także `read = function(o)` /
+  `write = function(o, v)` zamiast cechy), `cover`, `event`, `button`, `module`.
 - Opcje: `name` (zastępuje etykietę obiektu), `name_suffix` (dopisywany do etykiety), `subdevice = true`
   (obiekt modułu jako osobne urządzenie HA pod modułem, nazwane etykietą; encja ma wtedy nazwę
   `name_suffix` albo nazwę urządzenia), `feature`,

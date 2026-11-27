@@ -352,9 +352,18 @@ check("SunriseSunset -> sunrise / sunset timestamps, day binary_sensor", sunrise
 check("SunriseSunset timestamp state", ((find("grenton/CLU100000001/SUN0001/state") or {}).p or ""):match("^%d+%-%d+%-%d+T%d+:%d+:%d+%+00:00$") ~= nil)
 check("Statistics -> value sensors", (find("grenton/CLU100000001/STA0001/state") or {}).p == "0"
   and (config("sensor", "PUL0001") or {}).p:find('"stat_cla":"total_increasing"', 1, true) ~= nil)
-check("SMART_PANEL PANEL -> display on / beep buttons",
-  (config("button", "PAN0001_2") or {}).p:find('"name":"PAN0001 display on"', 1, true) ~= nil
-  and (config("button", "PAN0001_3") or {}).p:find('"name":"PAN0001 beep"', 1, true) ~= nil)
+check("SMART_PANEL PANEL -> Display On / Beep buttons",
+  (config("button", "PAN0001_2") or {}).p:find('"name":"PAN0001 Display On"', 1, true) ~= nil
+  and (config("button", "PAN0001_3") or {}).p:find('"name":"PAN0001 Beep"', 1, true) ~= nil)
+check("SMART_PANEL PANEL -> free draw entities",
+  (config("button", "PAN0001_4") or {}).p:find('"name":"PAN0001 Display Clear"', 1, true) ~= nil
+  and (config("text", "PAN0001_5") or {}).p:find('"max":16', 1, true) ~= nil
+  and (config("number", "PAN0001_6") or {}).p:find('"max":127', 1, true) ~= nil
+  and (config("number", "PAN0001_7") or {}).p:find('"max":63', 1, true) ~= nil
+  and (config("select", "PAN0001_8") or {}).p:find('"ops":["Small","Medium","Large"]', 1, true) ~= nil
+  and (config("button", "PAN0001_9") or {}).p:find('"name":"PAN0001 Display Show Buttons"', 1, true) ~= nil
+  and (find("grenton/CLU100000001/PAN0001_6/state") or {}).p == "0"
+  and (find("grenton/CLU100000001/PAN0001_8/state") or {}).p == "Small")
 local panel_button = config("event", "PBT0001_event")
 check("PANEL_BUTTON: own device under the panel", panel_button
   and panel_button.t == DEVICE_CFG .. NODE .. "_PBT0001/config"
@@ -550,6 +559,45 @@ executed = {}
 for button_index = 2, 6 do command("PBT0001_" .. button_index .. "/set", "PRESS") end
 command("PAN0001_2/set", "PRESS")
 command("PAN0001_3/set", "PRESS")
+-- free draw: each entity wakes, draws and flushes in one go; clear and print are separate
+local panel_calls, panel_execute = {}, PAN0001.execute
+PAN0001.execute = function(_, method_index, ...)
+  local call = { method_index }
+  for _, argument in ipairs({ ... }) do call[#call + 1] = tostring(argument) end
+  panel_calls[#panel_calls + 1] = table.concat(call, ",")
+end
+command("PAN0001_6/set", "10")
+command("PAN0001_7/set", "99")    -- clamped to 63
+command("PAN0001_8/set", "Large")
+check("free draw settings kept, no panel call", #panel_calls == 0)
+command("PAN0001_4/set", "PRESS")
+check("Display Clear -> SwitchOnDisplay, ClearScreen, DisplayContent", table.concat(panel_calls, " ") == "0 2 7")
+panel_calls = {}
+command("PAN0001_5/set", "Hello World")
+check("Display Text -> SwitchOnDisplay, PrintText(X, Y, text, font), DisplayContent (no clear)",
+  table.concat(panel_calls, " ") == "0 3,10,63,Hello World,3 7")
+run(2)
+check("Display Text / X / Y / Font states", (find("grenton/CLU100000001/PAN0001_5/state") or {}).p == "Hello World"
+  and (find("grenton/CLU100000001/PAN0001_6/state") or {}).p == "10"
+  and (find("grenton/CLU100000001/PAN0001_7/state") or {}).p == "63"
+  and (find("grenton/CLU100000001/PAN0001_8/state") or {}).p == "Large")
+module_statuses[0x30000001].fw_api_ver = 4
+panel_calls = {}
+command("PAN0001_4/set", "PRESS")
+check("panel with fwApiVer < 5: flushed with Draw", table.concat(panel_calls, " ") == "0 2 29")
+module_statuses[0x30000001].fw_api_ver = nil
+panel_calls = {}
+command("PAN0001_9/set", "PRESS")
+check("Display Show Buttons -> ShowButtons", table.concat(panel_calls, " ") == "1")
+panel_calls = {}
+command("PAN0001_10/set", "3")
+command("PAN0001_10/set", "9") -- clamped to 4
+command("PAN0001_11/set", "PRESS")
+command("PAN0001_12/set", "PRESS")
+check("Display Page -> SetPageNr, Next / Previous Page buttons", table.concat(panel_calls, " ") == "22,3 22,4 27 28")
+run(2)
+check("Display Page state: page last set", (find("grenton/CLU100000001/PAN0001_10/state") or {}).p == "4")
+PAN0001.execute = panel_execute
 command("PBT0001_7/set", "Kitchen light over 15")
 check("Label text -> Label feature, cut to 15", PBT0001:get(4) == "Kitchen light o")
 command("PBT0001_8/set", "Locked")

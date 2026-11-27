@@ -1065,6 +1065,37 @@ int main(void)
             snprintf(name, sizeof name, "SMART_PANEL execute(%d) -> %s", ex[i].idx, ex[i].want);
             check(name, r == 0 && strncmp(s_frames, ex[i].want, strlen(ex[i].want)) == 0);
         }
+        // draw / page methods with numeric arguments -> TFBUS_CMD [sub, one byte per argument]
+        static const struct {
+            int idx, nargs;
+            lua_Number args[5];
+            const char *want;
+        } draw_args[] = {
+            {4, 5, {1, 2, 30, 40, 1}, "aa13310601021e2801"},  // DrawLine
+            {5, 3, {5, 6, 1}, "aa1331070506010000"},          // DrawPoint
+            {30, 5, {1, 2, 30, 10, 1}, "aa13311b01021e0a01"}, // DrawBox
+            {22, 1, {3}, "aa1331100300"},                      // SetPageNr
+            {27, 0, {0}, "aa13311700"},                        // SetNextPage
+            {28, 0, {0}, "aa13311800"},                        // SetPrevPage
+            {20, 5, {0, 8, 3.14159, 2, 1}, "aa13310a000801332e313400"}, // PrintFloat -> PrintText "3.14"
+        };
+        for (size_t i = 0; i < sizeof draw_args / sizeof draw_args[0]; i++) {
+            frames_reset();
+            lua_execn(m, 29, 0, draw_args[i].idx, draw_args[i].nargs, draw_args[i].args);
+            char name[80];
+            snprintf(name, sizeof name, "SMART_PANEL execute(%d) -> %s", draw_args[i].idx, draw_args[i].want);
+            check(name, strncmp(s_frames, draw_args[i].want, strlen(draw_args[i].want)) == 0 &&
+                            strlen(s_frames) == 2 * 26 + 1);
+        }
+        {
+            int obj = new_obj();
+            lua_pushinteger(L, 1), lua_pushinteger(L, 2), lua_pushstring(L, "a.bmp");
+            frames_reset();
+            m->drv->io_execute(m, L, obj, 29, 0, 6, obj + 1, 3);
+            lua_settop(L, obj - 1);
+            check("SMART_PANEL DrawIcon(1, 2, \"a.bmp\") -> 0x08 [x y filename]",
+                  strncmp(s_frames, "aa133108" "0102" "612e626d70000000", 28) == 0);
+        }
         frames_reset();
         lua_exec(m, 29, 0, 3, 0, 0);  // PrintText(): x 0, y 0, font 1, no text
         lua_exec(m, 29, 0, 21, 0, 0); // SetBeep(): 1000 Hz, 100 ms, volume 8

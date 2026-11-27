@@ -5,7 +5,7 @@
  * - `__clu.sys_info()`       -> {heap_free, heap_min, psram_free, rssi? (WiFi), ip? (Ethernet first,
  *                                else WiFi), reset_reason, last_crash? (clu_crash),
  *                                tfbus_total, tfbus_online, tfbus_fails}
- * - `__clu.tfbus_module(sn)` -> {online, fails, polls, addr, hw_type, hw_ver?, fw_ver?} | nil;
+ * - `__clu.tfbus_module(sn)` -> {online, fails, polls, addr, hw_type, fw_api_ver, hw_ver?, fw_ver?} | nil;
  *                                hw_ver / fw_ver ("a.b.c") once VERSION_QUERY answered
  * - `__clu.local_channels(sn)` -> {[OM class] = bit mask of the channels with hardware behind them}
  *                                for an on-board module (clu_localio), nil for any other; classes left
@@ -125,6 +125,7 @@ static int l_tfbus_module(lua_State *L)
     set_int(L, "polls", module->polls);
     set_int(L, "addr", module->addr);
     set_int(L, "hw_type", module->hw_type);
+    set_int(L, "fw_api_ver", module->fw_api_ver); // from DISCOVER (0 = not seen yet)
     tfbus_device_t device;
     if (tfbus_master_device_find(module->sn, &device) && device.have_ver) {
         set_int(L, "hw_ver", device.hw_ver);

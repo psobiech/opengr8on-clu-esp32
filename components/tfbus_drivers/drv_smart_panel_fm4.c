@@ -31,7 +31,8 @@
  *
  * Runtime: LED_CMD 0x18 [mask, 0, cmd]; TFBUS_CMD (PANEL execute -> sub-cmd): SwitchOnDisplay 0x00,
  * ShowButtons 0x03 [0,0,0,0], ClearScreen 0x04, PrintText 0x0a, DisplayContent 0x09, Draw 0x19,
- * SetBeep 0x0f; PANEL set(4..7, 10..21) re-sends its frame.
+ * SetBeep 0x0f, DrawLine 0x06, DrawPoint 0x07, DrawIcon 0x08, DrawBox 0x1b, SetPageNr 0x10,
+ * SetNextPage 0x17, SetPrevPage 0x18 (see panel_execute); PANEL set(4..7, 10..21) re-sends its frame.
  *
  * Status: the real SMART_PANEL_FM_4 answers a poll with a bare ACK, or with the 13-byte state
  * frame the real CLU reads by position (firmware.bin 0xb14a2 PANEL_BUTTON, 0xb1526 sensors):
@@ -154,6 +155,8 @@ static void led(tfbus_module_t *module, int button_index, uint8_t cmd);
 static void send_mode(tfbus_module_t *module, int button_index);
 static void send_label(tfbus_module_t *module, int button_index);
 static void set_label(tfbus_module_t *module, int button_index, const char *text);
+static void queue_byte_args(tfbus_module_t *module, lua_State *L, uint8_t sub_command, int first, int count);
+static void queue_print_text(tfbus_module_t *module, int x, int y, int font_size, const char *text);
 
 /** @brief Driver state of @p module, allocated (with sensor / register defaults) on first use. */
 static sp4_t *ctx(tfbus_module_t *module)
@@ -482,6 +485,11 @@ static void led(tfbus_module_t *module, int button_index, uint8_t cmd)
 
 /**
  * @brief PANEL methods -> TFBUS_CMD sub-commands (SwitchOnDisplay, ShowButtons, ClearScreen, ...).
+ *
+ * Draw and page sub-commands as the real CLU builds them: DrawLine 0x06 [x y xe ye color],
+ * DrawPoint 0x07 [x y color], DrawIcon 0x08 [x y filename(16) 0], DrawBox 0x1b [x y w h color],
+ * SetPageNr 0x10 [nr], SetNextPage 0x17, SetPrevPage 0x18; PrintFloat is formatted here and sent
+ * as PrintText.
  */
 static int panel_execute(tfbus_module_t *module, lua_State *L, int idx, int first, int nargs)
 {
@@ -496,15 +504,47 @@ static int panel_execute(tfbus_module_t *module, lua_State *L, int idx, int firs
         tfbus_cmd_queue(module, 0x04, NULL, 0);
         return 0;
     case 3: { // PrintText(x, y, txt, fontSize)
-        uint8_t text_data[19] = {0};
-        text_data[0] = (uint8_t)luaL_optinteger(L, first, 0);
-        text_data[1] = (uint8_t)luaL_optinteger(L, first + 1, 0);
-        text_data[2] = (uint8_t)luaL_optinteger(L, first + 3, 1); // before tolstring: it pushes
+        int x = (int)luaL_optinteger(L, first, 0);
+        int y = (int)luaL_optinteger(L, first + 1, 0);
+        int font_size = (int)luaL_optinteger(L, first + 3, 1); // before tolstring: it pushes
         const char *txt = nargs > 2 ? luaL_tolstring(L, first + 2, NULL) : "";
-        strncpy((char *)text_data + 3, txt, 16);
-        tfbus_cmd_queue(module, 0x0a, text_data, sizeof text_data);
+        queue_print_text(module, x, y, font_size, txt);
         return 0;
     }
+    case 4: // DrawLine(x, y, xe, ye, color)
+        queue_byte_args(module, L, 0x06, first, 5);
+        return 0;
+    case 5: // DrawPoint(x, y, color)
+        queue_byte_args(module, L, 0x07, first, 3);
+        return 0;
+    case 6: { // DrawIcon(x, y, filename)
+        uint8_t icon_data[19] = {(uint8_t)luaL_optinteger(L, first, 0), (uint8_t)luaL_optinteger(L, first + 1, 0)};
+        const char *filename = nargs > 2 ? luaL_tolstring(L, first + 2, NULL) : "";
+        strncpy((char *)icon_data + 2, filename, 16);
+        tfbus_cmd_queue(module, 0x08, icon_data, 18);
+        return 0;
+    }
+    case 20: { // PrintFloat(x, y, number, precision 0-2, fontSize)
+        lua_Integer precision = luaL_optinteger(L, first + 3, 0);
+        char number_text[24];
+        snprintf(number_text, sizeof number_text, "%.*f", (int)(precision < 0 ? 0 : precision > 2 ? 2 : precision),
+                 (double)luaL_optnumber(L, first + 2, 0));
+        queue_print_text(module, (int)luaL_optinteger(L, first, 0), (int)luaL_optinteger(L, first + 1, 0),
+                         (int)luaL_optinteger(L, first + 4, 1), number_text);
+        return 0;
+    }
+    case 22: // SetPageNr(nr)
+        queue_byte_args(module, L, 0x10, first, 1);
+        return 0;
+    case 27: // SetNextPage
+        tfbus_cmd_queue(module, 0x17, NULL, 0);
+        return 0;
+    case 28: // SetPrevPage
+        tfbus_cmd_queue(module, 0x18, NULL, 0);
+        return 0;
+    case 30: // DrawBox(x, y, w, h, color)
+        queue_byte_args(module, L, 0x1b, first, 5);
+        return 0;
     case 7: // DisplayContent: flush the freedraw buffer to the screen
         tfbus_cmd_queue(module, 0x09, NULL, 0);
         return 0;
@@ -524,6 +564,24 @@ static int panel_execute(tfbus_module_t *module, lua_State *L, int idx, int firs
         ESP_LOGW(TAG, "PANEL execute(%d) not decoded yet", idx);
         return 0;
     }
+}
+
+/** @brief TFBUS_CMD @p sub_command with @p count integer arguments of the call, one byte each. */
+static void queue_byte_args(tfbus_module_t *module, lua_State *L, uint8_t sub_command, int first, int count)
+{
+    uint8_t argument_bytes[5] = {0};
+    for (int i = 0; i < count && i < (int)sizeof argument_bytes; i++) {
+        argument_bytes[i] = (uint8_t)luaL_optinteger(L, first + i, 0);
+    }
+    tfbus_cmd_queue(module, sub_command, argument_bytes, (size_t)count);
+}
+
+/** @brief PrintText: TFBUS_CMD 0x0a [x, y, font, text (16 bytes, zero padded)]. */
+static void queue_print_text(tfbus_module_t *module, int x, int y, int font_size, const char *text)
+{
+    uint8_t text_data[19] = {(uint8_t)x, (uint8_t)y, (uint8_t)font_size};
+    strncpy((char *)text_data + 3, text, 16);
+    tfbus_cmd_queue(module, 0x0a, text_data, sizeof text_data);
 }
 
 /**

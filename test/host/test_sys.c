@@ -752,7 +752,8 @@ static void test_sysinfo(void)
     }
 
     s_nmods = 2;
-    s_mods[0] = (tfbus_module_t){.sn = 1, .online = true, .fails_total = 3, .polls = 10, .addr = 1, .hw_type = 0x1e};
+    s_mods[0] = (tfbus_module_t){.sn = 1, .online = true, .fails_total = 3, .polls = 10, .addr = 1, .hw_type = 0x1e,
+                                 .fw_api_ver = 4};
     s_mods[1] = (tfbus_module_t){.sn = 2, .online = false, .fails_total = 4};
     s_ipinfo.ip.addr = inet_addr("192.168.1.20");
     call("sys_info", 0, 0);
@@ -806,7 +807,8 @@ static void test_sysinfo(void)
     lua_getfield(L, -1, "online");
     check("tfbus_module(sn): online / fails / polls / addr / hwType",
           lua_toboolean(L, -1) && (lua_pop(L, 1), field_int("fails") == 3 && field_int("polls") == 10 &&
-                                                       field_int("addr") == 1 && field_int("hw_type") == 0x1e));
+                                                       field_int("addr") == 1 && field_int("hw_type") == 0x1e &&
+                                                       field_int("fw_api_ver") == 4));
     lua_pop(L, 1);
     check("tfbus_module(unknown sn) -> nil", call("tfbus_module", 1, 99) == LUA_TNIL);
     lua_pop(L, 1);

@@ -65,6 +65,17 @@ KINDS.sensor = function(object, options)
 end
 
 
+-- number / text / select: opts.read(o) / opts.write(o, value) replace the feature get / set (values
+-- kept elsewhere, or a write that calls methods).
+local function read_value(object, options, feature)
+  if options.read then return options.read(object) end
+  return feat(object, feature)
+end
+
+local function write_value(object, options, feature, value)
+  if options.write then options.write(object, value) else object:set(feature, value) end
+end
+
 -- Number: opts.min / opts.max / opts.step (HA's defaults 1..100 step 1 are too narrow for Grenton
 -- values: unbounded 32-bit range, step 0.001 unless given), opts.mode (default "box"), opts.unit.
 -- A command sets the feature, clamped to min..max.
@@ -76,12 +87,12 @@ KINDS.number = function(object, options)
     disc = { state_topic = "~/state", command_topic = "~/set", min = minimum, max = maximum,
              step = options.step or 0.001, mode = options.mode or "box",
              unit_of_measurement = options.unit },
-    states = { state = function() return num(feat(object, feature)) end },
+    states = { state = function() return num(read_value(object, options, feature)) end },
     cmds = {
       set = function(payload)
         local value = tonumber(payload)
         if not value or value ~= value then return end
-        object:set(feature, math.max(minimum, math.min(maximum, value)))
+        write_value(object, options, feature, math.max(minimum, math.min(maximum, value)))
       end,
     },
   }
@@ -108,12 +119,12 @@ KINDS.text = function(object, options)
     disc = { state_topic = "~/state", command_topic = "~/set", max = max_length },
     states = {
       state = function()
-        local value = feat(object, feature)
+        local value = read_value(object, options, feature)
         if value == nil then return nil end
         return text_prefix(tostring(value), max_length)
       end,
     },
-    cmds = { set = function(payload) object:set(feature, text_prefix(payload, max_length)) end },
+    cmds = { set = function(payload) write_value(object, options, feature, text_prefix(payload, max_length)) end },
   }
 end
 
@@ -133,14 +144,14 @@ KINDS.select = function(object, options)
     disc = { state_topic = "~/state", command_topic = "~/set", options = option_names },
     states = {
       state = function()
-        local value = feat(object, feature)
+        local value = read_value(object, options, feature)
         return value ~= nil and options.map[math.tointeger(tonumber(value)) or value] or nil
       end,
     },
     cmds = {
       set = function(payload)
         local value = values_by_option[payload]
-        if value ~= nil then object:set(feature, value) end
+        if value ~= nil then write_value(object, options, feature, value) end
       end,
     },
   }

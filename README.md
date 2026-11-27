@@ -520,7 +520,8 @@ przeciwnym razie wbudowany pakiet publicznych CA.
 
 ### Home Assistant
 
-1. Zainstaluj broker (np. dodatek Mosquitto) i integrację MQTT w HA z włączonym discovery.
+1. Zainstaluj broker (np. dodatek Mosquitto) i integrację MQTT w HA z włączonym discovery
+   (Home Assistant 2024.11 lub nowszy: discovery per urządzenie).
 2. Utwórz użytkownika brokera dla CLU, wpisz URI i dane w menuconfig, zbuduj i wgraj.
 3. Wgraj projekt z OM. Po połączeniu CLU pojawia się w HA jako urządzenie nazwane według
    `-- NAME_CLU` z OM.LUA, a każdy moduł TF-Bus jako osobne urządzenie podpięte pod CLU
@@ -536,9 +537,21 @@ masterowi magistrali są dostępne tylko, gdy CLU jest online **i** łącze modu
 (`<base>/system/tfbus/modules/<module>`) = ON — moduł, który przestał odpowiadać, pokazuje encje
 jako niedostępne zamiast starych wartości. Temat łącza jest publikowany także bez diagnostyki.
 
-Discovery (`homeassistant/<component>/opengr8on_CLU<serial>/<obj>/config`, retained) jest wysyłane
-przy każdym połączeniu i gdy HA opublikuje `online` na `homeassistant/status`. Konfiguracje encji,
-które zniknęły po zmianie OM.LUA, są czyszczone (lista w `a:\STORAGE.DAT`).
+Discovery jest per urządzenie HA, ze skróconymi kluczami HA (`stat_t`, `cmd_t`, `dev`, …): jedna
+konfiguracja retained `homeassistant/device/<object_id>/config` z encjami w `cmps`.
+
+| `object_id` | Zawartość |
+|---|---|
+| `opengr8on_CLU<serial>` | obiekty OM na CLU (wirtualne, lokalna CLU) |
+| `opengr8on_CLU<serial>_var` | cechy użytkownika CLU |
+| `opengr8on_CLU<serial>_system` | diagnostyka firmware (`CLU_MQTT_DIAGNOSTICS`) |
+| `opengr8on_CLU<serial>_<moduł>` | moduł (osobne urządzenie HA) |
+
+Pierwsze trzy to jedno urządzenie HA (te same `ids`). Konfiguracje są wysyłane przy każdym połączeniu
+i gdy HA opublikuje `online` na `homeassistant/status`. Encja, która zniknęła po zmianie OM.LUA lub
+USER.LUA, jest raz wysyłana jako `{"p": "<platforma>"}` (HA ją usuwa); urządzenie bez encji dostaje
+pustą konfigurację. Lista wysłanych encji jest w `a:\STORAGE.DAT`. Konfiguracje per encja ze
+starszego firmware (`homeassistant/<component>/opengr8on_CLU<serial>/<id>/config`) są czyszczone raz.
 
 | Klasa | Encja HA | Polecenia |
 |---|---|---|

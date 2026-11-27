@@ -7,8 +7,10 @@
 --     as number / text / switch under "<root>/var/<name>"
 --   * devices: the CLU, and one per module (via_device the CLU) with its TF-Bus versions; entities
 --     of a TF-Bus module are unavailable while its link (system/tfbus/modules/<module>) is OFF
---   * discovery: retained "<prefix>/<component>/opengr8on_CLU<sn>/<id>/config", resent on every
---     (re)connect and on Home Assistant's "online"; configs of entities that disappeared are cleared
+--   * discovery: device-based (HA 2024.11+), one retained "<prefix>/device/<object_id>/config"
+--     per device (the CLU's split into objects / _var / _system), abbreviated keys; resent on
+--     every (re)connect and on Home Assistant's "online"; entities and devices that disappeared
+--     are removed (see publish_discovery)
 --   * state: polled every scan_ms, published retained on change only
 --   * commands: "<root>/<obj>/set" and kind-specific subtopics -> fixed object calls (never eval)
 --   * internals (menuconfig CLU_MQTT_DIAGNOSTICS) under "<root>/system/", values published

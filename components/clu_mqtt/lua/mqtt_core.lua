@@ -173,7 +173,7 @@ local function build()
     serial_number = tostring(cfg.sn),
     sw_version = cfg.fw ~= "" and cfg.fw or nil,
   }
-  origin = { name = "opengr8on-clu-esp32" }
+  origin = { name = "opengr8on-clu-esp32", sw_version = device.sw_version }
   entities, by_base, by_object, stateful, module_devices, module_link_topics = {}, {}, {}, {}, {}, {}
 
   local function add(name, object, entity_options)
@@ -186,7 +186,6 @@ local function build()
         entity.obj = object
         local module = object._class == 2 and object or object._module -- module itself / its IO
         if type(module) == "table" and module._sn ~= nil then entity.device = module_device(module) end
-        if entity.device and not entity.link then entity.link_topic = module_link_topics[entity.device] end
         -- e.base: topic path under root. First state-bearing entity of an object owns
         -- <root>/<obj>; later ones get <obj>_<n>; opts.group prefixes a path ("system/memory").
         local base = options.base or name
@@ -255,24 +254,94 @@ local function state_topic(entity, state_key)
   return ROOT .. "/" .. entity.base .. (state_key == "" and "" or "/" .. state_key)
 end
 
-local function config_topic(entity)
-  return cfg.prefix .. "/" .. entity.comp .. "/" .. NODE .. "/" .. entity.id .. "/config"
+-- ---------------------------------------------------------------------------------------------
+-- Device-based discovery (Home Assistant 2024.11+): one retained config per HA device,
+-- "<prefix>/device/<object_id>/config", its entities in "cmps". The CLU device is split by entity
+-- source into configs that share its "dev" ids: objects (NODE), user features (NODE_var) and
+-- firmware internals (NODE_system); a module is one config (its device id). An entity never moves
+-- between configs. Component keys are "<platform>_<entity id>": a remapped object (switch ->
+-- light) is a new component and the old one gets removed. Keys are abbreviated as in HA's
+-- abbreviations.py; keys missing from these tables have no abbreviation and pass unchanged.
+-- ---------------------------------------------------------------------------------------------
+local COMPONENT_ABBREVIATIONS = {
+  action_template = "act_tpl", action_topic = "act_t", availability = "avty",
+  availability_mode = "avty_mode", availability_topic = "avty_t", color_temp_kelvin = "clr_temp_k",
+  command_topic = "cmd_t", current_temperature_template = "curr_temp_tpl",
+  current_temperature_topic = "curr_temp_t", device_class = "dev_cla", entity_category = "ent_cat",
+  event_types = "evt_typ", icon = "ic", max_kelvin = "max_k", min_kelvin = "min_k",
+  mode_command_topic = "mode_cmd_t", mode_state_template = "mode_stat_tpl",
+  mode_state_topic = "mode_stat_t", options = "ops", payload_available = "pl_avail",
+  payload_not_available = "pl_not_avail", position_topic = "pos_t",
+  preset_mode_command_topic = "pr_mode_cmd_t", preset_mode_state_topic = "pr_mode_stat_t",
+  preset_mode_value_template = "pr_mode_val_tpl", preset_modes = "pr_modes",
+  set_position_topic = "set_pos_t", state_class = "stat_cla", state_stopped = "stat_stopped",
+  state_topic = "stat_t", supported_color_modes = "sup_clrm",
+  temperature_command_topic = "temp_cmd_t", temperature_state_template = "temp_stat_tpl",
+  temperature_state_topic = "temp_stat_t", topic = "t", unique_id = "uniq_id",
+  unit_of_measurement = "unit_of_meas",
+}
+local DEVICE_ABBREVIATIONS = { identifiers = "ids", manufacturer = "mf", model = "mdl",
+                               hw_version = "hw", sw_version = "sw", serial_number = "sn" }
+local ORIGIN_ABBREVIATIONS = { sw_version = "sw" }
+
+local function abbreviated(fields, abbreviations)
+  local short_fields = {}
+  for key, value in pairs(fields) do short_fields[abbreviations[key] or key] = value end
+  return short_fields
 end
 
--- Available while the CLU is online (LWT) and, for a TF-Bus module's entities, its link is ON.
-local function config_payload(entity)
-  local discovery = { ["~"] = ROOT .. "/" .. entity.base, name = entity.name, unique_id = entity.uid,
-              device = entity.device or device, origin = origin }
-  if entity.link_topic then
-    discovery.availability = { { topic = cfg.status },
-                               { topic = entity.link_topic, payload_available = "ON",
-                                 payload_not_available = "OFF" } }
-    discovery.availability_mode = "all"
-  else
-    discovery.availability_topic = cfg.status
+-- Discovery configs of the current entities, in build order: { topic, device, link_topic,
+-- entities = {[component key] = entity} }.
+local function discovery_configs()
+  local configs_by_id, configs = {}, {}
+  for _, entity in ipairs(entities) do
+    if entity.comp then -- module links have no component
+      local object_id = entity.device and entity.device.identifiers[1]
+                        or entity.obj == SYSOBJ and NODE .. "_system"
+                        or entity.obj._class == USER_FEATURE_CLASS and NODE .. "_var"
+                        or NODE
+      local discovery_config = configs_by_id[object_id]
+      if not discovery_config then
+        discovery_config = { topic = cfg.prefix .. "/device/" .. object_id .. "/config",
+                             device = entity.device or device,
+                             link_topic = entity.device and module_link_topics[entity.device],
+                             entities = {} }
+        configs_by_id[object_id] = discovery_config
+        configs[#configs + 1] = discovery_config
+      end
+      discovery_config.entities[entity.comp .. "_" .. entity.id] = entity
+    end
   end
-  for key, value in pairs(entity.disc) do discovery[key] = value end
-  return json(discovery)
+  return configs
+end
+
+local function component_payload(entity)
+  local component = { p = entity.comp, ["~"] = ROOT .. "/" .. entity.base, name = entity.name,
+                      unique_id = entity.uid }
+  for key, value in pairs(entity.disc) do component[key] = value end
+  -- The link itself: available with the CLU, whatever the link says (overrides the device's).
+  if entity.link then component.availability = { { t = cfg.status } } end
+  return abbreviated(component, COMPONENT_ABBREVIATIONS)
+end
+
+-- Available while the CLU is online (LWT) and, for a TF-Bus module, its link is ON. removed:
+-- {[component key] = platform} of components published before and gone now, sent as {"p": ...}
+-- once so HA deletes their entities (HA keeps components a config just leaves out).
+local function config_payload(discovery_config, removed)
+  local payload = { dev = abbreviated(discovery_config.device, DEVICE_ABBREVIATIONS),
+                    o = abbreviated(origin, ORIGIN_ABBREVIATIONS), cmps = {} }
+  if discovery_config.link_topic then
+    payload.avty = { { t = cfg.status },
+                     { t = discovery_config.link_topic, pl_avail = "ON", pl_not_avail = "OFF" } }
+    payload.avty_mode = "all"
+  else
+    payload.avty_t = cfg.status
+  end
+  for component_key, entity in pairs(discovery_config.entities) do
+    payload.cmps[component_key] = component_payload(entity)
+  end
+  for component_key, platform in pairs(removed) do payload.cmps[component_key] = { p = platform } end
+  return json(payload)
 end
 
 -- ---------------------------------------------------------------------------------------------
@@ -342,30 +411,35 @@ local function flush()
   if queue_head > queue_tail then reset_queue() end
 end
 
+-- Persisted (mqtt.devices): {[config topic] = {[component key] = platform}} as last published.
 local function publish_discovery()
   if not cfg.ha then return end
   local persisted_mqtt = persist.section("mqtt")
-  local current_topics = {}
-  for _, entity in ipairs(entities) do
-    if entity.comp then -- module links have no config
-      local topic = config_topic(entity)
-      current_topics[#current_topics + 1] = topic
-      enqueue(topic, config_payload(entity), true, 1, true)
+  local changed = false
+  -- Per-entity configs of earlier firmware (mqtt.configs): cleared before the device configs
+  -- reuse their unique_ids.
+  if persisted_mqtt.configs then
+    for _, topic in ipairs(persisted_mqtt.configs) do enqueue(topic, "", true, 1, true) end
+    persisted_mqtt.configs, changed = nil, true
+  end
+  local published = persisted_mqtt.devices or {}
+  local current = {}
+  for _, discovery_config in ipairs(discovery_configs()) do
+    local platforms, removed = {}, {}
+    for component_key, entity in pairs(discovery_config.entities) do platforms[component_key] = entity.comp end
+    for component_key, platform in pairs(published[discovery_config.topic] or {}) do
+      if not platforms[component_key] then removed[component_key] = platform end
     end
+    enqueue(discovery_config.topic, config_payload(discovery_config, removed), true, 1, true)
+    current[discovery_config.topic] = platforms
   end
-  -- Clear configs this CLU published before but no longer has (object removed / hidden / remapped).
-  local keep = {}
-  for _, topic in ipairs(current_topics) do keep[topic] = true end
-  for _, topic in ipairs(persisted_mqtt.configs or {}) do
-    if not keep[topic] then enqueue(topic, "", true, 1, true) end
+  -- A whole device gone (module removed from OM, all user features / internals hidden): empty
+  -- config, HA deletes its entities.
+  for topic in pairs(published) do
+    if not current[topic] then enqueue(topic, "", true, 1, true) end
   end
-  table.sort(current_topics)
-  local changed = #current_topics ~= #(persisted_mqtt.configs or {})
-  for topic_index, topic in ipairs(current_topics) do
-    if not changed and persisted_mqtt.configs[topic_index] ~= topic then changed = true end
-  end
-  if changed then
-    persisted_mqtt.configs = current_topics
+  if changed or __ser(current) ~= __ser(published) then
+    persisted_mqtt.devices = current
     persist.mark()
   end
 end

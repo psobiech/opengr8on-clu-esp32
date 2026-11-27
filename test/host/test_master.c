@@ -921,6 +921,26 @@ int main(void)
               "init:1 init:3 init:5 status:1:5:01 status:3:5:01 status:5:5:01 ");
     check("start: deferred call run by the bus task", strcmp(s_deferred, "mm_C:t1:7 ") == 0);
 
+    // ---- idle time after each polling round (CLU_TFBUS_POLL_ROUND_GAP_MS): the whole round back
+    // to back, then the gap; 0 = one tick, as without the option
+    s_round_gap_ms = 0;
+    log_reset();
+    TickType_t round_start = host_ticks;
+    run_bus(1);
+    int polls_per_round = s_tx_count[TFBUS_T_STATUS_POLL];
+    check("round gap 0: one tick between rounds", polls_per_round > 0 && host_ticks - round_start == 1);
+    s_round_gap_ms = 12;
+    log_reset();
+    round_start = host_ticks;
+    run_bus(1);
+    check("round gap 12 ms: the same polls, then 12 ticks idle",
+          s_tx_count[TFBUS_T_STATUS_POLL] == polls_per_round && host_ticks - round_start == 12);
+    if (s_tx_count[TFBUS_T_STATUS_POLL] != polls_per_round || host_ticks - round_start != 12) {
+        printf("  polls %d (gap 0: %d), ticks %lu\n", s_tx_count[TFBUS_T_STATUS_POLL], polls_per_round,
+               (unsigned long)(host_ticks - round_start));
+    }
+    s_round_gap_ms = 0;
+
     // ---- module gone: offline after 3 missed polls, then single ADDR_ASSIGN tries only, every
     // 40 ms within 60 s of the discovery RESET (one round = one tick here); the "x/y online"
     // summary runs at round 500

@@ -56,6 +56,11 @@ static const char *TAG = "tfbus"; // tfbus_master_set_log_tag()
 #define DISCOVER_RETRIES     3
 #define DISCOVER_MAX_REPLIES 8
 #define SUMMARY_EVERY_MS    600000 // "round N: x/y online" heartbeat (also logged on change)
+#ifdef CONFIG_CLU_TFBUS_POLL_ROUND_GAP_MS
+#define POLL_ROUND_GAP_MS   CONFIG_CLU_TFBUS_POLL_ROUND_GAP_MS
+#else
+#define POLL_ROUND_GAP_MS   0      // host build: poll continuously
+#endif
 #define WATCHDOG_SLICE_MS   1000   // idle / parked bus: wake up this often to check in with the task watchdog
 #define NVS_NS              "tfbus"
 #define NVS_KEY             "mods"
@@ -100,6 +105,7 @@ static volatile bool s_reinit; // run driver init for all modules before the nex
 // still open (latched off, so the tick counter wrapping does not reopen it).
 static uint32_t s_reset_tick;
 static bool s_rejoin_fast;
+static uint32_t s_round_gap_ms = POLL_ROUND_GAP_MS; // idle time after each polling round
 static const tfbus_driver_t *s_drivers[MAX_DRIVERS];
 static int s_ndrivers;
 
@@ -333,6 +339,7 @@ static void mod_forget(tfbus_module_t *module)
 
 static void drain_cmds(void);
 static void wait_notified(void);
+static void pause_between_rounds(void);
 
 esp_err_t tfbus_master_queue(const uint8_t *frame, size_t len)
 {
@@ -1235,9 +1242,23 @@ static void bus_task(void *arg)
                     last_summary = tick_count;
                 }
             }
-            vTaskDelay(1); // let lower-priority tasks run between rounds
+            pause_between_rounds();
         }
     }
+}
+
+/**
+ * @brief End of a polling round: keep the bus idle for s_round_gap_ms, like the real CLU.
+ *
+ * At least one tick, so lower-priority tasks run between rounds. Commands and driver timers queued
+ * meanwhile go out at the start of the next round.
+ */
+static void pause_between_rounds(void)
+{
+    if (s_round_gap_ms > 1) {
+        vTaskDelay(pdMS_TO_TICKS(s_round_gap_ms - 1));
+    }
+    vTaskDelay(1);
 }
 
 /**

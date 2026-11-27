@@ -397,6 +397,17 @@ menu "RS485 bus (TF-Bus / MySensors)"
             TF-Bus master running: on the RS485 wire (CLU_TFBUS) or without a wire, serving only
             modules emulated by the firmware (CLU_MYSENSORS, CLU_LOCAL_IO).
 
+    config CLU_TFBUS_POLL_ROUND_GAP_MS
+        int "Idle time after each polling round (ms)"
+        depends on CLU_TFBUS_MASTER
+        range 0 1000
+        default 12
+        help
+            The master polls all modules back to back, then leaves the bus idle this long before the
+            next round. A real CLU idles about 12 ms (2 modules: a round every ~17 ms, 3 modules:
+            ~19.4 ms). Commands and driver timers queued meanwhile go out at the start of the next
+            round, so they wait at most this long. 0 = poll continuously (one tick between rounds).
+
     if CLU_TFBUS || CLU_MYSENSORS
 
         config CLU_RS485_UART

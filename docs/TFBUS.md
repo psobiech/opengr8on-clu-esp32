@@ -24,6 +24,10 @@ niezweryfikowana. Stan modułów: [README](../README.md#moduły-tf-bus).
   firmware zbiera wszystkie odpowiedzi z tej sekundy i adresuje każdy moduł (zrzut: panel po 369 ms,
   RELAY po 577 ms, oba dostały adres); moduły unikają kolizji tylko różnym opóźnieniem odpowiedzi.
   Przy starcie moduły z rejestru są adresowane po SN przed DISCOVER, który szuka tylko nowych.
+- Odpytywanie: wszystkie moduły po kolei bez przerw, potem magistrala stoi
+  `CLU_TFBUS_POLL_ROUND_GAP_MS` (domyślnie 12 ms) przed następną rundą. Prawdziwe CLU: runda co
+  ok. 17 ms przy 2 modułach, 19,4 ms przy 3 (ok. 2,35 ms na moduł + ok. 12 ms przerwy). 0 = bez
+  przerwy (dwa razy większe obciążenie magistrali).
 - PowerSupplyVoltage (klasa 12) LED_RGBW_DIN, RELAY_DIN_4 i IO_MODULE_DIN_8: rekord statusu
   `02 02 10 [U LE u16, 0,01 V]`. Value% = U / MaxValue × 100 bez zaokrąglania (prawdziwe CLU:
   23,13 V przy MaxValue 24 → 96,375). Zdarzenia zmiany co Sensitivity, OnOutOfRange / OnInRange
@@ -134,6 +138,9 @@ Module support status: [README](../README.md#moduły-tf-bus).
   369 ms, a RELAY at 577 ms, both assigned); modules avoid collisions only by answering at different
   times. At boot the registry modules are addressed by SN before DISCOVER, which then only looks for
   new ones.
+- Polling: all modules back to back, then the bus stays idle for `CLU_TFBUS_POLL_ROUND_GAP_MS`
+  (default 12 ms) before the next round. Real CLU: a round every ~17 ms with 2 modules, 19.4 ms with
+  3 (about 2.35 ms per module + about 12 ms idle). 0 = no idle time (about twice the bus load).
 - PowerSupplyVoltage (class 12) of LED_RGBW_DIN, RELAY_DIN_4 and IO_MODULE_DIN_8: status record
   `02 02 10 [U LE u16, 0.01 V]`. Value% = U / MaxValue × 100, not rounded (real CLU: 23.13 V with
   MaxValue 24 → 96.375). Change events every Sensitivity, OnOutOfRange / OnInRange when crossing

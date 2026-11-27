@@ -74,6 +74,23 @@ int tfbus_uart_collect(const uint8_t *request_frame, size_t request_length, tfbu
  */
 esp_err_t tfbus_uart_send(const uint8_t *request_frame, size_t request_length);
 
+/** @brief Bus utilization over the last load window (tfbus_uart_load()), in permille. */
+typedef struct {
+    uint16_t wire_permille; /**< Bytes on the wire, both directions (10 bit times each at the baud rate). */
+    uint16_t busy_permille; /**< Time the master held the bus: sending, then waiting for and receiving the
+                                 replies, unanswered polls' timeouts included. The rest is idle gaps. */
+} tfbus_uart_load_t;
+
+/**
+ * @brief Bus utilization of the last complete 10 s window (wire transfers only; local endpoints
+ * do not use the bus). A bus left without traffic for two windows reports 0.
+ *
+ * Safe from any task. The two values may come from adjacent windows.
+ * @param load Filled on success.
+ * @return false if there is no wire or no window has completed yet.
+ */
+bool tfbus_uart_load(tfbus_uart_load_t *load);
+
 /**
  * @brief Local bus endpoint: modules emulated by the firmware itself (e.g. on-board IO).
  *

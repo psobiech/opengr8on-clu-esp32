@@ -610,6 +610,7 @@ tylko przy zmianie.
 <base>/system/memory/heap_free | heap_min | psram_free | lua     KiB
 <base>/system/network/rssi | ip                        dBm | text
 <base>/system/tfbus/online | total | missed_polls      counters
+<base>/system/tfbus/load | busy                        % ostatnich 10 s: bajty na linii | magistrala zajęta (wysyłanie + czekanie na odpowiedź)
 <base>/system/tfbus/modules/<module>                   ON/OFF
 <base>/system/log                                      linie logu (CLU_MQTT_LOG, nie retained)
 ```

@@ -61,6 +61,10 @@ local SYSTEM_ENTITIES = {
   { kind = "sensor", group = "system/tfbus", base = "missed_polls", feature = "tfbus_fails",
     name = "TFBUS missed polls", state_class = "total_increasing", icon = "mdi:lan-disconnect",
     sampled = true },
+  { kind = "sensor", group = "system/tfbus", base = "load", feature = "tfbus_load",
+    name = "TFBUS load", unit = "%", icon = "mdi:transit-connection-variant", sampled = true },
+  { kind = "sensor", group = "system/tfbus", base = "busy", feature = "tfbus_busy",
+    name = "TFBUS busy", unit = "%", icon = "mdi:timer-sand", sampled = true },
   { kind = "button", group = "system/clu", base = "restart", name = "Restart",
     device_class = "restart", entity_category = "config", press = function() clu.sys_restart() end },
 }

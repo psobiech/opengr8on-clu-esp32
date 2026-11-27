@@ -4,7 +4,9 @@
  *
  * - `__clu.sys_info()`       -> {heap_free, heap_min, psram_free, rssi? (WiFi), ip? (Ethernet first,
  *                                else WiFi), reset_reason, last_crash? (clu_crash),
- *                                tfbus_total, tfbus_online, tfbus_fails}
+ *                                tfbus_total, tfbus_online, tfbus_fails, tfbus_load?, tfbus_busy?}; tfbus_load /
+ *                                tfbus_busy: % of the last 10 s window with bytes on the wire / the bus
+ *                                held by the master (tfbus_uart_load()), absent without a wire
  * - `__clu.tfbus_module(sn)` -> {online, fails, polls, addr, hw_type, fw_api_ver, hw_ver?, fw_ver?} | nil;
  *                                hw_ver / fw_ver ("a.b.c") once VERSION_QUERY answered
  * - `__clu.local_channels(sn)` -> {[OM class] = bit mask of the channels with hardware behind them}
@@ -24,6 +26,7 @@
 #include "esp_timer.h"
 #include "sdkconfig.h"
 #include "tfbus_master.h"
+#include "tfbus_uart.h"
 #if CONFIG_CLU_WIFI
 #include "esp_wifi.h"
 #endif
@@ -108,6 +111,13 @@ static int l_sys_info(lua_State *L)
     set_int(L, "tfbus_total", module_count);
     set_int(L, "tfbus_online", online);
     set_int(L, "tfbus_fails", fails);
+    tfbus_uart_load_t bus_load;
+    if (tfbus_uart_load(&bus_load)) {
+        lua_pushnumber(L, bus_load.wire_permille / 10.0);
+        lua_setfield(L, -2, "tfbus_load");
+        lua_pushnumber(L, bus_load.busy_permille / 10.0);
+        lua_setfield(L, -2, "tfbus_busy");
+    }
     return 1;
 }
 

@@ -48,7 +48,7 @@ __clu = {
     return { heap_free = 200 * 1024 + 5, heap_min = 150 * 1024, psram_free = 7000 * 1024, rssi = -61,
              ip = "192.168.1.100", reset_reason = "task_watchdog", tfbus_total = 2, tfbus_online = 1,
              last_crash = "task watchdog: clu_lua (CPU 1) | task IDLE1 | pc 0x400d1234",
-             tfbus_fails = sys_fails }
+             tfbus_fails = sys_fails, tfbus_load = 3.4, tfbus_busy = 62.5 }
   end,
   tfbus_module = function(sn) return module_statuses[sn] end,
   ms_slots = function() return { { module = 1, sn = 0x0a000004, kind = "din", channel = 1 } } end, -- MySensors
@@ -419,6 +419,9 @@ check("leaf sensors: state_topic is ~", (config("sensor", "system_memory_heap_fr
 check("no flat system_* / module topics", count("grenton/CLU100000001/system_") == 0 and count("grenton/CLU100000001/13ab6c81") == 0)
 check("tfbus counters", (find("grenton/CLU100000001/system/tfbus/online") or {}).p ~= nil
   and (find("grenton/CLU100000001/system/tfbus/total") or {}).p ~= nil)
+check("tfbus load / busy in %", (find("grenton/CLU100000001/system/tfbus/load") or {}).p == "3.4"
+  and (find("grenton/CLU100000001/system/tfbus/busy") or {}).p == "62.5"
+  and (config("sensor", "system_tfbus_load") or {}).p:find('"unit_of_meas":"%"', 1, true) ~= nil)
 local link_cfg = config("binary_sensor", "system_tfbus_modules_13ab6c81")
 check("module link entity in the module's device config", link_cfg and link_cfg.t == DEVICE_CFG .. NODE .. "_13ab6c81/config"
   and link_cfg.p:find('"name":"TF-Bus link"', 1, true) ~= nil)

@@ -21,6 +21,20 @@ static bool s_echo_reported;  // whether the transceiver echoes was logged (once
 static tfbus_uart_local_fn_t s_local[TFBUS_UART_MAX_LOCAL];
 static int s_nlocal;
 
+// Bus utilization: summed by the bus task over LOAD_WINDOW_US, then latched for tfbus_uart_load().
+#define LOAD_WINDOW_US (10 * 1000 * 1000)
+#define BITS_PER_BYTE  10 // 8N1: start + 8 data + stop
+static int s_baud;
+static bool s_window_open;
+static int64_t s_window_start_us, s_window_busy_us;
+static uint32_t s_window_wire_bytes;
+static volatile uint16_t s_wire_permille, s_busy_permille;
+static volatile bool s_load_valid;
+static volatile uint32_t s_load_latched_ms; // esp_timer ms (wraps), single word: read from any task
+
+static void account_bus_use(int64_t started_us, size_t wire_bytes);
+static uint16_t permille(int64_t part_us, int64_t whole_us);
+
 void tfbus_uart_set_local(tfbus_uart_local_fn_t local_endpoint)
 {
     s_nlocal = 0;
@@ -51,6 +65,9 @@ static int local(const uint8_t *request_frame, size_t request_length, uint8_t *r
 esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg)
 {
     s_nowire = cfg->uart_num < 0;
+    s_window_open = s_load_valid = false; // a new bus: utilization from scratch
+    s_window_busy_us = 0;
+    s_window_wire_bytes = 0;
     if (s_nowire) {
         ESP_LOGI(TAG, "no RS485 wire: emulated modules only");
         return ESP_OK;
@@ -75,6 +92,7 @@ esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg)
     // ~3 byte times at 115200 -> frame boundary detection
     ESP_ERROR_CHECK(uart_set_rx_timeout(cfg->uart_num, 3));
     s_uart = cfg->uart_num;
+    s_baud = cfg->baud;
     ESP_LOGI(TAG, "RS485 on UART%d tx=%d rx=%d de=%d @%d", cfg->uart_num, cfg->tx_pin,
              cfg->rx_pin, cfg->de_pin, cfg->baud);
     return ESP_OK;
@@ -102,7 +120,12 @@ esp_err_t tfbus_uart_send(const uint8_t *request_frame, size_t request_length)
         uint8_t reply_buffer[TFBUS_MAX_FRAME];
         s_local[i](request_frame, request_length, reply_buffer, sizeof reply_buffer); // e.g. RESET broadcast: local modules hear it too
     }
-    return wire_send(request_frame, request_length);
+    int64_t started_us = esp_timer_get_time();
+    esp_err_t send_result = wire_send(request_frame, request_length);
+    if (send_result == ESP_OK && !s_nowire) {
+        account_bus_use(started_us, request_length);
+    }
+    return send_result;
 }
 
 /** @brief Reply collector state for tfbus_uart_transact() / tfbus_uart_collect(). */
@@ -132,6 +155,7 @@ int tfbus_uart_transact(const uint8_t *request_frame, size_t request_length, uin
     if (s_nowire) {
         return 0; // no module on a wire answers
     }
+    int64_t started_us = esp_timer_get_time();
     if (wire_send(request_frame, request_length) != ESP_OK) {
         return -1;
     }
@@ -139,7 +163,8 @@ int tfbus_uart_transact(const uint8_t *request_frame, size_t request_length, uin
     collect_t collector = {.request_frame = request_frame, .request_length = request_length, .replies = &reply,
                            .max_replies = 1,
                            .reply_capacity = reply_capacity < sizeof reply.frame ? reply_capacity : sizeof reply.frame};
-    receive(&collector, timeout_ms);
+    int received = receive(&collector, timeout_ms);
+    account_bus_use(started_us, request_length + (size_t)received);
     if (collector.got == 0) {
         return 0;
     }
@@ -160,6 +185,7 @@ int tfbus_uart_collect(const uint8_t *request_frame, size_t request_length, tfbu
     if (reply_count > 0 || s_nowire) {
         return reply_count; // local modules first (no 1 s wire window each), the wire after them
     }
+    int64_t started_us = esp_timer_get_time();
     if (wire_send(request_frame, request_length) != ESP_OK) {
         return -1;
     }
@@ -167,8 +193,57 @@ int tfbus_uart_collect(const uint8_t *request_frame, size_t request_length, tfbu
                            .replies = replies, .max_replies = max_replies,
                            .reply_capacity = sizeof replies->frame, .listen_full_window = true};
     size_t received = (size_t)receive(&collector, timeout_ms);
+    account_bus_use(started_us, request_length + received);
     *garbled = received > collector.framed_bytes;
     return collector.got;
+}
+
+bool tfbus_uart_load(tfbus_uart_load_t *load)
+{
+    if (s_nowire || s_uart < 0 || !s_load_valid) {
+        return false;
+    }
+    uint32_t latched_age_ms = (uint32_t)(esp_timer_get_time() / 1000) - s_load_latched_ms;
+    bool stale = latched_age_ms > 2 * (LOAD_WINDOW_US / 1000); // bus parked or idle: no window closes
+    load->wire_permille = stale ? 0 : s_wire_permille;
+    load->busy_permille = stale ? 0 : s_busy_permille;
+    return true;
+}
+
+/**
+ * @brief Add one wire transfer (bus task only) to the load window; latch the window once it spans
+ * LOAD_WINDOW_US.
+ * @param started_us Time the transfer began (before sending).
+ * @param wire_bytes Bytes it put on and took off the wire (echo of our own frame excluded).
+ */
+static void account_bus_use(int64_t started_us, size_t wire_bytes)
+{
+    int64_t now_us = esp_timer_get_time();
+    if (!s_window_open) {
+        s_window_open = true;
+        s_window_start_us = started_us;
+    }
+    s_window_busy_us += now_us - started_us;
+    s_window_wire_bytes += (uint32_t)wire_bytes;
+    int64_t window_us = now_us - s_window_start_us;
+    if (window_us < LOAD_WINDOW_US) {
+        return;
+    }
+    int64_t wire_us = (int64_t)s_window_wire_bytes * BITS_PER_BYTE * 1000000 / s_baud;
+    s_wire_permille = permille(wire_us, window_us);
+    s_busy_permille = permille(s_window_busy_us, window_us);
+    s_load_latched_ms = (uint32_t)(now_us / 1000);
+    s_load_valid = true;
+    s_window_start_us = now_us;
+    s_window_busy_us = 0;
+    s_window_wire_bytes = 0;
+}
+
+/** @brief @p part_us / @p whole_us in permille, at most 1000. */
+static uint16_t permille(int64_t part_us, int64_t whole_us)
+{
+    int64_t ratio = part_us * 1000 / whole_us;
+    return (uint16_t)(ratio > 1000 ? 1000 : ratio);
 }
 
 /**

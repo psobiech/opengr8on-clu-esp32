@@ -106,7 +106,7 @@ SYS_SRCS := $(MAIN)/clu_net.c $(MAIN)/clu_time.c $(MAIN)/clu_state.c $(MAIN)/clu
 SYS_OBJS := $(patsubst $(MAIN)/%.c,$(OUT)/sys_%.o,$(SYS_SRCS))
 SYS_INC := -Istubs -I. -I$(MAIN) -I$(PROTO)/include -I$(COMP)/clu_crypto/include -I$(LUA_DIR) \
            -I$(COMP)/clu_lua/include -I$(COMP)/tfbus_master/include -I$(COMP)/clu_mqtt/include \
-           -I$(COMP)/clu_rtc/include -I$(COMP)/clu_localio/include
+           -I$(COMP)/clu_rtc/include -I$(COMP)/clu_localio/include -I$(COMP)/tfbus_uart/include
 HOST_CFLAGS := -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter $(OPT) -g $(SAN) $(LUA_DEFS)
 
 $(OUT)/sys_%.o: $(MAIN)/%.c sys_host.h $(STUBS) $(HDRS)

@@ -31,6 +31,7 @@
 #include "lauxlib.h"
 #include "lualib.h"
 #include "tfbus_master.h"
+#include "tfbus_uart.h"
 
 static int failures;
 
@@ -236,6 +237,13 @@ static tfbus_module_t s_mods[3];
 static int s_nmods;
 static tfbus_device_t s_devs[3];
 static int s_ndevs;
+// tfbus_uart: bus load of the last window, none until s_bus_load_valid
+static bool s_bus_load_valid;
+bool tfbus_uart_load(tfbus_uart_load_t *load)
+{
+    *load = (tfbus_uart_load_t){.wire_permille = 34, .busy_permille = 625};
+    return s_bus_load_valid;
+}
 int tfbus_master_count(void) { return s_nmods; }
 tfbus_module_t *tfbus_master_get(int i) { return i >= 0 && i < s_nmods ? &s_mods[i] : NULL; }
 // On-board modules: sn 7 = GPIO input module (DIN1 + DIN3), sn 8 = analog module (2 inputs + hub).
@@ -762,7 +770,16 @@ static void test_sysinfo(void)
               !strcmp(field_str("reset_reason"), "power_on") && field_int("rssi") == -61 &&
               !strcmp(field_str("ip"), "192.168.1.20"));
     check("sys_info: bus totals", field_int("tfbus_total") == 2 && field_int("tfbus_online") == 1 && field_int("tfbus_fails") == 7);
-    lua_pop(L, 1);
+    lua_getfield(L, -1, "tfbus_load");
+    check("sys_info: no bus load window -> tfbus_load absent", lua_isnil(L, -1));
+    lua_pop(L, 2);
+    s_bus_load_valid = true;
+    call("sys_info", 0, 0);
+    lua_getfield(L, -1, "tfbus_load");
+    lua_getfield(L, -2, "tfbus_busy");
+    check("sys_info: bus load / busy in %", lua_tonumber(L, -2) == (lua_Number)3.4 && lua_tonumber(L, -1) == (lua_Number)62.5);
+    lua_pop(L, 3);
+    s_bus_load_valid = false;
 
     static const struct { esp_reset_reason_t r; const char *s; } reasons[] = {
         {ESP_RST_EXT, "external"}, {ESP_RST_SW, "software"}, {ESP_RST_PANIC, "panic"},

@@ -11,6 +11,7 @@
 #include "tfbus_uart.h"
 
 static int failures;
+#define BITS_PER_BYTE_TEST 10 // 8N1
 
 static void check(const char *name, int cond)
 {
@@ -401,6 +402,37 @@ int main(void)
     rx_at(100, f, dl);
     n = tfbus_uart_collect(f, dl, replies, 4, 1000, &garbled);
     check("auto-direction: only the echo -> 0, not garbled", n == 0 && !garbled);
+
+    // Bus load: STATUS_POLL every 10 ms, answered 2 ms later. Echo (auto-direction) is not wire
+    // traffic of its own. 10 s windows: wire = bytes * 10 bits at 115200, busy = request to reply.
+    tfbus_uart_load_t load;
+    check("load: wire, no window completed yet", tfbus_uart_init(&cfg) == ESP_OK && !tfbus_uart_load(&load));
+    fl = tfbus_status_poll(f, sizeof f, 5);
+    bool all_replied = true;
+    for (int poll = 0; poll <= 1000; poll++) {
+        reset();
+        int64_t poll_start_us = s_now_us;
+        rx_at(2000, r, rl);
+        all_replied = all_replied && tfbus_uart_transact(f, fl, rx, sizeof rx, 20) == (int)rl;
+        s_now_us = poll_start_us + 10000;
+    }
+    // The 1001st poll ends the window at 10.002 s: (fl + rl) * 1001 * 10 bits at 115200 / 10.002 s
+    int64_t expected_wire_permille = (int64_t)(fl + rl) * 1001 * BITS_PER_BYTE_TEST * 1000000 / 115200 * 1000 /
+                                     10002000;
+    check("load: wire and busy permille of the window",
+          all_replied && tfbus_uart_load(&load) && load.wire_permille == expected_wire_permille &&
+              load.busy_permille == 200);
+    s_now_us += 25 * 1000 * 1000;
+    check("load: no traffic for two windows -> 0", tfbus_uart_load(&load) && load.wire_permille == 0 &&
+                                                       load.busy_permille == 0);
+    // unanswered polls hold the bus for the whole timeout: the first closes the idle window,
+    // 500 more fill the next one
+    for (int poll = 0; poll <= 500; poll++) {
+        reset();
+        tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
+    }
+    check("load: timeouts count as busy", tfbus_uart_load(&load) && load.busy_permille == 1000);
+    check("load: no wire -> none", tfbus_uart_init(&nowire) == ESP_OK && !tfbus_uart_load(&load));
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

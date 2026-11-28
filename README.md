@@ -23,6 +23,7 @@ Aby rozpocząć wystarczy płyka z ESP32S3 (np. https://kamami.pl/xiao/1184486-x
 
 ## Spis treści
 
+- [Lista funkcji](docs/FEATURES.md)
 - [Budowanie i wgrywanie](#budowanie-i-wgrywanie)
 - [Architektura](#architektura)
 - [Zgodność z CLU_ZWAVE_2](#zgodność-z-clu_zwave_2)
@@ -278,12 +279,12 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 | Obszar | Stan | Uwagi |
 |---|---|---|
 | Discovery, `req_set_key`, `req_reset`, `req:` (Lua), clientReport | ✅ | AES-128-CBC, klucze jak w `docs/UDP.md` |
-| `req_set_clu_ip` | 🟡 | statyczny IP w NVS, zakładana maska /24, `0.0.0.0` = powrót do DHCP; DNS z cech 25/26 |
+| `req_set_clu_ip` | ✅ | statyczny IP w NVS (osobno dla interfejsu, przez który przyszło żądanie), zakładana maska /24, `0.0.0.0` = powrót do DHCP; DNS z cech 25/26 |
 | Czas: SNTP (cecha 22), TimeZone (23), OnTimeChange (zdarzenie 13) | ✅ | zapisywane w NVS |
 | TFTP (`req_start_ftp` / `req_tftp_stop`, octet + netascii) | ✅ | |
 | Diagnostyka OM (`req_diagnostic_refresh` → `m:\DIAGNOSTIC_PACK.JSON`) | ✅ | napięcie zawsze 0 (brak pomiaru) |
 | Logi w OM (Diagnostyka › Logi, telnet TCP 23) | ✅ | |
-| `req_refresh_modules` (wyszukiwanie nowych modułów) | 🟡 | odpowiedź DISCOVER prawdziwych modułów nieprzechwycona |
+| `req_refresh_modules` (wyszukiwanie nowych modułów) | ✅ | czasy DISCOVER zgodne z przechwytem prawdziwej CLU, zob. [TFBUS.md](docs/TFBUS.md) |
 
 ### Lua i obiekty
 
@@ -302,11 +303,11 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
 | Moduł | Stan | Uwagi |
 |---|---|---|
 | Master: RESET/SEEK/ADDR_ASSIGN, odpytywanie, obecność | ✅ | kolejność zweryfikowana z przechwytem |
-| Nowe moduły: DISCOVER (0x08), VERSION_QUERY, `tfbusDevices` w `a:\CONFIG.JSON` | 🟡 | moduły offline adresowane ponownie |
+| Nowe moduły: DISCOVER (0x08), VERSION_QUERY, `tfbusDevices` w `a:\CONFIG.JSON` | ✅ | moduły offline adresowane ponownie |
 | IO_MODULE_DIN_8 (0x1e), RELAY_DIN_4 (0x15) | ✅ | DOUT/DIN, czasowe Switch*, click/hold ze zboczy wejść |
 | ROLLER_SH_DIN_3 (0x2a), ROLLER_SH_DIN (0x17) | 🟡 | maska bitowa ruch/stop niezweryfikowana |
 | TOUCH_PANEL_FM_4 (0x1c) | 🟡 | przyciski, temperatura, światło, buzzer; LED niezweryfikowane |
-| SMART_PANEL_FM_4 (0x03) | 🟡 | przyciski (LED, etykiety, tryb), czujniki, rysowanie (PrintText/PrintFloat/DrawLine/DrawPoint/DrawBox/DrawIcon), strony (SetPageNr/Next/Prev), Beep; brak konfiguracji stron i ikon przycisków |
+| SMART_PANEL_FM_4 (0x03) | 🟡 | przyciski (LED, etykiety, ikony A / B, tryb), gesty i ich ikony, czujniki, rysowanie (PrintText/PrintFloat/DrawLine/DrawPoint/DrawBox/DrawIcon), strony (SetPageNr/Next/Prev; nazwa strony, Id i nazwy obiektów), Beep; pozostała zawartość stron (PANEL_PAGE) nieobsługiwana |
 | DIMMER_MOSFET_DIN (0x1a) | 🟡 | DIMM; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](docs/TFBUS.md#dimmer_mosfet_din) |
 | LED_RGBW_DIN (0x18) | 🟡 | LEDRGB, LED_CHANNEL ×4, LED_CCT ×2, PowerSupplyVoltage; zgodne z przechwytem, zdarzenia niezweryfikowane; zob. [TFBUS.md](docs/TFBUS.md#led_rgbw_din) |
 | Pozostałe moduły TF-Bus (ściemniacze FM, LED FM, analogowe itd.) | ❌ | brak sterowników |
@@ -321,8 +322,8 @@ Punkt odniesienia: CLU_ZWAVE_2 z firmware 5.15.24 (build 2635; raportowane fwApi
   przez W5500 na SPI (KinCony F8, KC868-A8v3) albo wyłącznie WiFi.
 - **Pomiar napięcia magistrali** (cechy 27–30, zdarzenia OnBusVoltage*) — brak ADC na płytce.
 - **Chmura Grentona** (aplikacja mobilna, Push) — świadomie wyłączona; zamiast niej MQTT + Home Assistant.
-- **Aktualizacja firmware z OM** — firmware wgrywa się przez `idf.py flash`.
-- Sterowniki większości typów modułów, konfiguracja stron SMART_PANEL, MultiFanACThermostat,
+- **Aktualizacja firmware z OM** — firmware wgrywa się przez USB albo [OTA](#aktualizacja-przez-sieć-ota).
+- Sterowniki większości typów modułów, pełna zawartość stron SMART_PANEL, MultiFanACThermostat,
   PIDcontroller.
 - Cechy QoS (24) i TelnetLogLevel (31) są tylko zapamiętywane.
 

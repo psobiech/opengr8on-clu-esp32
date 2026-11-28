@@ -95,10 +95,10 @@ $(OUT)/test_udp_nobus: test_udp.c $(MAIN)/udp_server.c $(PROTO)/clu_keys.c $(STU
 	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter $(OPT) -g $(SAN) \
 	    $(UDP_INC) -DCONFIG_CLU_TFBUS=0 -o $@ test_udp.c $(PROTO)/clu_keys.c
 
-# RS485 transport (tfbus_uart.c) against a fake ESP-IDF UART driver.
+# RS485 transport (tfbus_uart.c, included by the test) against a fake ESP-IDF UART driver.
 $(OUT)/test_uart: test_uart.c $(COMP)/tfbus_uart/tfbus_uart.c $(PROTO)/tfbus_frame.c $(STUBS) $(HDRS)
 	$(TCC) -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter $(OPT) -g $(SAN) \
-	    -Istubs -I$(PROTO)/include -I$(COMP)/tfbus_uart/include -o $@ $(filter %.c,$^)
+	    -Istubs -I$(PROTO)/include -I$(COMP)/tfbus_uart/include -o $@ test_uart.c $(PROTO)/tfbus_frame.c
 
 # System helpers in main/ (network, time, identity/keys, diagnostics, sysinfo): each source is a
 # separate object with sys_host.h force-included (/fs -> temp dir, CONFIG_CLU_* -> variables).

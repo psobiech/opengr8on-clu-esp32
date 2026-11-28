@@ -233,8 +233,6 @@ bool tfbus_master_defer(tfbus_defer_fn_t deferred_callback, tfbus_module_t *modu
  */
 /** @brief Module by serial number, NULL if not declared. */
 tfbus_module_t *tfbus_master_find_sn(uint32_t serial_number);
-/** @brief Module by Lua global name, NULL if not declared. */
-tfbus_module_t *tfbus_master_find_name(const char *name);
 /** @brief Number of declared modules. */
 int tfbus_master_count(void);
 /** @brief Module in slot @p module_index (0 <= module_index < tfbus_master_count()), NULL if out of range or dropped by a refresh. */

@@ -33,7 +33,6 @@ static char s_root[16];
 static volatile bool s_enabled;
 static volatile uint32_t s_peer_ip;   // network order
 static volatile int64_t s_idle_until; // us
-static clu_tftp_upload_cb_t s_upload_cb;
 
 /** @brief Restart the idle timer (serving stops CLU_TFTP_IDLE_S after the last activity). */
 static void touch(void)
@@ -58,11 +57,6 @@ bool clu_tftp_enabled(void)
         s_enabled = false;
     }
     return s_enabled;
-}
-
-void clu_tftp_set_upload_cb(clu_tftp_upload_cb_t upload_callback)
-{
-    s_upload_cb = upload_callback;
 }
 
 /** @brief Send a TFTP ERROR packet. */
@@ -371,9 +365,6 @@ static void serve_wrq(const struct sockaddr_in *peer, const char *path, bool net
         ESP_LOGW(TAG, "upload of %s failed (errno %d)", path, errno);
     } else {
         ESP_LOGI(TAG, "received %s (%u bytes)", path, (unsigned)total);
-        if (s_upload_cb) {
-            s_upload_cb(path);
-        }
     }
     close(sock);
 }

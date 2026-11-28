@@ -311,14 +311,6 @@ static bool exists(const char *rel)
     return access(p, F_OK) == 0;
 }
 
-static char s_uploaded[128];
-static int s_uploads;
-static void on_upload(const char *path)
-{
-    snprintf(s_uploaded, sizeof s_uploaded, "%s", path);
-    s_uploads++;
-}
-
 static int rm_entry(const char *path, const struct stat *st, int flag, struct FTW *ftw) { return remove(path); }
 
 // ---------------------------------------------------------------- tests
@@ -433,7 +425,6 @@ static void test_upload(void)
     for (size_t i = 0; i < sizeof src; i++) {
         src[i] = (uint8_t)(i * 13 + 1);
     }
-    clu_tftp_set_upload_cb(on_upload);
     write_file("a/OM.LUA", "old", 3);
 
     peer_reset();
@@ -441,11 +432,9 @@ static void test_upload(void)
     P.src = src;
     P.src_len = sizeof src;
     serve(TFTP_WRQ, "a:\\OM.LUA", "octet");
-    char want[128];
-    snprintf(want, sizeof want, "%s/a/OM.LUA", s_tmp);
-    check("WRQ octet: file replaced, upload callback with its path",
+    check("WRQ octet: file replaced",
           read_file("a/OM.LUA", got, sizeof got) == sizeof src && !memcmp(got, src, sizeof src) &&
-              s_uploads == 1 && !strcmp(s_uploaded, want) && !exists("a/TFTP.TMP"));
+              !exists("a/TFTP.TMP"));
 
     // netascii: CR LF -> LF, CR NUL -> CR, final lone CR kept
     peer_reset();
@@ -468,15 +457,14 @@ static void test_upload(void)
     check("WRQ: duplicate block re-ACKed, lost block re-requested, runt packet ignored",
           read_file("a/R.BIN", got, sizeof got) == sizeof src && !memcmp(got, src, sizeof src));
 
-    int uploads = s_uploads;
     peer_reset();
     P.upload = true;
     P.src = src;
     P.src_len = sizeof src;
     P.perror_at_block = 2;
     serve(TFTP_WRQ, "a:\\OM.LUA", "octet");
-    check("WRQ: peer ERROR -> old file kept, temp file removed, no callback",
-          read_file("a/OM.LUA", got, sizeof got) == sizeof src && !exists("a/TFTP.TMP") && s_uploads == uploads);
+    check("WRQ: peer ERROR -> old file kept, temp file removed",
+          read_file("a/OM.LUA", got, sizeof got) == sizeof src && !exists("a/TFTP.TMP"));
 
     peer_reset();
     P.upload = true;

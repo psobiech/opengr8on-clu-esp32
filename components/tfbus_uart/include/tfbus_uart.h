@@ -136,12 +136,6 @@ typedef int (*tfbus_uart_local_fn_t)(const uint8_t *request_frame, size_t reques
  */
 bool tfbus_uart_add_local(tfbus_uart_local_fn_t local_endpoint);
 
-/**
- * @brief Replace all local endpoints with @p local_endpoint (NULL = none).
- * @param local_endpoint Endpoint.
- */
-void tfbus_uart_set_local(tfbus_uart_local_fn_t local_endpoint);
-
 #ifdef __cplusplus
 }
 #endif

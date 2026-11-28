@@ -57,12 +57,6 @@ static void account_bus_use(int64_t started_us, size_t wire_bytes);
 static uint16_t permille(int64_t part_us, int64_t whole_us);
 static void count_uart_errors(void);
 
-void tfbus_uart_set_local(tfbus_uart_local_fn_t local_endpoint)
-{
-    s_nlocal = 0;
-    tfbus_uart_add_local(local_endpoint);
-}
-
 bool tfbus_uart_add_local(tfbus_uart_local_fn_t local_endpoint)
 {
     if (!local_endpoint || s_nlocal == TFBUS_UART_MAX_LOCAL) {

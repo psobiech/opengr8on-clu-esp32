@@ -11,6 +11,8 @@
 #include "tfbus_frame.h"
 #include "tfbus_uart.h"
 
+#include "../../components/tfbus_uart/tfbus_uart.c"
+
 static int failures;
 #define BITS_PER_BYTE_TEST 10 // 8N1
 
@@ -153,6 +155,12 @@ static void reset(void)
     s_txlen = 0;
     s_nrx = s_rxpos = 0;
     s_short_write = false;
+}
+
+/** @brief Drop the installed local endpoints (tfbus_uart.c is included, its state is reachable). */
+static void clear_local_endpoints(void)
+{
+    s_nlocal = 0;
 }
 
 // Local endpoint (on-board modules): answers STATUS_POLL to address 5, owns address 6 without a
@@ -342,14 +350,15 @@ int main(void)
     reset();
     n = tfbus_uart_collect(f, dl, replies, 4, 1000, &garbled);
     check("collect: silence -> 0, not garbled", n == 0 && !garbled);
-    tfbus_uart_set_local(fake_local_discover);
+    clear_local_endpoints();
+    tfbus_uart_add_local(fake_local_discover);
     reset();
     rx_at(577000, relay_reply, relay_length);
     t0 = s_now_us;
     n = tfbus_uart_collect(f, dl, replies, 4, 1000, &garbled);
     check("collect: local reply returned at once, nothing on the wire (wire modules answer a later DISCOVER)",
           n == 1 && replies[0].length == 4 && s_txlen == 0 && s_now_us == t0);
-    tfbus_uart_set_local(NULL);
+    clear_local_endpoints();
 
     // UART write failure
     reset();
@@ -358,7 +367,8 @@ int main(void)
     check("transact: send failure -> -1", tfbus_uart_transact(f, fl, rx, sizeof rx, 20) == -1);
 
     // local endpoint
-    tfbus_uart_set_local(fake_local);
+    clear_local_endpoints();
+    tfbus_uart_add_local(fake_local);
     reset();
     s_local_calls = 0;
     fl = tfbus_status_poll(f, sizeof f, 5);
@@ -382,7 +392,7 @@ int main(void)
     check("local: send() shows the frame to the local endpoint and puts it on the wire",
           tfbus_uart_send(f, rstl) == ESP_OK && s_local_calls == 1 && memcmp(s_local_last, f, rstl) == 0 &&
               s_txlen == rstl);
-    tfbus_uart_set_local(NULL);
+    clear_local_endpoints();
 
     // several endpoints: offered in order, the first owner answers; all hear broadcasts
     check("add_local: NULL refused", !tfbus_uart_add_local(NULL));
@@ -410,7 +420,7 @@ int main(void)
     check("no wire: local module still answers", tfbus_uart_transact(f, tfbus_status_poll(f, sizeof f, 5), rx,
                                                                      sizeof rx, 20) == 4);
     check("no wire: send OK, nothing sent", tfbus_uart_send(f, tfbus_discover(f, sizeof f)) == ESP_OK && s_txlen == 0);
-    tfbus_uart_set_local(NULL);
+    clear_local_endpoints();
 
     // no DE pin (auto-direction transceiver, KinCony F8 / A8v3): plain UART mode, because RS485
     // half-duplex mode resets the RX FIFO after TX and wiped the first byte of a fast reply

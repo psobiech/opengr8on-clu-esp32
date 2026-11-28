@@ -192,16 +192,6 @@ tfbus_module_t *tfbus_master_find_sn(uint32_t serial_number)
     return NULL;
 }
 
-tfbus_module_t *tfbus_master_find_name(const char *name)
-{
-    for (int i = 0; i < s_nmod && name[0]; i++) {
-        if (live(&s_mod[i]) && strcmp(s_mod[i].name, name) == 0) {
-            return &s_mod[i];
-        }
-    }
-    return NULL;
-}
-
 /** @brief Module as stored in NVS (blob NVS_NS/NVS_KEY, one per registry entry). */
 typedef struct __attribute__((packed)) {
     uint32_t sn;

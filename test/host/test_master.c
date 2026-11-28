@@ -447,8 +447,8 @@ int main(void)
     check("modules addressed in OM.LUA order, Z-Wave skipped",
           tfbus_master_count() == 3 && lua_tointeger(L, -3) == 1 && lua_isnil(L, -2) && lua_tointeger(L, -1) == 3);
     lua_pop(L, 3);
-    check("find_sn / find_name", tfbus_master_find_sn(0x22222222) == tfbus_master_get(2) &&
-                                     tfbus_master_find_name("mm_B") == tfbus_master_get(1) &&
+    check("find_sn / names", tfbus_master_find_sn(0x22222222) == tfbus_master_get(2) &&
+                                 !strcmp(tfbus_master_get(1)->name, "mm_B") &&
                                      !tfbus_master_find_sn(0x00030011) && !tfbus_master_get(3));
     check("driver bound by hwType", tfbus_master_get(0)->drv == &s_fake && tfbus_master_get(1)->drv == NULL);
 
@@ -456,7 +456,7 @@ int main(void)
     int Ad = lua_module(0x13ab6c81, 0x1e, "mm_A2");
     lua_getfield(L, Ad, "_addr");
     check("module redeclared: same entry and address, name follows",
-          tfbus_master_count() == 3 && lua_tointeger(L, -1) == 1 && tfbus_master_find_name("mm_A2") == tfbus_master_get(0));
+          tfbus_master_count() == 3 && lua_tointeger(L, -1) == 1 && !strcmp(tfbus_master_get(0)->name, "mm_A2"));
     lua_pop(L, 2);
     strcpy(tfbus_master_get(0)->name, "mm_A");
 

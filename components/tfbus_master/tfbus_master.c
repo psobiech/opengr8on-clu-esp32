@@ -54,6 +54,11 @@ static const char *TAG = "tfbus"; // tfbus_master_set_log_tag()
 #define REJOIN_BURST_MS       CONFIG_CLU_TFBUS_REJOIN_BURST_MS
 #define REJOIN_BURST_PACE_MS  CONFIG_CLU_TFBUS_REJOIN_BURST_PACE_MS
 #define POLL_ROUND_GAP_MS     CONFIG_CLU_TFBUS_POLL_ROUND_GAP_MS
+#ifdef CONFIG_CLU_TFBUS_RESYNC_ON_QUEUE_DROP
+#define RESYNC_ON_QUEUE_DROP  1
+#else
+#define RESYNC_ON_QUEUE_DROP  0
+#endif
 #else
 #define POLL_TIMEOUT_MS       20
 #define ACK_TIMEOUT_MS        20
@@ -62,6 +67,7 @@ static const char *TAG = "tfbus"; // tfbus_master_set_log_tag()
 #define REJOIN_BURST_MS       5000
 #define REJOIN_BURST_PACE_MS  100
 #define POLL_ROUND_GAP_MS     0      // poll continuously
+#define RESYNC_ON_QUEUE_DROP  1
 #endif
 #define CMD_TRIES             3
 #define OFFLINE_AFTER         3      // missed polls
@@ -367,6 +373,8 @@ static void mod_forget(tfbus_module_t *module)
 static void drain_cmds(void);
 static void wait_notified(void);
 static void pause_between_rounds(void);
+static void command_dropped(const cmd_t *dropped_command);
+static tfbus_module_t *module_at(uint8_t addr);
 
 esp_err_t tfbus_master_queue(const uint8_t *frame, size_t len)
 {
@@ -382,9 +390,37 @@ esp_err_t tfbus_master_queue(const uint8_t *frame, size_t len)
             return ESP_OK;
         }
         drain_cmds();
-        return xQueueSend(s_cmds, &command, 0) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+        if (xQueueSend(s_cmds, &command, 0) == pdTRUE) {
+            return ESP_OK;
+        }
+    } else if (xQueueSend(s_cmds, &command, pdMS_TO_TICKS(50)) == pdTRUE) {
+        return ESP_OK;
     }
-    return xQueueSend(s_cmds, &command, pdMS_TO_TICKS(50)) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+    command_dropped(&command);
+    return ESP_ERR_TIMEOUT;
+}
+
+/**
+ * @brief A command found the queue full and was dropped: with RESYNC_ON_QUEUE_DROP, the module's
+ * driver init re-sends its whole state after its next answered poll (bus task, init_pending), so
+ * e.g. a relay switched on does not stay off. Broadcasts and frames for no registry module: only
+ * the caller logs them.
+ */
+static void command_dropped(const cmd_t *dropped_command)
+{
+    if (!RESYNC_ON_QUEUE_DROP) {
+        return;
+    }
+    tfbus_module_t *module = module_at(dropped_command->frame[1]);
+    if (!module || !module->drv || !module->drv->init) {
+        return;
+    }
+    // Single byte, read by the bus task between polls; drv_init() clears it before the init, which
+    // runs under s_drv_lock after the driver hook that queued this frame, so it sends the new state.
+    if (!module->init_pending) { // once per resync, not per dropped frame
+        ESP_LOGW(TAG, "command queue full: frame for addr %u dropped, driver init re-sends its state", module->addr);
+    }
+    module->init_pending = true;
 }
 
 bool tfbus_master_defer(tfbus_defer_fn_t deferred_callback, tfbus_module_t *module, void *arg, uint32_t tag)
@@ -733,8 +769,6 @@ static bool is_ack(const uint8_t *response_frame, int response_length)
 {
     return response_length == 4 && response_frame[0] == 0xAA && response_frame[1] == 0x00 && response_frame[2] == 0x01;
 }
-
-static tfbus_module_t *module_at(uint8_t addr);
 
 /**
  * @brief Send one queued frame: broadcasts fire-and-forget, others retried up to CMD_TRIES until answered.

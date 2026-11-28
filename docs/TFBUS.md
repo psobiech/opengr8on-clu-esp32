@@ -39,6 +39,18 @@ firmware. Semantyka zdarzeń pozostałych modułów jest niezweryfikowana. Stan 
   odpytanie; każda trzymałaby magistralę 3 × `CLU_TFBUS_ACK_TIMEOUT_MS` (init SMART PANEL to ok.
   275 ramek, ok. 19 s bez odpytywania innych modułów). Jeśli w międzyczasie nie odpowiadał na
   odpytania, init sterownika wysyła mu cały stan ponownie.
+- Komenda, która nie mieści się w pełnej kolejce (skrypty wysyłają szybciej, niż magistrala
+  przyjmuje), jest odrzucana; z `CLU_TFBUS_RESYNC_ON_QUEUE_DROP` (domyślnie włączone) init
+  sterownika wysyła modułowi cały stan po jego następnej odpowiedzi na odpytanie.
+- Odpowiedzi modułów nie zawierają adresu nadawcy. Po każdym przekroczeniu czasu master czyta
+  dalej, aż linia będzie cicha przez `CLU_TFBUS_LATE_REPLY_GUARD_MS` (domyślnie 2 ms, 0 = wyłączone),
+  i odrzuca spóźnioną odpowiedź, zamiast wziąć ją za odpowiedź na następną ramkę (status innego
+  modułu, ACK komendy). Licznik w `sys_info` `tfbus_late_replies`; jeśli rośnie, zwiększ
+  `CLU_TFBUS_POLL_TIMEOUT_MS`.
+- `CLU_TFBUS_UART_ERROR_STATS` (domyślnie włączone): błędy odbioru UART z kolejki zdarzeń
+  sterownika, w `sys_info`: `tfbus_rx_overflows` (utracone bajty), `tfbus_rx_frame_errors`
+  (zakłócenia, zła prędkość), `tfbus_rx_breaks` (RX na stałe w stanie niskim: zwarte lub zamienione
+  A/B).
 - Moduły odpowiadają na DISCOVER dopiero po ok. 576 ms, więc DISCOVER czeka 1 s. Jak prawdziwe CLU,
   firmware zbiera wszystkie odpowiedzi z tej sekundy i adresuje każdy moduł (zrzut: panel po 369 ms,
   RELAY po 577 ms, oba dostały adres); moduły unikają kolizji tylko różnym opóźnieniem odpowiedzi.
@@ -170,6 +182,17 @@ the other modules are unverified. Module support status: [README](../README.md#m
   poll; each would hold the bus 3 × `CLU_TFBUS_ACK_TIMEOUT_MS` (a SMART PANEL init is about 275
   frames, about 19 s with no other module polled). If it missed polls meanwhile, its driver init
   re-sends its whole state.
+- A command that finds the queue full (scripts sending faster than the bus takes it) is dropped;
+  with `CLU_TFBUS_RESYNC_ON_QUEUE_DROP` (default on) the module's driver init re-sends its whole
+  state after its next answered poll.
+- Module replies carry no sender address. After every timeout the master reads on until the line
+  has been quiet for `CLU_TFBUS_LATE_REPLY_GUARD_MS` (default 2 ms, 0 = off) and drops the late
+  reply, instead of taking it as the reply to the next frame (another module's status, a command's
+  ACK). Counted in `sys_info` `tfbus_late_replies`; if it keeps growing, raise
+  `CLU_TFBUS_POLL_TIMEOUT_MS`.
+- `CLU_TFBUS_UART_ERROR_STATS` (default on): UART receive errors from the driver's event queue, in
+  `sys_info`: `tfbus_rx_overflows` (bytes lost), `tfbus_rx_frame_errors` (noise, wrong baud rate),
+  `tfbus_rx_breaks` (RX held low: A/B shorted or swapped).
 - Modules answer DISCOVER only after about 576 ms, so DISCOVER waits 1 s. Like the real CLU, the
   firmware collects every reply of that second and addresses each module (capture: a panel at
   369 ms, a RELAY at 577 ms, both assigned); modules avoid collisions only by answering at different

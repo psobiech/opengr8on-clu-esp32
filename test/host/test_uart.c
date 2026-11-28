@@ -7,6 +7,7 @@
 
 #include "driver/uart.h"
 #include "esp_timer.h"
+#include "freertos/queue.h"
 #include "tfbus_frame.h"
 #include "tfbus_uart.h"
 
@@ -24,8 +25,29 @@ static int64_t s_now_us;
 int64_t esp_timer_get_time(void) { return s_now_us; }
 
 static struct {
-    int port, rxbuf, baud, tx, rx, rts, mode, rx_timeout;
+    int port, rxbuf, baud, tx, rx, rts, mode, rx_timeout, event_queue_length;
 } s_cfg;
+
+// UART driver event queue: events the test injects, read back through xQueueReceive().
+struct host_queue {
+    uart_event_t events[16];
+    size_t count, next;
+};
+static struct host_queue s_event_queue;
+
+static void inject_event(uart_event_type_t type)
+{
+    s_event_queue.events[s_event_queue.count++] = (uart_event_t){.type = type};
+}
+
+BaseType_t xQueueReceive(QueueHandle_t q, void *item, TickType_t wait)
+{
+    if (q != &s_event_queue || s_event_queue.next == s_event_queue.count) {
+        return pdFALSE;
+    }
+    memcpy(item, &s_event_queue.events[s_event_queue.next++], sizeof(uart_event_t));
+    return pdTRUE;
+}
 static uint8_t s_tx[256];
 static size_t s_txlen;
 static int s_flushes;
@@ -40,6 +62,10 @@ esp_err_t uart_driver_install(uart_port_t n, int rx, int tx, int qsize, void *q,
 {
     s_cfg.port = n;
     s_cfg.rxbuf = rx;
+    s_cfg.event_queue_length = qsize;
+    if (q) {
+        *(QueueHandle_t *)q = &s_event_queue;
+    }
     return ESP_OK;
 }
 esp_err_t uart_param_config(uart_port_t n, const uart_config_t *c)
@@ -251,7 +277,31 @@ int main(void)
     reset();
     t0 = s_now_us;
     n = tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
-    check("transact: silence -> 0 after the timeout", n == 0 && s_now_us - t0 == 20000);
+    check("transact: silence -> 0 after the timeout and the late reply guard", n == 0 && s_now_us - t0 == 20000 + 2000);
+
+    // late reply guard: a reply just after the timeout is dropped, not taken as the next frame's
+    tfbus_uart_stats_t stats;
+    reset();
+    rx_at(21000, r, rl);
+    n = tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
+    check("late reply: request timed out -> 0", n == 0);
+    static const uint8_t other_payload[] = {0x01, 0x02};
+    uint8_t next_reply[TFBUS_MAX_FRAME];
+    size_t next_reply_length = reply(next_reply, other_payload, sizeof other_payload);
+    s_nrx = s_rxpos = 0;
+    rx_at(1000, next_reply, next_reply_length);
+    n = tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
+    check("late reply: dropped and counted, the next frame gets its own reply",
+          n == (int)next_reply_length && memcmp(rx, next_reply, next_reply_length) == 0 &&
+              tfbus_uart_stats(&stats) && stats.late_replies == 1);
+    reset();
+    for (int i = 0; i < 500; i++) {
+        rx_at(100 * (int64_t)i, (const uint8_t[]){0x11}, 1); // noise for 50 ms
+    }
+    t0 = s_now_us;
+    n = tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
+    int64_t max_frame_us = (int64_t)TFBUS_MAX_FRAME * BITS_PER_BYTE_TEST * 1000000 / 115200;
+    check("late reply guard: bounded on a jammed line", n == 0 && s_now_us - t0 <= 20000 + 2000 + max_frame_us + 1000);
 
     // broadcast that got garbled bytes back (collision): logged, 0
     reset();
@@ -433,6 +483,22 @@ int main(void)
     }
     check("load: timeouts count as busy", tfbus_uart_load(&load) && load.busy_permille == 1000);
     check("load: no wire -> none", tfbus_uart_init(&nowire) == ESP_OK && !tfbus_uart_load(&load));
+
+    // UART receive errors from the driver's event queue, counted before the next frame goes out
+    check("stats: no wire -> none", !tfbus_uart_stats(&stats));
+    check("stats: event queue installed", tfbus_uart_init(&cfg) == ESP_OK && s_cfg.event_queue_length > 0);
+    check("stats: zero after init", tfbus_uart_stats(&stats) && stats.late_replies == 0 && stats.rx_overflows == 0 &&
+                                        stats.frame_errors == 0 && stats.breaks == 0);
+    inject_event(UART_DATA);
+    inject_event(UART_FIFO_OVF);
+    inject_event(UART_BUFFER_FULL);
+    inject_event(UART_FRAME_ERR);
+    inject_event(UART_BREAK);
+    reset();
+    tfbus_uart_send(f, fl);
+    check("stats: overflows, framing errors, breaks counted; data events ignored",
+          tfbus_uart_stats(&stats) && stats.rx_overflows == 2 && stats.frame_errors == 1 && stats.breaks == 1 &&
+              s_event_queue.next == s_event_queue.count);
 
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

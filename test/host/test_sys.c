@@ -244,6 +244,12 @@ bool tfbus_uart_load(tfbus_uart_load_t *load)
     *load = (tfbus_uart_load_t){.wire_permille = 34, .busy_permille = 625};
     return s_bus_load_valid;
 }
+// tfbus_uart: receive problem counters, none until s_bus_load_valid (a wire)
+bool tfbus_uart_stats(tfbus_uart_stats_t *stats)
+{
+    *stats = (tfbus_uart_stats_t){.late_replies = 5, .rx_overflows = 1, .frame_errors = 2, .breaks = 3};
+    return s_bus_load_valid;
+}
 int tfbus_master_count(void) { return s_nmods; }
 tfbus_module_t *tfbus_master_get(int i) { return i >= 0 && i < s_nmods ? &s_mods[i] : NULL; }
 // On-board modules: sn 7 = GPIO input module (DIN1 + DIN3), sn 8 = analog module (2 inputs + hub).
@@ -772,13 +778,19 @@ static void test_sysinfo(void)
     check("sys_info: bus totals", field_int("tfbus_total") == 2 && field_int("tfbus_online") == 1 && field_int("tfbus_fails") == 7);
     lua_getfield(L, -1, "tfbus_load");
     check("sys_info: no bus load window -> tfbus_load absent", lua_isnil(L, -1));
+    lua_pop(L, 1);
+    lua_getfield(L, -1, "tfbus_late_replies");
+    check("sys_info: no wire -> receive counters absent", lua_isnil(L, -1));
     lua_pop(L, 2);
     s_bus_load_valid = true;
     call("sys_info", 0, 0);
     lua_getfield(L, -1, "tfbus_load");
     lua_getfield(L, -2, "tfbus_busy");
     check("sys_info: bus load / busy in %", lua_tonumber(L, -2) == (lua_Number)3.4 && lua_tonumber(L, -1) == (lua_Number)62.5);
-    lua_pop(L, 3);
+    lua_pop(L, 2);
+    check("sys_info: receive counters", field_int("tfbus_late_replies") == 5 && field_int("tfbus_rx_overflows") == 1 &&
+                                            field_int("tfbus_rx_frame_errors") == 2 && field_int("tfbus_rx_breaks") == 3);
+    lua_pop(L, 1);
     s_bus_load_valid = false;
 
     static const struct { esp_reset_reason_t r; const char *s; } reasons[] = {

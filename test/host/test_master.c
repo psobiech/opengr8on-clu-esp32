@@ -796,7 +796,17 @@ int main(void)
     for (int i = 0; i < 128; i++) {
         tfbus_master_queue(f, n);
     }
+    tfbus_module_t *queue_target = module_at(1);
+    bool target_had_init_pending = queue_target && queue_target->init_pending;
+    if (queue_target) {
+        queue_target->init_pending = false;
+    }
     check("queue full -> ESP_ERR_TIMEOUT", tfbus_master_queue(f, n) == ESP_ERR_TIMEOUT);
+    check("queue full: the module's driver init re-sends its state (init pending)",
+          queue_target && queue_target->drv && queue_target->init_pending);
+    if (queue_target) {
+        queue_target->init_pending = target_had_init_pending;
+    }
     drain_cmds();
 
     // Bus task (driver init): a full queue is flushed to the bus instead of dropping frames.

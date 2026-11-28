@@ -6,7 +6,10 @@
  *                                else WiFi), reset_reason, last_crash? (clu_crash),
  *                                tfbus_total, tfbus_online, tfbus_fails, tfbus_load?, tfbus_busy?}; tfbus_load /
  *                                tfbus_busy: % of the last 10 s window with bytes on the wire / the bus
- *                                held by the master (tfbus_uart_load()), absent without a wire
+ *                                held by the master (tfbus_uart_load()), absent without a wire;
+ *                                tfbus_late_replies?, tfbus_rx_overflows?, tfbus_rx_frame_errors?,
+ *                                tfbus_rx_breaks?: receive problems since boot (tfbus_uart_stats()),
+ *                                absent without a wire
  * - `__clu.tfbus_module(sn)` -> {online, fails, polls, addr, hw_type, fw_api_ver, hw_ver?, fw_ver?} | nil;
  *                                hw_ver / fw_ver ("a.b.c") once VERSION_QUERY answered
  * - `__clu.local_channels(sn)` -> {[OM class] = bit mask of the channels with hardware behind them}
@@ -117,6 +120,13 @@ static int l_sys_info(lua_State *L)
         lua_setfield(L, -2, "tfbus_load");
         lua_pushnumber(L, bus_load.busy_permille / 10.0);
         lua_setfield(L, -2, "tfbus_busy");
+    }
+    tfbus_uart_stats_t bus_stats;
+    if (tfbus_uart_stats(&bus_stats)) {
+        set_int(L, "tfbus_late_replies", bus_stats.late_replies);
+        set_int(L, "tfbus_rx_overflows", bus_stats.rx_overflows);
+        set_int(L, "tfbus_rx_frame_errors", bus_stats.frame_errors);
+        set_int(L, "tfbus_rx_breaks", bus_stats.breaks);
     }
     return 1;
 }

@@ -479,6 +479,37 @@ menu "RS485 bus (TF-Bus / MySensors)"
             defaults (20 ms, every 100 ms) every module that stays away costs 20% of the bus during
             the window.
 
+    config CLU_TFBUS_LATE_REPLY_GUARD_MS
+        int "Late reply guard after a reply timeout (ms)"
+        depends on CLU_TFBUS_MASTER
+        range 0 20
+        default 2
+        help
+            Module replies carry no sender address. A reply that comes in just after its request
+            timed out could otherwise be taken as the reply to the next frame (another module's
+            status, or a command's ACK). After every timeout the master keeps reading until the
+            line has been quiet this long, and drops what arrived (counted in sys_info
+            tfbus_late_replies; many of them: raise CLU_TFBUS_POLL_TIMEOUT_MS). Costs this much
+            bus time per unanswered frame. 0 = off.
+
+    config CLU_TFBUS_RESYNC_ON_QUEUE_DROP
+        bool "Re-send a module's state when one of its commands is dropped"
+        depends on CLU_TFBUS_MASTER
+        default y
+        help
+            A command that finds the command queue full (scripts sending faster than the bus
+            takes it) is dropped. With this on, the module's driver init re-sends its whole
+            state after its next answered poll, so e.g. a relay switched on does not stay off.
+
+    config CLU_TFBUS_UART_ERROR_STATS
+        bool "Count RS485 UART receive errors"
+        depends on CLU_TFBUS_MASTER
+        default y
+        help
+            Counts receive buffer overflows, framing errors (noise, wrong baud rate) and break
+            conditions (RX held low: A/B shorted or swapped) from the UART driver's event queue;
+            reported in sys_info (tfbus_rx_overflows, tfbus_rx_frame_errors, tfbus_rx_breaks).
+
     if CLU_TFBUS || CLU_MYSENSORS
 
         config CLU_RS485_UART

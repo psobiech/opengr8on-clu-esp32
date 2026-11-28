@@ -98,6 +98,22 @@ typedef struct {
  */
 bool tfbus_uart_load(tfbus_uart_load_t *load);
 
+/** @brief Receive problems on the wire since boot (tfbus_uart_stats()). */
+typedef struct {
+    uint32_t late_replies;  /**< Frames that arrived after their request timed out, dropped (late reply guard). */
+    uint32_t rx_overflows;  /**< UART RX FIFO / ring buffer overflows: received bytes lost (UART error stats). */
+    uint32_t frame_errors;  /**< Bytes with a framing error: noise, wrong baud rate (UART error stats). */
+    uint32_t breaks;        /**< Break conditions: RX held low, e.g. A/B shorted or swapped (UART error stats). */
+} tfbus_uart_stats_t;
+
+/**
+ * @brief Receive problem counters since boot. Safe from any task; the UART driver's events are
+ * counted by the bus task, at its next frame.
+ * @param stats Filled on success.
+ * @return false if there is no wire.
+ */
+bool tfbus_uart_stats(tfbus_uart_stats_t *stats);
+
 /**
  * @brief Local bus endpoint: modules emulated by the firmware itself (e.g. on-board IO).
  *

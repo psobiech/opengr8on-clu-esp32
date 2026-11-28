@@ -1,5 +1,6 @@
 // Host stub: the ESP-IDF UART driver calls used by tfbus_uart.c, implemented by the test.
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
@@ -22,6 +23,13 @@ typedef struct {
     uart_hw_flowcontrol_t flow_ctrl;
     uart_sclk_t source_clk;
 } uart_config_t;
+
+typedef enum { UART_DATA, UART_BREAK, UART_BUFFER_FULL, UART_FIFO_OVF, UART_FRAME_ERR, UART_PARITY_ERR } uart_event_type_t;
+typedef struct {
+    uart_event_type_t type;
+    size_t size;
+    bool timeout_flag;
+} uart_event_t;
 
 esp_err_t uart_driver_install(uart_port_t n, int rx, int tx, int qsize, void *q, int flags);
 esp_err_t uart_param_config(uart_port_t n, const uart_config_t *c);

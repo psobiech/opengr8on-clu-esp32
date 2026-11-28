@@ -609,6 +609,7 @@ tylko przy zmianie.
 <base>/system/clu/event                                {"event_type":"time_change"}
 <base>/system/clu/restart/set                          PRESS -> reboot
 <base>/system/memory/heap_free | heap_min | psram_free | lua     KiB
+<base>/system/cpu/load_0 | load_1                      % czasu poza zadaniem idle rdzenia 0 | 1 (średnia z okna >= 10 s)
 <base>/system/network/rssi | ip                        dBm | text
 <base>/system/tfbus/online | total | missed_polls      counters
 <base>/system/tfbus/load | busy                        % ostatnich 10 s: bajty na linii | magistrala zajęta (wysyłanie + czekanie na odpowiedź)

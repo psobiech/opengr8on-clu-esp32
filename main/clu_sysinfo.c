@@ -9,7 +9,9 @@
  *                                held by the master (tfbus_uart_load()), absent without a wire;
  *                                tfbus_late_replies?, tfbus_rx_overflows?, tfbus_rx_frame_errors?,
  *                                tfbus_rx_breaks?: receive problems since boot (tfbus_uart_stats()),
- *                                absent without a wire
+ *                                absent without a wire; cpu_load_0?, cpu_load_1?: % of time each core
+ *                                was not idle, averaged since the previous window (>= 10 s, see
+ *                                update_cpu_load()), absent without CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
  * - `__clu.tfbus_module(sn)` -> {online, fails, polls, addr, hw_type, fw_api_ver, hw_ver?, fw_ver?} | nil;
  *                                hw_ver / fw_ver ("a.b.c") once VERSION_QUERY answered
  * - `__clu.local_channels(sn)` -> {[OM class] = bit mask of the channels with hardware behind them}
@@ -27,6 +29,8 @@
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
 #include "tfbus_master.h"
 #include "tfbus_uart.h"
@@ -40,6 +44,24 @@ static const char *TAG = "sysinfo";
 enum { OM_CLASS_DIN = 3, OM_CLASS_DOUT = 4, OM_CLASS_ANALOG_IN = 12, OM_CLASS_ONE_WIRE_HUB = 73 };
 
 static void set_class_channels(lua_State *L, int object_class, uint8_t channel_mask);
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+/** @brief Shortest CPU load window: sys_info() calls inside it return the previous window's load,
+ *  so several readers (MQTT, HTTP, telnet) do not shrink each other's window. */
+#define CPU_LOAD_MIN_WINDOW_US (10 * 1000 * 1000LL)
+/** @brief Longest usable window: the 32-bit µs run-time counter wraps after ~71 min. */
+#define CPU_LOAD_MAX_WINDOW_US (3600 * 1000 * 1000LL)
+
+/** @brief Start of the current window (all zero = scheduler start, so the first window is since boot). */
+static int64_t s_cpu_window_start_us;
+static configRUN_TIME_COUNTER_TYPE s_cpu_window_start_counter;
+static configRUN_TIME_COUNTER_TYPE s_cpu_window_start_idle[configNUMBER_OF_CORES];
+/** @brief Busy share of each core in the last finished window, valid once one has finished. */
+static uint16_t s_cpu_load_permille[configNUMBER_OF_CORES];
+static bool s_cpu_load_valid;
+
+static void update_cpu_load(void);
+#endif
 
 /** @brief Last reset reason as a short string. */
 static const char *reset_reason(void)
@@ -128,8 +150,51 @@ static int l_sys_info(lua_State *L)
         set_int(L, "tfbus_rx_frame_errors", bus_stats.frame_errors);
         set_int(L, "tfbus_rx_breaks", bus_stats.breaks);
     }
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    update_cpu_load();
+    if (s_cpu_load_valid) {
+        char field_name[] = "cpu_load_0";
+        for (int core = 0; core < configNUMBER_OF_CORES; core++) {
+            field_name[sizeof field_name - 2] = (char)('0' + core);
+            lua_pushnumber(L, s_cpu_load_permille[core] / 10.0);
+            lua_setfield(L, -2, field_name);
+        }
+    }
+#endif
     return 1;
 }
+
+#if CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+/**
+ * @brief Close the CPU load window once it is CPU_LOAD_MIN_WINDOW_US long: per core, busy =
+ *        1 - idle task run time / window run time. A window longer than CPU_LOAD_MAX_WINDOW_US
+ *        (the counter may have wrapped) only starts a new one.
+ */
+static void update_cpu_load(void)
+{
+    int64_t current_time_us = esp_timer_get_time();
+    int64_t window_us = current_time_us - s_cpu_window_start_us;
+    if (window_us < CPU_LOAD_MIN_WINDOW_US) {
+        return;
+    }
+    configRUN_TIME_COUNTER_TYPE current_counter = portGET_RUN_TIME_COUNTER_VALUE();
+    configRUN_TIME_COUNTER_TYPE window_counter = current_counter - s_cpu_window_start_counter;
+    bool window_usable = window_us <= CPU_LOAD_MAX_WINDOW_US && window_counter > 0;
+    for (int core = 0; core < configNUMBER_OF_CORES; core++) {
+        configRUN_TIME_COUNTER_TYPE idle_counter = ulTaskGetIdleRunTimeCounterForCore(core);
+        configRUN_TIME_COUNTER_TYPE window_idle = idle_counter - s_cpu_window_start_idle[core];
+        if (window_usable) {
+            // The idle slice running now is counted only when it ends: idle can exceed the window.
+            uint64_t idle_permille = (uint64_t)window_idle * 1000 / window_counter;
+            s_cpu_load_permille[core] = idle_permille >= 1000 ? 0 : (uint16_t)(1000 - idle_permille);
+        }
+        s_cpu_window_start_idle[core] = idle_counter;
+    }
+    s_cpu_window_start_us = current_time_us;
+    s_cpu_window_start_counter = current_counter;
+    s_cpu_load_valid |= window_usable;
+}
+#endif
 
 /** @brief Lua: `__clu.tfbus_module(sn)` — stats of one module, nil if not declared. */
 static int l_tfbus_module(lua_State *L)

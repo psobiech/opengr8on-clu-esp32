@@ -28,6 +28,7 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "fake_nvs.h"
+#include "freertos/task.h"
 #include "lauxlib.h"
 #include "lualib.h"
 #include "tfbus_master.h"
@@ -200,7 +201,13 @@ esp_err_t esp_wifi_sta_get_rssi(int *rssi)
 static esp_timer_create_args_t s_timer_args;
 static int s_timer_fail, s_timer_starts;
 static int64_t s_timer_us;
-int64_t esp_timer_get_time(void) { return 0; }
+static int64_t s_now_us;
+int64_t esp_timer_get_time(void) { return s_now_us; }
+
+// FreeRTOS run-time stats (µs): total and per-core idle task counters, set by the test
+static uint32_t s_run_time_counter, s_idle_run_time[2];
+uint32_t host_run_time_counter(void) { return s_run_time_counter; }
+uint32_t ulTaskGetIdleRunTimeCounterForCore(BaseType_t core) { return s_idle_run_time[core]; }
 esp_err_t esp_timer_create(const esp_timer_create_args_t *a, esp_timer_handle_t *h)
 {
     if (s_timer_fail) {
@@ -792,6 +799,42 @@ static void test_sysinfo(void)
                                             field_int("tfbus_rx_frame_errors") == 2 && field_int("tfbus_rx_breaks") == 3);
     lua_pop(L, 1);
     s_bus_load_valid = false;
+
+    call("sys_info", 0, 0);
+    lua_getfield(L, -1, "cpu_load_0");
+    check("sys_info: CPU load window shorter than 10 s -> cpu_load absent", lua_isnil(L, -1));
+    lua_pop(L, 2);
+    s_now_us = s_run_time_counter = 20000000;
+    s_idle_run_time[0] = 15000000;
+    s_idle_run_time[1] = 20000500; // idle slice counted past the window end -> 0 %, not negative
+    call("sys_info", 0, 0);
+    lua_getfield(L, -1, "cpu_load_0");
+    lua_getfield(L, -2, "cpu_load_1");
+    check("sys_info: CPU load per core in % since boot", lua_tonumber(L, -2) == 25.0 && lua_tonumber(L, -1) == 0.0);
+    lua_pop(L, 3);
+    s_now_us = s_run_time_counter = 25000000;
+    s_idle_run_time[0] = 20000000; // 0 % busy, but inside the 10 s minimum window
+    call("sys_info", 0, 0);
+    lua_getfield(L, -1, "cpu_load_0");
+    check("sys_info: inside the minimum window -> previous CPU load", lua_tonumber(L, -1) == 25.0);
+    lua_pop(L, 2);
+    s_now_us += 2 * 3600 * 1000000LL; // counter may have wrapped: new window only, old value kept
+    s_run_time_counter = 3000000;
+    s_idle_run_time[0] = 1000000;
+    s_idle_run_time[1] = 1000000;
+    call("sys_info", 0, 0);
+    lua_getfield(L, -1, "cpu_load_0");
+    check("sys_info: window over an hour -> restarted, previous CPU load", lua_tonumber(L, -1) == 25.0);
+    lua_pop(L, 2);
+    s_now_us += 10000000;
+    s_run_time_counter += 10000000;
+    s_idle_run_time[0] += 9000000;
+    s_idle_run_time[1] += 2500000;
+    call("sys_info", 0, 0);
+    lua_getfield(L, -1, "cpu_load_0");
+    lua_getfield(L, -2, "cpu_load_1");
+    check("sys_info: next window", lua_tonumber(L, -2) == 10.0 && lua_tonumber(L, -1) == 75.0);
+    lua_pop(L, 3);
 
     static const struct { esp_reset_reason_t r; const char *s; } reasons[] = {
         {ESP_RST_EXT, "external"}, {ESP_RST_SW, "software"}, {ESP_RST_PANIC, "panic"},

@@ -17,3 +17,4 @@ void vTaskDelete(TaskHandle_t t);
 BaseType_t xTaskCreate(void (*fn)(void *), const char *name, uint32_t stack, void *arg, UBaseType_t prio,
                        TaskHandle_t *h);
 void vTaskSuspend(TaskHandle_t t);
+configRUN_TIME_COUNTER_TYPE ulTaskGetIdleRunTimeCounterForCore(BaseType_t core);

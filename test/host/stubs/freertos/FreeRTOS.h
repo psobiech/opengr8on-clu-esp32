@@ -13,3 +13,8 @@ typedef unsigned UBaseType_t;
 #define portTICK_PERIOD_MS 1
 typedef int portMUX_TYPE;
 #define portMUX_INITIALIZER_UNLOCKED 0
+// Run-time stats (clu_sysinfo CPU load): the test that needs them defines the counter.
+#define configNUMBER_OF_CORES 2
+#define configRUN_TIME_COUNTER_TYPE uint32_t
+uint32_t host_run_time_counter(void);
+#define portGET_RUN_TIME_COUNTER_VALUE() host_run_time_counter()

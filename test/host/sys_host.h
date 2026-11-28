@@ -26,3 +26,6 @@ extern const char *host_cfg_serial, *host_cfg_pin, *host_cfg_iv;
 #define CONFIG_CLU_SERIAL      host_cfg_serial
 #define CONFIG_CLU_PRIVATE_KEY host_cfg_pin
 #define CONFIG_CLU_IV          host_cfg_iv
+
+// CPU load in sys_info (clu_sysinfo.c): run-time counters come from the test.
+#define CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS 1

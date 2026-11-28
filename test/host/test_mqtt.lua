@@ -404,6 +404,10 @@ check("PANEL_BUTTON -> Label text (max 15), Mode select (config)", label_cfg and
   and label_cfg.p:find('"max":15', 1, true) and label_cfg.p:find('"ent_cat":"config"', 1, true)
   and mode_cfg.p:find('"ops":["Monostable","Bistable","Locked"]', 1, true) and mode_cfg.p:find('"name":"Mode"', 1, true)
   and (find("grenton/CLU100000001/PBT0001_8/state") or {}).p == "Monostable")
+local icon_a_cfg, icon_b_cfg = config("text", "PBT0001_9"), config("text", "PBT0001_10")
+check("PANEL_BUTTON -> Icon A / Icon B text (max 15, config)", icon_a_cfg and icon_b_cfg
+  and icon_a_cfg.p:find('"name":"Icon A"', 1, true) and icon_b_cfg.p:find('"name":"Icon B"', 1, true)
+  and icon_a_cfg.p:find('"max":15', 1, true) and icon_b_cfg.p:find('"ent_cat":"config"', 1, true))
 local number_feature = config("number", "var_restored")
 check("user features: own config of the CLU device", number_feature
   and number_feature.t == DEVICE_CFG .. NODE .. "_var/config" and number_feature.node.dev.name == "CLU TEST")
@@ -625,6 +629,10 @@ check("Display Page state: page last set", (find("grenton/CLU100000001/PAN0001_1
 PAN0001.execute = panel_execute
 command("PBT0001_7/set", "Kitchen light over 15")
 check("Label text -> Label feature, cut to 15", PBT0001:get(4) == "Kitchen light o")
+command("PBT0001_9/set", "light_on")
+command("PBT0001_10/set", "light_off_and_more")
+check("Icon A / Icon B text -> IconA / IconB features, cut to 15",
+  PBT0001:get(5) == "light_on" and PBT0001:get(6) == "light_off_and_m")
 command("PBT0001_8/set", "Locked")
 command("PBT0001_8/set", "locked") -- not an option: ignored
 check("Mode select -> Mode feature (case kept)", PBT0001:get(1) == 2)

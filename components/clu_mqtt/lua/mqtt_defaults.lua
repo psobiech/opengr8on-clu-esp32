@@ -116,7 +116,11 @@ local DEFAULTS = {
            { kind = "text", feature = 4, max = 15, name_suffix = "Label", icon = "mdi:label",
              entity_category = "config", subdevice = true },                       -- Label / SetLabel
            { kind = "select", feature = 1, name_suffix = "Mode", entity_category = "config",
-             map = { [0] = "Monostable", [1] = "Bistable", [2] = "Locked" }, subdevice = true } }, -- Mode / SetMode
+             map = { [0] = "Monostable", [1] = "Bistable", [2] = "Locked" }, subdevice = true }, -- Mode / SetMode
+           { kind = "text", feature = 5, max = 15, name_suffix = "Icon A", icon = "mdi:image",
+             entity_category = "config", subdevice = true },                       -- IconA / SetIconA
+           { kind = "text", feature = 6, max = 15, name_suffix = "Icon B", icon = "mdi:image",
+             entity_category = "config", subdevice = true } },                     -- IconB / SetIconB
   -- SunriseSunsetCalendar: today's sunrise / sunset (UTC epoch, -1 = none), IsDayNow (-1 = polar
   -- day / night: unknown)
   [39] = { { kind = "sensor", feature = 7, device_class = "timestamp", fn = iso_time,

@@ -1137,6 +1137,26 @@ int main(void)
                       strlen(s_frames) == 2 * (3 + 22 + 1) + 1); // header, 22-byte block, CRC
             lua_settop(L, obj - 1);
         }
+        // SetIconA / SetIconB(file name): IconA / IconB (features 5 / 6), DISPLAY_BLOCK [button, 0x00 / 0x01, name]
+        frames_reset();
+        {
+            int obj = new_obj();
+            lua_pushstring(L, "mouse");
+            m->drv->io_execute(m, L, obj, 30, 0, 4, obj + 1, 1);
+            lua_settop(L, obj); // io_execute leaves the argument's string conversion on the stack
+            lua_pushstring(L, "~mouse");
+            m->drv->io_execute(m, L, obj, 30, 0, 5, obj + 1, 1);
+            lua_settop(L, obj);
+            lua_getfield(L, obj, "_f");
+            lua_rawgeti(L, -1, 5);
+            lua_rawgeti(L, -2, 6);
+            check("SMART_PANEL SetIconA / SetIconB -> IconA / IconB features + DISPLAY_BLOCK 0x00 / 0x01",
+                  !strcmp(lua_tostring(L, -2), "mouse") && !strcmp(lua_tostring(L, -1), "~mouse") &&
+                      strncmp(s_frames, "aa133000006d6f75736500", 22) == 0 &&
+                      strstr(s_frames, " aa133000017e6d6f75736500") &&
+                      strlen(s_frames) == 2 * (2 * (3 + 22 + 1) + 1)); // two frames: header, 22-byte block, CRC
+            lua_settop(L, obj - 1);
+        }
         {
             int obj = new_obj();
             check("SMART_PANEL execute on another class / channel -> -1",

@@ -27,7 +27,10 @@
  * bytes, zero padded): PageName field 01 slot 00, Object_1_Name field 04 slot 01. Object_n_Id /
  * Object_n_Name of slots 2..4 (field 03 / 04, slot n) follow the init headers (inferred).
  * PANEL_BUTTON Label (feature 4 / SetLabel): DISPLAY_BLOCK sub 0x0a with the text.
- * NOT YET DECODED: button icons, PageType values, CustomIcon, DistributedLogicGroup.
+ * PANEL_BUTTON IconA / IconB (features 5 / 6, SetIconA / SetIconB): DISPLAY_BLOCK sub 0x00 / 0x01
+ * with the file name, like the Label (sub-types from the init order; not checked on a real CLU with
+ * an icon set).
+ * NOT YET DECODED: PageType values, CustomIcon, DistributedLogicGroup.
  *
  * Runtime: LED_CMD 0x18 [mask, 0, cmd]; TFBUS_CMD (PANEL execute -> sub-cmd): SwitchOnDisplay 0x00,
  * ShowButtons 0x03 [0,0,0,0], ClearScreen 0x04, PrintText 0x0a, DisplayContent 0x09, Draw 0x19,
@@ -82,6 +85,9 @@ enum { LED_OK = 0x00, LED_ERROR = 0x01, LED_ON = 0x02, LED_OFF = 0x04, LED_RED_O
 #define SLOTS 4
 #define ICON_LEN 20
 #define LABEL_LEN 15 /**< PANEL_BUTTON Label (interface range 0-15). */
+#define BUTTON_ICON_LEN 15 /**< PANEL_BUTTON IconA / IconB file name (interface range 0-9), as the Label. */
+/** @brief PANEL_BUTTON IconA / IconB -> DISPLAY_BLOCK sub-type. */
+static const uint8_t k_button_icon_sub[2] = {0x00, 0x01};
 #define PAGE_TEXT_LEN 18 /**< 0x31 payload 22 = cmd 0x12, page, field, slot + text. */
 /** @brief PANEL_PAGE header fields (0x31 0x12 [p, field, slot]). */
 enum { PAGE_FIELD_TYPE = 0x00, PAGE_FIELD_NAME = 0x01, PAGE_FIELD_OBJECT_ID = 0x03, PAGE_FIELD_OBJECT_NAME = 0x04,
@@ -142,6 +148,7 @@ typedef struct {
     uint16_t reg[NREGS];
     char icon[4][ICON_LEN + 1];
     char label[BTN][LABEL_LEN + 1]; // PANEL_BUTTON Label (feature 4 / SetLabel)
+    char button_icon[BTN][2][BUTTON_ICON_LEN + 1]; // PANEL_BUTTON IconA / IconB (features 5 / 6)
     struct {
         char name[PAGE_TEXT_LEN + 1];
         char object_id[SLOTS][PAGE_TEXT_LEN + 1];
@@ -154,7 +161,9 @@ typedef struct {
 static void led(tfbus_module_t *module, int button_index, uint8_t cmd);
 static void send_mode(tfbus_module_t *module, int button_index);
 static void send_label(tfbus_module_t *module, int button_index);
+static void send_button_icon(tfbus_module_t *module, int button_index, int icon_index);
 static void set_label(tfbus_module_t *module, int button_index, const char *text);
+static void set_button_icon(tfbus_module_t *module, int button_index, int icon_index, const char *file_name);
 static void queue_byte_args(tfbus_module_t *module, lua_State *L, uint8_t sub_command, int first, int count);
 static void queue_print_text(tfbus_module_t *module, int x, int y, int font_size, const char *text);
 
@@ -214,10 +223,8 @@ static void send_button(tfbus_module_t *module, int button_index, bool led_commi
         drv_queue_frame(module, 0x18, (uint8_t[]){0x00, 0x00, 0x02}, 3);
     }
     send_label(module, button_index);
-    static const uint8_t icon_subs[2] = {0x00, 0x01}; // IconA / IconB (not decoded: sent empty)
-    for (int i = 0; i < 2; i++) {
-        uint8_t blk[22] = {(uint8_t)button_index, icon_subs[i]};
-        drv_queue_frame(module, 0x30, blk, sizeof blk);
+    for (int icon_index = 0; icon_index < 2; icon_index++) {
+        send_button_icon(module, button_index, icon_index);
     }
 }
 
@@ -233,12 +240,37 @@ static void send_label(tfbus_module_t *module, int button_index)
     drv_queue_frame(module, 0x30, blk, sizeof blk);
 }
 
+/**
+ * @brief Send one button's IconA (@p icon_index 0) / IconB (1): DISPLAY_BLOCK 0x30 [button, 0x00 /
+ * 0x01, file name, zero padded].
+ */
+static void send_button_icon(tfbus_module_t *module, int button_index, int icon_index)
+{
+    uint8_t blk[22] = {(uint8_t)button_index, k_button_icon_sub[icon_index]};
+    const char *file_name = ctx(module)->button_icon[button_index][icon_index];
+    memcpy(blk + 2, file_name, strlen(file_name));
+    drv_queue_frame(module, 0x30, blk, sizeof blk);
+}
+
 /** @brief Store button @p button_index's Label (cut to LABEL_LEN) and send it once initialised. */
 static void set_label(tfbus_module_t *module, int button_index, const char *text)
 {
     strlcpy(ctx(module)->label[button_index], text, sizeof ctx(module)->label[button_index]);
     if (ctx(module)->initialized) {
         send_label(module, button_index);
+    }
+}
+
+/**
+ * @brief Store button @p button_index's IconA (@p icon_index 0) / IconB (1) file name (cut to
+ * BUTTON_ICON_LEN) and send it once initialised.
+ */
+static void set_button_icon(tfbus_module_t *module, int button_index, int icon_index, const char *file_name)
+{
+    char *stored_name = ctx(module)->button_icon[button_index][icon_index];
+    strlcpy(stored_name, file_name, sizeof ctx(module)->button_icon[button_index][icon_index]);
+    if (ctx(module)->initialized) {
+        send_button_icon(module, button_index, icon_index);
     }
 }
 
@@ -437,6 +469,8 @@ static bool io_set(tfbus_module_t *module, lua_State *L, int obj, int cls, int c
             panel_state->hold_interval[channel_index] = (uint16_t)luaL_optinteger(L, val, 100);
         } else if (idx == 4) { // Label
             set_label(module, channel_index, lua_type(L, val) == LUA_TSTRING ? lua_tostring(L, val) : "");
+        } else if (idx == 5 || idx == 6) { // IconA / IconB
+            set_button_icon(module, channel_index, idx - 5, lua_type(L, val) == LUA_TSTRING ? lua_tostring(L, val) : "");
         }
         return false;
     }
@@ -607,6 +641,16 @@ static int io_execute(tfbus_module_t *module, lua_State *L, int obj, int cls, in
         lua_getfield(L, obj, "_f");
         lua_pushstring(L, ctx(module)->label[channel_index]);
         lua_rawseti(L, -2, 4);
+        lua_pop(L, 1);
+        return 0;
+    }
+    if (idx == 4 || idx == 5) { // SetIconA / SetIconB(file name): sets IconA / IconB (feature 5 / 6)
+        int icon_index = idx - 4;
+        const char *file_name = nargs > 0 ? luaL_tolstring(L, first, NULL) : "";
+        set_button_icon(module, channel_index, icon_index, file_name);
+        lua_getfield(L, obj, "_f");
+        lua_pushstring(L, ctx(module)->button_icon[channel_index][icon_index]);
+        lua_rawseti(L, -2, 5 + icon_index);
         lua_pop(L, 1);
         return 0;
     }

@@ -34,15 +34,38 @@
 
 static const char *TAG = "tfbus"; // tfbus_master_set_log_tag()
 
-#define POLL_TIMEOUT_MS     20
-#define ACK_TIMEOUT_MS      20
-#define CMD_TRIES           3
-#define OFFLINE_AFTER       3      // missed polls
+// Timeouts and pacing from menuconfig (main/Kconfig.clu); the host build uses the Kconfig
+// defaults, except for polling continuously.
+//
 // Offline / unaddressed module: one ADDR_ASSIGN try every REJOIN_FAST_MS during the first
 // REJOIN_FAST_WINDOW_MS after a discovery RESET, then every REJOIN_SLOW_MS (real CLU, empty bus:
 // ~42 ms for ~60 s after boot, then 3.01 s).
-#define REJOIN_FAST_MS        40
+//
+// Bus fault: whole polling rounds in which no wire module answered (at least 2 polled; modules
+// emulated by the firmware do not count, they always answer), e.g. a module rebooting with its auto-direction transceiver driving the bus. Polls missed meanwhile do not
+// take the modules offline, for at most BUS_FAULT_MAX_MS. Once the bus answers again, offline
+// modules (one that rebooted lost its address) get a rejoin try every REJOIN_BURST_PACE_MS for
+// REJOIN_BURST_MS.
+#ifdef CONFIG_CLU_TFBUS_MASTER
+#define POLL_TIMEOUT_MS       CONFIG_CLU_TFBUS_POLL_TIMEOUT_MS
+#define ACK_TIMEOUT_MS        CONFIG_CLU_TFBUS_ACK_TIMEOUT_MS
+#define REJOIN_SLOW_MS        CONFIG_CLU_TFBUS_REJOIN_SLOW_MS
+#define BUS_FAULT_MAX_MS      CONFIG_CLU_TFBUS_BUS_FAULT_MAX_MS
+#define REJOIN_BURST_MS       CONFIG_CLU_TFBUS_REJOIN_BURST_MS
+#define REJOIN_BURST_PACE_MS  CONFIG_CLU_TFBUS_REJOIN_BURST_PACE_MS
+#define POLL_ROUND_GAP_MS     CONFIG_CLU_TFBUS_POLL_ROUND_GAP_MS
+#else
+#define POLL_TIMEOUT_MS       20
+#define ACK_TIMEOUT_MS        20
 #define REJOIN_SLOW_MS        3000
+#define BUS_FAULT_MAX_MS      10000
+#define REJOIN_BURST_MS       5000
+#define REJOIN_BURST_PACE_MS  100
+#define POLL_ROUND_GAP_MS     0      // poll continuously
+#endif
+#define CMD_TRIES             3
+#define OFFLINE_AFTER         3      // missed polls
+#define REJOIN_FAST_MS        40
 #define REJOIN_FAST_WINDOW_MS 60000
 #define RESET_SETTLE_MS     1000   // boot RESET -> SEEK on the real CLU: 0.96-1.04 s
 #define SEEK_TRIES          4      // real CLU, nothing answering: 4 SEEKs ~40-48 ms apart
@@ -56,11 +79,6 @@ static const char *TAG = "tfbus"; // tfbus_master_set_log_tag()
 #define DISCOVER_RETRIES     3
 #define DISCOVER_MAX_REPLIES 8
 #define SUMMARY_EVERY_MS    600000 // "round N: x/y online" heartbeat (also logged on change)
-#ifdef CONFIG_CLU_TFBUS_POLL_ROUND_GAP_MS
-#define POLL_ROUND_GAP_MS   CONFIG_CLU_TFBUS_POLL_ROUND_GAP_MS
-#else
-#define POLL_ROUND_GAP_MS   0      // host build: poll continuously
-#endif
 #define WATCHDOG_SLICE_MS   1000   // idle / parked bus: wake up this often to check in with the task watchdog
 #define NVS_NS              "tfbus"
 #define NVS_KEY             "mods"
@@ -105,6 +123,13 @@ static volatile bool s_reinit; // run driver init for all modules before the nex
 // still open (latched off, so the tick counter wrapping does not reopen it).
 static uint32_t s_reset_tick;
 static bool s_rejoin_fast;
+// Bus fault tracking (bus task only): STATUS_POLLs sent on the wire / answered in the current round, whether
+// the bus is in a fault (silent rounds) and since when, and the rejoin burst after it.
+static int s_round_polls, s_round_answers;
+static bool s_bus_fault;
+static uint32_t s_bus_fault_tick;
+static bool s_rejoin_burst;
+static uint32_t s_rejoin_burst_tick;
 static uint32_t s_round_gap_ms = POLL_ROUND_GAP_MS; // idle time after each polling round
 static const tfbus_driver_t *s_drivers[MAX_DRIVERS];
 static int s_ndrivers;
@@ -332,6 +357,8 @@ static void mod_forget(tfbus_module_t *module)
     module->online = false;
     module->assigned = false;
     module->status_len = 0;
+    module->cmds_held_back = false;
+    module->cmds_dropped = 0;
     xSemaphoreGive(s_lock);
     xSemaphoreGive(s_drv_lock);
     free(ctx);
@@ -707,8 +734,14 @@ static bool is_ack(const uint8_t *response_frame, int response_length)
     return response_length == 4 && response_frame[0] == 0xAA && response_frame[1] == 0x00 && response_frame[2] == 0x01;
 }
 
+static tfbus_module_t *module_at(uint8_t addr);
+
 /**
  * @brief Send one queued frame: broadcasts fire-and-forget, others retried up to CMD_TRIES until answered.
+ *
+ * A module that leaves a command unACKed (rebooting, lost its address, bus jammed) gets none of
+ * its next ones until it answers a poll again: each would hold the bus CMD_TRIES x ACK_TIMEOUT_MS
+ * (a SMART_PANEL init is ~275 frames, ~19 s), with no module polled meanwhile.
  */
 static void send_cmd(const cmd_t *queued_command)
 {
@@ -718,13 +751,33 @@ static void send_cmd(const cmd_t *queued_command)
         tfbus_uart_send(queued_command->frame, queued_command->len);
         return;
     }
+    tfbus_module_t *module = module_at(queued_command->frame[1]);
+    if (module && module->cmds_held_back) {
+        module->cmds_dropped++;
+        return;
+    }
     for (int t = 0; t < CMD_TRIES; t++) {
         int response_length = tfbus_uart_transact(queued_command->frame, queued_command->len, reply_frame, sizeof reply_frame, ACK_TIMEOUT_MS);
         if (response_length > 0) {
             return; // ACK (or any reply)
         }
     }
-    ESP_LOGW(TAG, "no ACK for cmd type 0x%02x to addr %u", queued_command->frame[2], queued_command->frame[1]);
+    ESP_LOGW(TAG, "no ACK for cmd type 0x%02x to addr %u%s", queued_command->frame[2], queued_command->frame[1],
+             module ? ": its next commands dropped until it answers" : "");
+    if (module) {
+        module->cmds_held_back = true;
+    }
+}
+
+/** @brief Live registry module at bus address @p addr; NULL if none. */
+static tfbus_module_t *module_at(uint8_t addr)
+{
+    for (int i = 0; i < s_nmod; i++) {
+        if (live(&s_mod[i]) && s_mod[i].addr == addr) {
+            return &s_mod[i];
+        }
+    }
+    return NULL;
 }
 
 /** @brief Send every queued command now (bus task only). */
@@ -780,6 +833,10 @@ static bool assign(tfbus_module_t *module, int tries)
 
 static void poll_module(tfbus_module_t *module);
 static bool rejoin_due(const tfbus_module_t *module);
+static bool bus_fault_holds(void);
+static void track_bus_fault(void);
+static void release_cmds(tfbus_module_t *module, bool was_away);
+static void readdressed(tfbus_module_t *module);
 
 /** @brief Find or append the s_dev entry for @p sn; NULL if the table is full. */
 static tfbus_device_t *dev_get(uint32_t serial_number)
@@ -972,6 +1029,9 @@ static void discover(bool refresh)
     tfbus_uart_send(request_frame, frame_length);
     s_reset_tick = (uint32_t)xTaskGetTickCount();
     s_rejoin_fast = true;
+    s_bus_fault = false; // the RESET starts over: every module gets addressed again
+    s_rejoin_burst = false;
+    s_round_polls = s_round_answers = 0;
     vTaskDelay(pdMS_TO_TICKS(refresh ? REFRESH_SETTLE_MS : RESET_SETTLE_MS));
 
     if (!refresh) {
@@ -992,6 +1052,8 @@ static void discover(bool refresh)
         module->fails = 0;
         module->status_len = 0;
         module->assigned = false;
+        module->cmds_held_back = false; // a RESET starts over: every module gets its driver init
+        module->cmds_dropped = 0;
     }
     // Identity from the previous scan. The registry modules are addressed before DISCOVER, so they never report hwType/fwType/fwApiVer, and old SMART_PANELs (fwApiVer < 5)
     // do not answer VERSION_QUERY either: without this, config.txt would say fwApiVer 0 and OM
@@ -1067,8 +1129,36 @@ static void rejoin(tfbus_module_t *module)
     if (!assign(module, 1)) {
         return;
     }
+    readdressed(module);
+}
+
+/**
+ * @brief During a bus fault: ADDR_ASSIGN a silent module that is still held online.
+ *
+ * Modules that lost their address (power blip; real modules apparently also drop it when not
+ * polled for some seconds) are silent just like a jammed bus. An ACK tells them apart: the bus
+ * works, the module is addressed again and gets the rejoin treatment. Unanswered, it stays
+ * addressed and polled as before. One try per call, paced by rejoin_due().
+ */
+static void readdress_in_fault(tfbus_module_t *module)
+{
+    if (!assign(module, 1)) {
+        module->assigned = true; // as far as we know it still holds its address
+        return;
+    }
+    ESP_LOGI(TAG, "addr %u sn=%lu ACKed ADDR_ASSIGN during the bus fault: it had lost its address",
+             module->addr, (unsigned long)module->sn);
+    readdressed(module);
+}
+
+/**
+ * @brief A module just ACKed ADDR_ASSIGN: poll it and, once it answers, re-run its driver init
+ * (a module that lost its address may have rebooted and lost its configuration).
+ */
+static void readdressed(tfbus_module_t *module)
+{
     poll_module(module);
-    if (!module->online) {
+    if (module->fails) {
         return;
     }
     ESP_LOGI(TAG, "addr %u sn=%lu rejoined", module->addr, (unsigned long)module->sn);
@@ -1108,15 +1198,21 @@ static void poll_module(tfbus_module_t *module)
     int response_length = tfbus_uart_transact(status_poll_frame, frame_length, reply_frame, sizeof reply_frame, POLL_TIMEOUT_MS);
     const uint8_t *response_payload;
     size_t plen;
+    bool on_wire = !tfbus_uart_last_local();
+    s_round_polls += on_wire;
     if (response_length <= 0 || !tfbus_parse_response(reply_frame, (size_t)response_length, &response_payload, &plen)) {
         module->fails_total++;
         if (module->fails < 255) {
             module->fails++;
         }
-        if (module->fails >= OFFLINE_AFTER) {
+        if (module->fails >= OFFLINE_AFTER && !bus_fault_holds()) {
             set_online(module, false);
         }
         return;
+    }
+    s_round_answers += on_wire;
+    if (module->cmds_held_back) {
+        release_cmds(module, module->fails > 0);
     }
     module->fails = 0;
     module->polls++;
@@ -1222,12 +1318,17 @@ static void bus_task(void *arg)
                     }
                     continue;
                 }
+                if (module->fails >= OFFLINE_AFTER && bus_fault_holds() && rejoin_due(module)) {
+                    readdress_in_fault(module);
+                    continue;
+                }
                 poll_module(module);
                 if (module->online && module->init_pending && s_started) {
                     ESP_LOGI(TAG, "addr %u sn=%lu answers: driver init", module->addr, (unsigned long)module->sn);
                     drv_init(module);
                 }
             }
+            track_bus_fault();
             round++;
             if (round % 500 == 0) { // summary only on change, else every SUMMARY_EVERY_MS
                 int online = 0, total = 0; // modules dropped by a refresh do not count
@@ -1273,7 +1374,63 @@ static bool rejoin_due(const tfbus_module_t *module)
     if (s_rejoin_fast && now - s_reset_tick >= pdMS_TO_TICKS(REJOIN_FAST_WINDOW_MS)) {
         s_rejoin_fast = false;
     }
-    return now - module->assign_tick >= pdMS_TO_TICKS(s_rejoin_fast ? REJOIN_FAST_MS : REJOIN_SLOW_MS);
+    if (s_rejoin_burst && now - s_rejoin_burst_tick >= pdMS_TO_TICKS(REJOIN_BURST_MS)) {
+        s_rejoin_burst = false;
+    }
+    uint32_t pace_ms = s_rejoin_fast                    ? REJOIN_FAST_MS
+                       : s_rejoin_burst || s_bus_fault ? REJOIN_BURST_PACE_MS
+                                                       : REJOIN_SLOW_MS;
+    return now - module->assign_tick >= pdMS_TO_TICKS(pace_ms);
+}
+
+/**
+ * @brief Whether missed polls are blamed on the bus rather than the module: a bus fault started
+ * less than BUS_FAULT_MAX_MS ago. Past that, modules go offline as usual (a real outage).
+ */
+static bool bus_fault_holds(void)
+{
+    return s_bus_fault && (uint32_t)xTaskGetTickCount() - s_bus_fault_tick < pdMS_TO_TICKS(BUS_FAULT_MAX_MS);
+}
+
+/**
+ * @brief End of a polling round: enter a bus fault on a round where at least 2 wire modules were
+ * polled and none answered; leave it on the first answer, opening the rejoin burst.
+ *
+ * A round with fewer polls (one module, or everything already offline) decides nothing, so a
+ * single-module bus keeps the plain per-module rule.
+ */
+static void track_bus_fault(void)
+{
+    uint32_t now = (uint32_t)xTaskGetTickCount();
+    if (s_round_answers > 0 && s_bus_fault) {
+        s_bus_fault = false;
+        s_rejoin_burst = true;
+        s_rejoin_burst_tick = now;
+        ESP_LOGW(TAG, "bus fault over after %lu ms", (unsigned long)((now - s_bus_fault_tick) * portTICK_PERIOD_MS));
+    } else if (s_round_answers == 0 && s_round_polls >= 2 && !s_bus_fault) {
+        s_bus_fault = true;
+        s_bus_fault_tick = now;
+        ESP_LOGW(TAG, "bus fault: none of %d polled modules answers, keeping them online for up to %d ms",
+                 s_round_polls, BUS_FAULT_MAX_MS);
+    }
+    s_round_polls = s_round_answers = 0;
+}
+
+/**
+ * @brief A module whose commands were held back answers a poll again: send its commands again.
+ * @param was_away It missed polls meanwhile: the dropped commands may have mattered, so its
+ *                 driver init re-sends its whole state. Otherwise (it answered every poll, only a
+ *                 command went unACKed) just log the drop: re-init could loop on a frame it never
+ *                 ACKs.
+ */
+static void release_cmds(tfbus_module_t *module, bool was_away)
+{
+    ESP_LOGW(TAG, "addr %u sn=%lu answers again: %lu command(s) dropped%s", module->addr,
+             (unsigned long)module->sn, (unsigned long)module->cmds_dropped,
+             was_away && module->cmds_dropped ? ", driver init re-sends its state" : "");
+    module->init_pending |= was_away && module->cmds_dropped > 0 && module->drv;
+    module->cmds_held_back = false;
+    module->cmds_dropped = 0;
 }
 
 /** @brief Block the bus task until it is notified, checking in with the task watchdog meanwhile. */

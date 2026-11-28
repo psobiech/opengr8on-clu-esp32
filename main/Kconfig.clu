@@ -414,6 +414,71 @@ menu "RS485 bus (TF-Bus / MySensors)"
             ~19.4 ms). Commands and driver timers queued meanwhile go out at the start of the next
             round, so they wait at most this long. 0 = poll continuously (one tick between rounds).
 
+    config CLU_TFBUS_POLL_TIMEOUT_MS
+        int "STATUS_POLL reply timeout (ms)"
+        depends on CLU_TFBUS_MASTER
+        range 5 200
+        default 20
+        help
+            How long the master waits for a module's reply to STATUS_POLL. Modules answer within a
+            few ms (a SMART PANEL ~0.8 ms after the poll). An unanswered poll holds the bus this
+            long, so an absent module still being polled slows every round by this much. 3 missed
+            polls take a module offline.
+
+    config CLU_TFBUS_ACK_TIMEOUT_MS
+        int "ACK timeout for commands, ADDR_ASSIGN, VERSION_QUERY (ms)"
+        depends on CLU_TFBUS_MASTER
+        range 5 200
+        default 20
+        help
+            How long the master waits for a module's ACK or reply to everything but STATUS_POLL
+            and DISCOVER. Commands are retried 3 times; each rejoin try is one ADDR_ASSIGN, so this
+            is also the bus time every rejoin try at an absent module costs.
+
+    config CLU_TFBUS_REJOIN_SLOW_MS
+        int "Offline module: one rejoin try every (ms)"
+        depends on CLU_TFBUS_MASTER
+        range 100 60000
+        default 3000
+        help
+            An offline or unaddressed module is not polled; it gets one ADDR_ASSIGN try this often
+            (a real CLU: ~3 s). During the first 60 s after a discovery RESET the tries are every
+            40 ms, after a bus fault every CLU_TFBUS_REJOIN_BURST_PACE_MS.
+
+    config CLU_TFBUS_BUS_FAULT_MAX_MS
+        int "Bus fault: keep modules online for at most (ms)"
+        depends on CLU_TFBUS_MASTER
+        range 0 60000
+        default 10000
+        help
+            A polling round in which at least 2 modules on the wire were polled and none answered
+            (modules emulated by the firmware, e.g. on-board IO, do not count) is a bus
+            fault (e.g. a module rebooting with its transceiver holding the bus), not a fault of
+            every module. Missed polls then do not take the modules offline, for at most this
+            long; after that they go offline as usual (a real outage, e.g. modules lost power).
+            Modules stay listed as online meanwhile, with their last status. 0 = off (every module
+            goes offline after 3 missed polls, as on a bus with a single module).
+
+    config CLU_TFBUS_REJOIN_BURST_MS
+        int "Fast rejoin after a bus fault: window (ms)"
+        depends on CLU_TFBUS_MASTER
+        range 0 60000
+        default 5000
+        help
+            After a bus fault ends, offline modules (a module that rebooted lost its address) get
+            ADDR_ASSIGN tries every CLU_TFBUS_REJOIN_BURST_PACE_MS for this long, instead of every
+            CLU_TFBUS_REJOIN_SLOW_MS. 0 = off.
+
+    config CLU_TFBUS_REJOIN_BURST_PACE_MS
+        int "Fast rejoin after a bus fault: one try every (ms)"
+        depends on CLU_TFBUS_MASTER
+        range 40 3000
+        default 100
+        help
+            Each unanswered ADDR_ASSIGN holds the bus for CLU_TFBUS_ACK_TIMEOUT_MS: with the
+            defaults (20 ms, every 100 ms) every module that stays away costs 20% of the bus during
+            the window.
+
     if CLU_TFBUS || CLU_MYSENSORS
 
         config CLU_RS485_UART

@@ -42,6 +42,13 @@ esp_err_t tfbus_uart_init(const tfbus_uart_cfg_t *cfg);
  */
 int tfbus_uart_transact(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity, int timeout_ms);
 
+/**
+ * @brief Whether the last tfbus_uart_transact() was owned by a local endpoint (a module emulated
+ * by the firmware) instead of going on the wire. Same task as tfbus_uart_transact().
+ * @return true if a local endpoint answered it or owned it without a reply.
+ */
+bool tfbus_uart_last_local(void);
+
 /** @brief One module reply kept by tfbus_uart_collect(). */
 typedef struct {
     uint8_t frame[TFBUS_MAX_FRAME]; /**< Reply frame. */

@@ -20,8 +20,25 @@ firmware. Semantyka zdarzeń pozostałych modułów jest niezweryfikowana. Stan 
   `OnInit` OM.LUA. Firmware robi tak samo, a dodatkowo po ponownym zaadresowaniu modułu (powrót
   online) wysyła mu ostatni stan ustawiony ze skryptów.
 - Moduł nieobecny (bez ACK na ADDR_ASSIGN albo 3 nieodebrane odpytania) nie jest odpytywany;
-  dostaje jedną próbę ADDR_ASSIGN co ok. 40 ms przez 60 s od RESET-u wykrywania, potem co 3 s.
+  dostaje jedną próbę ADDR_ASSIGN co ok. 40 ms przez 60 s od RESET-u wykrywania, potem co
+  `CLU_TFBUS_REJOIN_SLOW_MS` (domyślnie 3 s). Czas oczekiwania na odpowiedź: STATUS_POLL
+  `CLU_TFBUS_POLL_TIMEOUT_MS`, pozostałe ramki `CLU_TFBUS_ACK_TIMEOUT_MS` (oba domyślnie 20 ms).
   Gdy nic nie odpowiada, SEEK jest wysyłany 4 razy.
+- Awaria magistrali: runda odpytywania, w której żaden z co najmniej 2 odpytanych modułów na
+  przewodzie nie odpowiedział, np. restartujący się moduł, którego transceiver trzyma magistralę
+  (moduły emulowane przez firmware, np. wbudowane IO, się nie liczą). Moduły nie przechodzą wtedy w offline, najdłużej przez `CLU_TFBUS_BUS_FAULT_MAX_MS` (domyślnie 10 s); dłużej
+  = prawdziwa awaria, offline jak zwykle. Po pierwszej odpowiedzi moduły offline (np. ten, który
+  się zrestartował i stracił adres) dostają próbę ADDR_ASSIGN co
+  `CLU_TFBUS_REJOIN_BURST_PACE_MS` (100 ms) przez `CLU_TFBUS_REJOIN_BURST_MS` (5 s) zamiast co 3 s.
+  Magistrala z jednym modułem tego nie rozróżnia: zwykła reguła 3 odpytań.
+  W trakcie awarii milczące moduły dostają ADDR_ASSIGN w tym samym tempie: ACK znaczy, że
+  magistrala działa, a moduł stracił adres (zanik zasilania; prawdziwe moduły najwyraźniej gubią
+  go też, gdy przez kilka sekund nikt ich nie odpytuje). Moduł wraca od razu, z ponownym initem
+  sterownika.
+- Komenda bez ACK (3 próby): kolejne komendy do tego modułu są odrzucane, aż odpowie na
+  odpytanie; każda trzymałaby magistralę 3 × `CLU_TFBUS_ACK_TIMEOUT_MS` (init SMART PANEL to ok.
+  275 ramek, ok. 19 s bez odpytywania innych modułów). Jeśli w międzyczasie nie odpowiadał na
+  odpytania, init sterownika wysyła mu cały stan ponownie.
 - Moduły odpowiadają na DISCOVER dopiero po ok. 576 ms, więc DISCOVER czeka 1 s. Jak prawdziwe CLU,
   firmware zbiera wszystkie odpowiedzi z tej sekundy i adresuje każdy moduł (zrzut: panel po 369 ms,
   RELAY po 577 ms, oba dostały adres); moduły unikają kolizji tylko różnym opóźnieniem odpowiedzi.
@@ -135,8 +152,24 @@ the other modules are unverified. Module support status: [README](../README.md#m
   OM.LUA's `OnInit`. The firmware does the same, and additionally sends the last script-set state
   after re-addressing a module (coming back online).
 - An absent module (ADDR_ASSIGN not ACKed, or 3 missed polls) is not polled; it gets one
-  ADDR_ASSIGN try about every 40 ms for 60 s after the discovery RESET, then every 3 s. With nothing
+  ADDR_ASSIGN try about every 40 ms for 60 s after the discovery RESET, then every
+  `CLU_TFBUS_REJOIN_SLOW_MS` (default 3 s). Reply timeouts: STATUS_POLL `CLU_TFBUS_POLL_TIMEOUT_MS`,
+  other frames `CLU_TFBUS_ACK_TIMEOUT_MS` (both default 20 ms). With nothing
   answering, SEEK is sent 4 times.
+- Bus fault: a polling round in which none of at least 2 polled wire modules answered, e.g. a
+  rebooting module whose transceiver holds the bus (modules emulated by the firmware, e.g. on-board
+  IO, do not count). Modules do not go offline then, for at most
+  `CLU_TFBUS_BUS_FAULT_MAX_MS` (default 10 s); longer = a real outage, offline as usual. After the
+  first answer, offline modules (e.g. the one that rebooted and lost its address) get an ADDR_ASSIGN
+  try every `CLU_TFBUS_REJOIN_BURST_PACE_MS` (100 ms) for `CLU_TFBUS_REJOIN_BURST_MS` (5 s) instead
+  of every 3 s. A single-module bus cannot tell the two apart: plain 3-poll rule.
+  During the fault, silent modules get ADDR_ASSIGN at the same pace: an ACK means the bus works
+  and the module lost its address (power blip; real modules apparently also drop it when nobody
+  polls them for a few seconds). It is back at once, with its driver init re-run.
+- A command left unACKed (3 tries): the module's next commands are dropped until it answers a
+  poll; each would hold the bus 3 × `CLU_TFBUS_ACK_TIMEOUT_MS` (a SMART PANEL init is about 275
+  frames, about 19 s with no other module polled). If it missed polls meanwhile, its driver init
+  re-sends its whole state.
 - Modules answer DISCOVER only after about 576 ms, so DISCOVER waits 1 s. Like the real CLU, the
   firmware collects every reply of that second and addresses each module (capture: a panel at
   369 ms, a RELAY at 577 ms, both assigned); modules avoid collisions only by answering at different

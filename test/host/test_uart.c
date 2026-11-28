@@ -314,7 +314,7 @@ int main(void)
     fl = tfbus_status_poll(f, sizeof f, 5);
     n = tfbus_uart_transact(f, fl, rx, sizeof rx, 20);
     check("local: frame for a local module answered locally, nothing on the wire",
-          n == 4 && rx[0] == 0xaa && rx[2] == 0x01 && s_txlen == 0 && s_local_calls == 1);
+          n == 4 && rx[0] == 0xaa && rx[2] == 0x01 && s_txlen == 0 && s_local_calls == 1 && tfbus_uart_last_local());
     reset();
     size_t f6l = tfbus_status_poll(other, sizeof other, 6);
     t0 = s_now_us;
@@ -325,7 +325,7 @@ int main(void)
     size_t f7l = tfbus_status_poll(other, sizeof other, 7);
     rx_at(1000, r, rl);
     n = tfbus_uart_transact(other, f7l, rx, sizeof rx, 20);
-    check("local: other frames go on the wire", n == (int)rl && s_txlen == f7l);
+    check("local: other frames go on the wire", n == (int)rl && s_txlen == f7l && !tfbus_uart_last_local());
     reset();
     s_local_calls = 0;
     size_t rstl = tfbus_reset(f, sizeof f, TFBUS_BROADCAST);

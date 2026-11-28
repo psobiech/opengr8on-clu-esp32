@@ -146,6 +146,7 @@ typedef struct {
     uint8_t ver[4];    // VERSION_QUERY reply, ver_len bytes (0 = no reply)
     uint8_t ver_len;
     bool garble;       // DISCOVER reply with a bad XOR (several modules answering at once)
+    bool local;        // emulated by the firmware: answered without the wire
 } sim_mod_t;
 
 static sim_mod_t s_sim[6];
@@ -229,8 +230,14 @@ int tfbus_uart_collect(const uint8_t *tx, size_t txlen, tfbus_uart_reply_t *repl
     return reply_count;
 }
 
+// Sim modules with local set stand for modules emulated by the firmware (on-board IO): they
+// answer while the wire is jammed and must not hide a bus fault.
+static bool s_last_local;
+bool tfbus_uart_last_local(void) { return s_last_local; }
+
 int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxcap, int timeout_ms)
 {
+    s_last_local = false;
     (void)rxcap, (void)timeout_ms;
     log_frame("", tx, txlen);
     uint8_t dest = tx[1], type = tx[2];
@@ -262,6 +269,7 @@ int tfbus_uart_transact(const uint8_t *tx, size_t txlen, uint8_t *rx, size_t rxc
         if (!s->present || !s->addr || s->addr != dest) {
             continue;
         }
+        s_last_local = s->local;
         if (type == TFBUS_T_VERSION_QUERY) {
             return s->ver_len ? reply(rx, s->ver, s->ver_len) : 0;
         }
@@ -417,6 +425,8 @@ static int err_set(lua_State *L)
     s_ops[4]->set(L, 1, 5, 2);
     return 0;
 }
+
+static void test_bus_fault(void);
 
 int main(void)
 {
@@ -973,6 +983,8 @@ int main(void)
     check("absent module, after 60 s: one ADDR_ASSIGN every 3000 ticks, not polled",
           s_tx_count[TFBUS_T_ADDR_ASSIGN] == 2 && !s_rejoin_fast && mods[2]->fails_total == fails_before);
 
+    test_bus_fault();
+
     // ---- driver init while a module is offline: none for it then, once when it answers again
     mods[2]->fails = 0; // addressed and polled normally (no rejoin), still not answering
     mods[2]->assigned = true;
@@ -1151,4 +1163,149 @@ int main(void)
     lua_close(L);
     printf("\n%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
+/**
+ * Bus fault: every wire module silent at once (a rebooting module holding the bus), while a module
+ * emulated by the firmware (the last present one) keeps answering. The modules stay online up to
+ * BUS_FAULT_MAX_MS; afterwards one that lost its address rejoins at the burst pace; a fault longer
+ * than BUS_FAULT_MAX_MS takes the wire modules offline as usual. Runs on the polling setup left by
+ * the round-gap / absent-module checks and restores it.
+ */
+static void test_bus_fault(void)
+{
+    static tfbus_module_t saved_modules[TFBUS_MAX_MODULES];
+    static sim_mod_t saved_sims[6];
+    memcpy(saved_modules, s_mod, sizeof s_mod);
+    memcpy(saved_sims, s_sim, sizeof s_sim);
+    TickType_t saved_ticks = host_ticks;
+    int online_before = 0;
+    for (int i = 0; i < s_nmod; i++) {
+        online_before += live(&s_mod[i]) && s_mod[i].online;
+    }
+    bool was_present[6];
+    int emulated = -1;
+    for (int i = 0; i < s_nsim; i++) {
+        was_present[i] = s_sim[i].present;
+        emulated = s_sim[i].present ? i : emulated;
+    }
+    s_sim[emulated].local = true;
+    for (int i = 0; i < s_nsim; i++) {
+        s_sim[i].present = i == emulated;
+    }
+
+    drv_reset();
+    log_reset();
+    s_bus_rounds = 50;
+    xTaskNotifyGive(s_task);
+    int online_during = 0;
+    for (int i = 0; i < s_nmod; i++) {
+        online_during += live(&s_mod[i]) && s_mod[i].online;
+    }
+    check("bus fault: no wire module answers (the emulated one does), modules stay online, no offline events",
+          online_before >= 3 && s_bus_fault && online_during == online_before && !strstr(s_drv, "offline"));
+
+    // The bus answers again; the first present module rebooted meanwhile: lost its address and
+    // ignores the first 2 ADDR_ASSIGNs (still booting). Burst pace: back within a few hundred
+    // rounds, not after 3 s.
+    int rebooted = -1;
+    for (int i = 0; i < s_nsim; i++) {
+        s_sim[i].present = was_present[i];
+        if (was_present[i] && rebooted < 0) {
+            rebooted = i;
+        }
+    }
+    tfbus_module_t *rebooted_module = tfbus_master_find_sn(s_sim[rebooted].sn);
+    s_sim[rebooted].addr = 0;
+    s_sim[rebooted].nack_assign = 2;
+    rebooted_module->assign_tick = host_ticks; // just tried: the next try waits for the pace
+    s_bus_rounds = 400;
+    xTaskNotifyGive(s_task);
+    check("bus fault over: burst open, rebooted module re-addressed at the burst pace",
+          !s_bus_fault && s_rejoin_burst && rebooted_module->online && rebooted_module->assigned &&
+              s_sim[rebooted].addr == rebooted_module->addr && s_sim[rebooted].nack_assign == 0);
+
+    // Every wire module lost its address at once (not polled for a while, power blip): as silent
+    // as a jammed bus, but ADDR_ASSIGN during the fault gets them back at the burst pace, without
+    // waiting out BUS_FAULT_MAX_MS and without going offline.
+    for (int i = 0; i < s_nsim; i++) {
+        if (was_present[i] && i != emulated) {
+            s_sim[i].addr = 0;
+        }
+    }
+    drv_reset();
+    s_bus_rounds = 400;
+    xTaskNotifyGive(s_task);
+    int online_readdressed = 0;
+    bool all_readdressed = true;
+    for (int i = 0; i < s_nsim; i++) {
+        if (was_present[i]) {
+            all_readdressed &= s_sim[i].addr == tfbus_master_find_sn(s_sim[i].sn)->addr;
+        }
+    }
+    for (int i = 0; i < s_nmod; i++) {
+        online_readdressed += live(&s_mod[i]) && s_mod[i].online;
+    }
+    check("all addresses lost: re-addressed during the bus fault, none offline",
+          !s_bus_fault && all_readdressed && online_readdressed == online_before && !strstr(s_drv, "offline"));
+
+    // A command left unACKed: the module's next ones are dropped (no 3 x ACK_TIMEOUT_MS each)
+    // until it answers a poll; it missed polls meanwhile, so its driver init re-sends its state.
+    uint8_t command_frame[TFBUS_MAX_FRAME];
+    uint8_t level = 0x04;
+    tfbus_tlv_t level_record = {.type = 0x08, .meta = 1, .len = 1, .data = &level};
+    size_t command_length = tfbus_module_cmd(command_frame, sizeof command_frame, rebooted_module->addr, &level_record, 1);
+    const tfbus_driver_t *saved_driver = rebooted_module->drv;
+    rebooted_module->drv = &s_fake;
+    rebooted_module->init_pending = false;
+    s_sim[rebooted].present = false;
+    for (int i = 0; i < 5; i++) {
+        tfbus_master_queue(command_frame, command_length);
+    }
+    log_reset();
+    drain_cmds();
+    check("unACKed command: tried 3x, the next 4 dropped",
+          s_tx_count[command_frame[2]] == 3 && rebooted_module->cmds_held_back && rebooted_module->cmds_dropped == 4);
+    poll_module(rebooted_module);
+    s_sim[rebooted].present = true;
+    poll_module(rebooted_module);
+    check("answers again after missed polls: commands flow, driver init due",
+          !rebooted_module->cmds_held_back && rebooted_module->cmds_dropped == 0 && rebooted_module->init_pending);
+    // Only the command went unACKed, every poll answered: no re-init (it could loop on a frame
+    // the module never ACKs).
+    rebooted_module->init_pending = false;
+    rebooted_module->cmds_held_back = true;
+    rebooted_module->cmds_dropped = 2;
+    poll_module(rebooted_module);
+    check("answers without missing a poll: commands flow, no re-init",
+          !rebooted_module->cmds_held_back && !rebooted_module->init_pending);
+    rebooted_module->drv = saved_driver;
+
+    // A fault lasting longer than BUS_FAULT_MAX_MS is a real outage: the wire modules go offline.
+    for (int i = 0; i < s_nsim; i++) {
+        s_sim[i].present = i == emulated;
+    }
+    s_bus_rounds = BUS_FAULT_MAX_MS - 100;
+    xTaskNotifyGive(s_task);
+    int online_held = 0;
+    for (int i = 0; i < s_nmod; i++) {
+        online_held += live(&s_mod[i]) && s_mod[i].online;
+    }
+    check("long bus fault: still online just before BUS_FAULT_MAX_MS", s_bus_fault && online_held == online_before);
+    s_bus_rounds = 200;
+    xTaskNotifyGive(s_task);
+    int online_after = 0;
+    for (int i = 0; i < s_nmod; i++) {
+        online_after += live(&s_mod[i]) && s_mod[i].online;
+    }
+    check("long bus fault: wire modules offline past BUS_FAULT_MAX_MS, the emulated one online",
+          online_after == 1 && tfbus_master_find_sn(s_sim[emulated].sn)->online);
+
+    memcpy(s_mod, saved_modules, sizeof s_mod);
+    memcpy(s_sim, saved_sims, sizeof s_sim);
+    host_ticks = saved_ticks;
+    s_bus_fault = s_rejoin_burst = false;
+    s_round_polls = s_round_answers = 0;
+    drv_reset();
+    log_reset();
 }

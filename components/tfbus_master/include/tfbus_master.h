@@ -51,6 +51,8 @@ typedef struct tfbus_module {
     const struct tfbus_driver *drv;      /**< Driver for @ref hw_type (NULL = none). */
     void    *drv_ctx;         /**< Driver state; freed by the master on reset. */
     bool     init_pending;    /**< Driver init due once the module answers (it was offline at init). */
+    bool     cmds_held_back;  /**< A command went unACKed: its next ones are dropped until it answers a poll. */
+    uint32_t cmds_dropped;    /**< Commands dropped meanwhile (logged when it answers again). */
 } tfbus_module_t;
 
 /**

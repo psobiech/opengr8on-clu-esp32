@@ -20,6 +20,7 @@ static bool s_auto_direction; // no DE pin: plain UART mode, our own frame may c
 static bool s_echo_reported;  // whether the transceiver echoes was logged (once per boot)
 static tfbus_uart_local_fn_t s_local[TFBUS_UART_MAX_LOCAL];
 static int s_nlocal;
+static bool s_last_local; // the last tfbus_uart_transact() was owned by a local endpoint
 
 // Bus utilization: summed by the bus task over LOAD_WINDOW_US, then latched for tfbus_uart_load().
 #define LOAD_WINDOW_US (10 * 1000 * 1000)
@@ -149,7 +150,8 @@ static void on_frame(const uint8_t *frame, size_t len, void *ctx);
 int tfbus_uart_transact(const uint8_t *request_frame, size_t request_length, uint8_t *reply_buffer, size_t reply_capacity, int timeout_ms)
 {
     int local_reply_length = local(request_frame, request_length, reply_buffer, reply_capacity);
-    if (local_reply_length != 0) {
+    s_last_local = local_reply_length != 0;
+    if (s_last_local) {
         return local_reply_length > 0 ? local_reply_length : 0;
     }
     if (s_nowire) {
@@ -196,6 +198,11 @@ int tfbus_uart_collect(const uint8_t *request_frame, size_t request_length, tfbu
     account_bus_use(started_us, request_length + received);
     *garbled = received > collector.framed_bytes;
     return collector.got;
+}
+
+bool tfbus_uart_last_local(void)
+{
+    return s_last_local;
 }
 
 bool tfbus_uart_load(tfbus_uart_load_t *load)
